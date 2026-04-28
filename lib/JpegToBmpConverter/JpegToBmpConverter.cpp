@@ -226,6 +226,7 @@ struct BmpConvertCtx {
   Atkinson1BitDitherer* atkinson1BitDitherer;
 
   bool error;
+  int outputRowsWritten;
 };
 
 // Write a fully-assembled output row (grayscale bytes, length outWidth) to BMP
@@ -263,6 +264,7 @@ static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) 
   }
 
   ctx->bmpOut->write(ctx->bmpRow, ctx->bytesPerRow);
+  ctx->outputRowsWritten++;
 }
 
 // Flush one scaled output row from Y-axis accumulators and advance currentOutY
@@ -303,6 +305,7 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
 
   ctx->bmpOut->write(ctx->bmpRow, ctx->bytesPerRow);
   ctx->currentOutY++;
+  ctx->outputRowsWritten++;
 }
 
 // JPEGDEC draw callback — receives one MCU-width × MCU-height block at a time,
@@ -471,6 +474,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
   ctx.scaleX_fp = scaleX_fp;
   ctx.scaleY_fp = scaleY_fp;
   ctx.error = false;
+  ctx.outputRowsWritten = 0;
 
   // RAII guard: frees all heap resources on any return path
   struct Cleanup {
@@ -533,15 +537,20 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
     return false;
   }
 
-  LOG_DBG("JPG", "Successfully converted JPEG to BMP");
+  if (ctx.outputRowsWritten <= 0) {
+    LOG_ERR("JPG", "JPEG decode produced no output rows (err=%d)", jpeg->getLastError());
+    return false;
+  }
+
+  LOG_DBG("JPG", "Successfully converted JPEG to BMP (%d rows)", ctx.outputRowsWritten);
   return true;
 }
 
 // Core function: Convert JPEG file to 2-bit BMP (uses default target size)
 bool JpegToBmpConverter::jpegFileToBmpStream(FsFile& jpegFile, Print& bmpOut, bool crop) {
   // Use runtime display dimensions (swapped for portrait cover sizing)
-  const int targetWidth = display.getDisplayHeight();
-  const int targetHeight = display.getDisplayWidth();
+  const int targetWidth = HalDisplay::DISPLAY_HEIGHT;
+  const int targetHeight = HalDisplay::DISPLAY_WIDTH;
   return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetWidth, targetHeight, false, crop);
 }
 

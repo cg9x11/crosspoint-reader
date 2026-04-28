@@ -14,6 +14,14 @@
 #include "util/UrlUtils.h"
 
 namespace {
+void addDefaultRequestHeaders(HTTPClient& http) {
+  http.addHeader("User-Agent", "Mozilla/5.0 (CrossPoint; ESP32) AppleWebKit/537.36 (KHTML, like Gecko) CrossPoint/" CROSSPOINT_VERSION);
+  http.addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+  http.addHeader("Accept-Language", "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7");
+  http.addHeader("Cache-Control", "no-cache");
+  http.addHeader("Pragma", "no-cache");
+}
+
 class FileWriteStream final : public Stream {
  public:
   FileWriteStream(FsFile& file, size_t total, HttpDownloader::ProgressCallback progress)
@@ -67,7 +75,7 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
 
   http.begin(*client, url.c_str());
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.addHeader("User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
+  addDefaultRequestHeaders(http);
 
   if (!username.empty() && !password.empty()) {
     std::string credentials = username + ":" + password;
@@ -118,7 +126,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
 
   http.begin(*client, url.c_str());
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.addHeader("User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
+  addDefaultRequestHeaders(http);
 
   if (!username.empty() && !password.empty()) {
     std::string credentials = username + ":" + password;

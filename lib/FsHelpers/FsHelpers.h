@@ -15,17 +15,26 @@ bool checkFileExtension(std::string_view fileName, const char* extension);
 inline bool checkFileExtension(const String& fileName, const char* extension) {
   return checkFileExtension(std::string_view{fileName.c_str(), fileName.length()}, extension);
 }
+inline bool checkFileExtension(const std::string& fileName, const char* extension) {
+  return checkFileExtension(std::string_view{fileName}, extension);
+}
 
 // Check for either .jpg or .jpeg extension (case-insensitive)
 bool hasJpgExtension(std::string_view fileName);
 inline bool hasJpgExtension(const String& fileName) {
   return hasJpgExtension(std::string_view{fileName.c_str(), fileName.length()});
 }
+inline bool hasJpgExtension(const std::string& fileName) {
+  return hasJpgExtension(std::string_view{fileName});
+}
 
 // Check for .png extension (case-insensitive)
 bool hasPngExtension(std::string_view fileName);
 inline bool hasPngExtension(const String& fileName) {
   return hasPngExtension(std::string_view{fileName.c_str(), fileName.length()});
+}
+inline bool hasPngExtension(const std::string& fileName) {
+  return hasPngExtension(std::string_view{fileName});
 }
 
 // Check for .bmp extension (case-insensitive)
@@ -36,24 +45,39 @@ bool hasGifExtension(std::string_view fileName);
 inline bool hasGifExtension(const String& fileName) {
   return hasGifExtension(std::string_view{fileName.c_str(), fileName.length()});
 }
+inline bool hasGifExtension(const std::string& fileName) {
+  return hasGifExtension(std::string_view{fileName});
+}
 
 // Check for .epub extension (case-insensitive)
 bool hasEpubExtension(std::string_view fileName);
 inline bool hasEpubExtension(const String& fileName) {
   return hasEpubExtension(std::string_view{fileName.c_str(), fileName.length()});
 }
+inline bool hasEpubExtension(const std::string& fileName) {
+  return hasEpubExtension(std::string_view{fileName});
+}
 
 // Check for either .xtc or .xtch extension (case-insensitive)
 bool hasXtcExtension(std::string_view fileName);
+inline bool hasXtcExtension(const std::string& fileName) {
+  return hasXtcExtension(std::string_view{fileName});
+}
 
 // Check for .txt extension (case-insensitive)
 bool hasTxtExtension(std::string_view fileName);
 inline bool hasTxtExtension(const String& fileName) {
   return hasTxtExtension(std::string_view{fileName.c_str(), fileName.length()});
 }
+inline bool hasTxtExtension(const std::string& fileName) {
+  return hasTxtExtension(std::string_view{fileName});
+}
 
 // Check for .md extension (case-insensitive)
 bool hasMarkdownExtension(std::string_view fileName);
+inline bool hasMarkdownExtension(const std::string& fileName) {
+  return hasMarkdownExtension(std::string_view{fileName});
+}
 
 std::string extractFolderPath(const std::string& filePath);
 

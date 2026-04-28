@@ -47,6 +47,9 @@ Multi-language support: Read EPUBs in various languages, including English, Span
 See [the user guide](./USER_GUIDE.md) for instructions on operating CrossPoint, including the
 [KOReader Sync quick setup](./USER_GUIDE.md#365-koreader-sync-quick-setup).
 
+For Online Library changes that should be verified on real hardware after emulator testing, see
+[the device validation checklist](./docs/online-library-device-validation.md).
+
 For more details about the scope of the project, see the [SCOPE.md](SCOPE.md) document.
 
 ## Installing

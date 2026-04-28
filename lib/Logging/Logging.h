@@ -71,7 +71,11 @@ class MySerialImpl : public Print {
   //   if (Serial) or while (!Serial)
   operator bool() const { return logSerial; }
 
+#if defined(_MSC_VER)
+  __declspec(deprecated("Use LOG_* macro instead")) size_t printf(const char* format, ...);
+#else
   __attribute__((deprecated("Use LOG_* macro instead"))) size_t printf(const char* format, ...);
+#endif
   size_t write(uint8_t b) override;
   size_t write(const uint8_t* buffer, size_t size) override;
   void flush() override;

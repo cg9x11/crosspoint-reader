@@ -37,7 +37,8 @@ void QrUtils::drawQrCode(const GfxRenderer& renderer, const Rect& bounds, const 
 
   QRCode qrcode;
   // Initialize the QR code. We use ECC_LOW for max capacity.
-  int8_t res = qrcode_initText(&qrcode, qrcodeBytes.get(), version, ECC_LOW, payload);
+  auto initText = reinterpret_cast<int8_t (*)(QRCode*, uint8_t*, uint8_t, uint8_t, const char*)>(qrcode_initText);
+  int8_t res = initText(&qrcode, qrcodeBytes.get(), version, ECC_LOW, payload);
 
   if (res == 0) {
     // Determine the optimal pixel size.

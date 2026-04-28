@@ -12,7 +12,10 @@
 
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
+#include "PluginStore.h"
 #include "SettingsList.h"
+#include "TrackedSeriesStore.h"
+#include "plugins/HakoPluginExecutor.h"
 #include "WebDAVHandler.h"
 #include "html/FilesPageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
@@ -81,6 +84,27 @@ bool isProtectedItemName(const String& name) {
     }
   }
   return false;
+}
+
+void sendJsonResponse(WebServer* server, JsonDocument& doc) {
+  String json;
+  serializeJson(doc, json);
+  server->send(200, "application/json", json);
+}
+
+int parsePositivePageArg(const String& rawValue) {
+  if (rawValue.isEmpty()) {
+    return 1;
+  }
+  const int page = rawValue.toInt();
+  return page > 0 ? page : 1;
+}
+
+void appendHakoChapterRef(JsonArray chapters, const HakoChapterRef& chapter) {
+  JsonObject obj = chapters.add<JsonObject>();
+  obj["index"] = chapter.index;
+  obj["title"] = chapter.title;
+  obj["url"] = chapter.url;
 }
 }  // namespace
 
@@ -165,6 +189,19 @@ void CrossPointWebServer::begin() {
   server->on("/api/opds", HTTP_GET, [this] { handleGetOpdsServers(); });
   server->on("/api/opds", HTTP_POST, [this] { handlePostOpdsServer(); });
   server->on("/api/opds/delete", HTTP_POST, [this] { handleDeleteOpdsServer(); });
+
+  // Plugin endpoints
+  server->on("/api/plugins", HTTP_GET, [this] { handleGetPlugins(); });
+  server->on("/api/plugins/import", HTTP_POST, [this] { handleImportPlugin(); });
+  server->on("/api/plugins/delete", HTTP_POST, [this] { handleDeletePlugin(); });
+  server->on("/api/plugins/tracked", HTTP_GET, [this] { handleGetTrackedSeries(); });
+  server->on("/api/plugins/tracked", HTTP_POST, [this] { handlePostTrackedSeries(); });
+  server->on("/api/plugins/tracked/delete", HTTP_POST, [this] { handleDeleteTrackedSeries(); });
+  server->on("/api/plugins/hako/search", HTTP_GET, [this] { handleHakoPluginSearch(); });
+  server->on("/api/plugins/hako/detail", HTTP_GET, [this] { handleHakoPluginDetail(); });
+  server->on("/api/plugins/hako/toc", HTTP_GET, [this] { handleHakoPluginToc(); });
+  server->on("/api/plugins/hako/chapter", HTTP_GET, [this] { handleHakoPluginChapter(); });
+  server->on("/api/plugins/hako/updates", HTTP_GET, [this] { handleHakoPluginUpdates(); });
 
   server->onNotFound([this] { handleNotFound(); });
   LOG_DBG("WEB", "[MEM] Free heap after route setup: %d bytes", ESP.getFreeHeap());
@@ -357,6 +394,7 @@ void CrossPointWebServer::handleStatus() const {
   doc["rssi"] = apMode ? 0 : WiFi.RSSI();
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["uptime"] = millis() / 1000;
+  doc["pluginCount"] = PLUGIN_STORE.getCount();
 
   String json;
   serializeJson(doc, json);
@@ -986,7 +1024,7 @@ void CrossPointWebServer::handleDelete() const {
   DeserializationError error = DeserializationError(DeserializationError::Code::Ok);
   if (hasPathsArg) {
     pathsArg = server->arg("paths");
-    error = deserializeJson(doc, pathsArg);
+    error = deserializeJson(doc, pathsArg.c_str());
   } else {
     pathsArg = server->arg("path");
     doc.add(pathsArg);
@@ -1007,7 +1045,8 @@ void CrossPointWebServer::handleDelete() const {
   String failedItems;
 
   for (const auto& p : paths) {
-    auto itemPath = p.as<String>();
+    const std::string itemPathStd = p.as<std::string>();
+    String itemPath = itemPathStd.c_str();
 
     // Validate path
     if (itemPath.isEmpty() || itemPath == "/") {
@@ -1183,7 +1222,7 @@ void CrossPointWebServer::handlePostSettings() {
 
   const String body = server->arg("plain");
   JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, body);
+  const DeserializationError err = deserializeJson(doc, body.c_str());
   if (err) {
     server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
     return;
@@ -1293,7 +1332,7 @@ void CrossPointWebServer::handlePostOpdsServer() {
 
   const String body = server->arg("plain");
   JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, body);
+  const DeserializationError err = deserializeJson(doc, body.c_str());
   if (err) {
     server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
     return;
@@ -1344,7 +1383,7 @@ void CrossPointWebServer::handleDeleteOpdsServer() {
 
   const String body = server->arg("plain");
   JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, body);
+  const DeserializationError err = deserializeJson(doc, body.c_str());
   if (err) {
     server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
     return;
@@ -1364,6 +1403,327 @@ void CrossPointWebServer::handleDeleteOpdsServer() {
   OPDS_STORE.removeServer(static_cast<size_t>(idx));
   LOG_DBG("WEB", "Deleted OPDS server at index %d", idx);
   server->send(200, "text/plain", "OK");
+}
+
+void CrossPointWebServer::handleGetPlugins() const {
+  JsonDocument doc;
+  JsonArray plugins = doc["plugins"].to<JsonArray>();
+
+  for (const auto& plugin : PLUGIN_STORE.getPlugins()) {
+    JsonObject obj = plugins.add<JsonObject>();
+    obj["id"] = plugin.id;
+    obj["name"] = plugin.name;
+    obj["version"] = plugin.version;
+    obj["runtimeMode"] = plugin.runtimeMode;
+    obj["runtimeProfile"] = plugin.runtimeProfile;
+    obj["runtimeOrigin"] = plugin.runtimeOrigin;
+    obj["baseUrl"] = plugin.baseUrl;
+    obj["locale"] = plugin.locale;
+    obj["contentType"] = plugin.contentType;
+    obj["supportsSearch"] = plugin.supportsSearch;
+    obj["supportsTrackedUpdates"] = plugin.supportsTrackedUpdates;
+    obj["supportsX3"] = plugin.supportsX3;
+    obj["supportsX4"] = plugin.supportsX4;
+    obj["filePath"] = plugin.filePath;
+  }
+
+  String json;
+  serializeJson(doc, json);
+  server->send(200, "application/json", json);
+}
+
+void CrossPointWebServer::handleImportPlugin() {
+  if (!server->hasArg("plain")) {
+    server->send(400, "text/plain", "Missing JSON body");
+    return;
+  }
+
+  const String body = server->arg("plain");
+  std::string error;
+  if (!PLUGIN_STORE.installPluginJson(body.c_str(), &error)) {
+    server->send(400, "text/plain", error.c_str());
+    return;
+  }
+
+  LOG_DBG("WEB", "Imported cpplugin via API");
+  server->send(200, "text/plain", "OK");
+}
+
+void CrossPointWebServer::handleDeletePlugin() {
+  std::string pluginId;
+
+  if (server->hasArg("plain")) {
+    JsonDocument doc;
+    const String rawBody = server->arg("plain");
+    const auto err = deserializeJson(doc, rawBody.c_str());
+    if (err) {
+      server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
+      return;
+    }
+    pluginId = doc["id"] | std::string("");
+  } else if (server->hasArg("id")) {
+    pluginId = server->arg("id").c_str();
+  } else {
+    server->send(400, "text/plain", "Missing plugin id");
+    return;
+  }
+
+  std::string error;
+  if (!PLUGIN_STORE.removePlugin(pluginId, &error)) {
+    server->send(400, "text/plain", error.c_str());
+    return;
+  }
+
+  LOG_DBG("WEB", "Deleted plugin: %s", pluginId.c_str());
+  server->send(200, "text/plain", "OK");
+}
+
+void CrossPointWebServer::handleGetTrackedSeries() const {
+  JsonDocument doc;
+  JsonArray items = doc["items"].to<JsonArray>();
+  for (const auto& tracked : TRACKED_SERIES_STORE.getAll()) {
+    JsonObject obj = items.add<JsonObject>();
+    obj["id"] = tracked.id;
+    obj["pluginId"] = tracked.pluginId;
+    obj["runtimeProfile"] = tracked.runtimeProfile;
+    obj["title"] = tracked.title;
+    obj["author"] = tracked.author;
+    obj["seriesUrl"] = tracked.seriesUrl;
+    obj["coverUrl"] = tracked.coverUrl;
+    obj["epubPath"] = tracked.epubPath;
+    obj["lastChapterUrl"] = tracked.lastChapterUrl;
+    obj["lastChapterTitle"] = tracked.lastChapterTitle;
+    obj["lastReadChapterUrl"] = tracked.lastReadChapterUrl;
+    obj["lastReadChapterTitle"] = tracked.lastReadChapterTitle;
+    obj["lastReadPage"] = tracked.lastReadPage;
+    obj["lastReadPageCount"] = tracked.lastReadPageCount;
+    obj["chapterCount"] = tracked.chapterCount;
+  }
+  sendJsonResponse(server.get(), doc);
+}
+
+void CrossPointWebServer::handlePostTrackedSeries() {
+  if (!server->hasArg("plain")) {
+    server->send(400, "text/plain", "Missing JSON body");
+    return;
+  }
+
+  JsonDocument doc;
+  const String rawBody = server->arg("plain");
+  const auto err = deserializeJson(doc, rawBody.c_str());
+  if (err) {
+    server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
+    return;
+  }
+
+  TrackedSeriesInfo item;
+  item.id = doc["id"] | std::string("");
+  item.pluginId = doc["pluginId"] | std::string("");
+  item.runtimeProfile = doc["runtimeProfile"] | std::string("");
+  item.title = doc["title"] | std::string("");
+  item.author = doc["author"] | std::string("");
+  item.seriesUrl = doc["seriesUrl"] | std::string("");
+  item.coverUrl = doc["coverUrl"] | std::string("");
+  item.epubPath = doc["epubPath"] | std::string("");
+  item.lastChapterUrl = doc["lastChapterUrl"] | std::string("");
+  item.lastChapterTitle = doc["lastChapterTitle"] | std::string("");
+  item.lastReadChapterUrl = doc["lastReadChapterUrl"] | std::string("");
+  item.lastReadChapterTitle = doc["lastReadChapterTitle"] | std::string("");
+  item.lastReadPage = doc["lastReadPage"] | static_cast<uint32_t>(0);
+  item.lastReadPageCount = doc["lastReadPageCount"] | static_cast<uint32_t>(0);
+  item.chapterCount = doc["chapterCount"] | static_cast<uint32_t>(0);
+
+  std::string error;
+  if (!TRACKED_SERIES_STORE.upsert(item, &error)) {
+    server->send(400, "text/plain", error.c_str());
+    return;
+  }
+
+  server->send(200, "text/plain", "OK");
+}
+
+void CrossPointWebServer::handleDeleteTrackedSeries() {
+  std::string trackedId;
+  if (server->hasArg("plain")) {
+    JsonDocument doc;
+    const String rawBody = server->arg("plain");
+    const auto err = deserializeJson(doc, rawBody.c_str());
+    if (err) {
+      server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
+      return;
+    }
+    trackedId = doc["id"] | std::string("");
+  } else if (server->hasArg("id")) {
+    trackedId = server->arg("id").c_str();
+  }
+
+  if (trackedId.empty()) {
+    server->send(400, "text/plain", "Missing tracked series id");
+    return;
+  }
+
+  std::string error;
+  if (!TRACKED_SERIES_STORE.removeById(trackedId, &error)) {
+    server->send(400, "text/plain", error.c_str());
+    return;
+  }
+
+  server->send(200, "text/plain", "OK");
+}
+
+void CrossPointWebServer::handleHakoPluginSearch() const {
+  if (!server->hasArg("query")) {
+    server->send(400, "text/plain", "Missing query");
+    return;
+  }
+
+  const String query = server->arg("query");
+  const int page = parsePositivePageArg(server->arg("page"));
+
+  std::vector<HakoSearchResult> results;
+  if (!HakoPluginExecutor::search(query.c_str(), page, results)) {
+    server->send(502, "text/plain", "Failed to fetch Hako search results");
+    return;
+  }
+
+  JsonDocument doc;
+  doc["query"] = query;
+  doc["page"] = page;
+  JsonArray items = doc["results"].to<JsonArray>();
+  for (const auto& result : results) {
+    JsonObject obj = items.add<JsonObject>();
+    obj["title"] = result.title;
+    obj["url"] = result.url;
+    obj["description"] = result.description;
+    obj["coverUrl"] = result.coverUrl;
+  }
+
+  sendJsonResponse(server.get(), doc);
+}
+
+void CrossPointWebServer::handleHakoPluginDetail() const {
+  if (!server->hasArg("url")) {
+    server->send(400, "text/plain", "Missing url");
+    return;
+  }
+
+  HakoBookDetail detail;
+  if (!HakoPluginExecutor::fetchDetail(server->arg("url").c_str(), detail)) {
+    server->send(502, "text/plain", "Failed to fetch Hako detail");
+    return;
+  }
+
+  JsonDocument doc;
+  doc["title"] = detail.title;
+  doc["url"] = detail.url;
+  doc["author"] = detail.author;
+  doc["coverUrl"] = detail.coverUrl;
+  doc["descriptionHtml"] = detail.descriptionHtml;
+  doc["ongoing"] = detail.ongoing;
+  JsonArray genres = doc["genres"].to<JsonArray>();
+  for (const auto& genre : detail.genres) {
+    genres.add(genre);
+  }
+
+  sendJsonResponse(server.get(), doc);
+}
+
+void CrossPointWebServer::handleHakoPluginToc() const {
+  if (!server->hasArg("url")) {
+    server->send(400, "text/plain", "Missing url");
+    return;
+  }
+
+  std::vector<HakoChapterRef> chapters;
+  if (!HakoPluginExecutor::fetchToc(server->arg("url").c_str(), chapters)) {
+    server->send(502, "text/plain", "Failed to fetch Hako table of contents");
+    return;
+  }
+
+  JsonDocument doc;
+  doc["url"] = server->arg("url");
+  JsonArray items = doc["chapters"].to<JsonArray>();
+  for (const auto& chapter : chapters) {
+    appendHakoChapterRef(items, chapter);
+  }
+
+  sendJsonResponse(server.get(), doc);
+}
+
+void CrossPointWebServer::handleHakoPluginChapter() const {
+  if (!server->hasArg("url")) {
+    server->send(400, "text/plain", "Missing url");
+    return;
+  }
+
+  HakoChapterRef ref;
+  ref.url = server->arg("url").c_str();
+  ref.title = server->hasArg("title") ? server->arg("title").c_str() : "";
+  ref.index = server->hasArg("index") ? static_cast<uint32_t>(std::max<long>(0, server->arg("index").toInt())) : 0;
+
+  HakoChapterContent chapter;
+  if (!HakoPluginExecutor::fetchChapter(ref, chapter)) {
+    server->send(502, "text/plain", "Failed to fetch Hako chapter");
+    return;
+  }
+
+  JsonDocument doc;
+  doc["title"] = chapter.ref.title;
+  doc["url"] = chapter.ref.url;
+  doc["index"] = chapter.ref.index;
+  doc["html"] = chapter.html;
+  doc["text"] = chapter.text;
+
+  sendJsonResponse(server.get(), doc);
+}
+
+void CrossPointWebServer::handleHakoPluginUpdates() const {
+  if (!server->hasArg("url")) {
+    server->send(400, "text/plain", "Missing url");
+    return;
+  }
+
+  const std::string url = server->arg("url").c_str();
+  const std::string lastChapterUrl = server->hasArg("lastChapterUrl") ? server->arg("lastChapterUrl").c_str() : "";
+
+  HakoBookDetail detail;
+  std::vector<HakoChapterRef> chapters;
+  if (!HakoPluginExecutor::fetchDetail(url, detail) || !HakoPluginExecutor::fetchToc(url, chapters)) {
+    server->send(502, "text/plain", "Failed to fetch Hako update metadata");
+    return;
+  }
+
+  int lastKnownIndex = -1;
+  if (!lastChapterUrl.empty()) {
+    for (size_t i = 0; i < chapters.size(); i++) {
+      if (chapters[i].url == lastChapterUrl) {
+        lastKnownIndex = static_cast<int>(i);
+        break;
+      }
+    }
+  }
+
+  JsonDocument doc;
+  doc["url"] = url;
+  doc["title"] = detail.title;
+  doc["author"] = detail.author;
+  doc["coverUrl"] = detail.coverUrl;
+  doc["chapterCount"] = static_cast<uint32_t>(chapters.size());
+  doc["lastKnownFound"] = lastChapterUrl.empty() ? true : lastKnownIndex >= 0;
+  doc["hasUpdates"] = !chapters.empty() && (lastChapterUrl.empty() ? true : lastKnownIndex < static_cast<int>(chapters.size()) - 1);
+  if (!chapters.empty()) {
+    doc["latestChapterUrl"] = chapters.back().url;
+    doc["latestChapterTitle"] = chapters.back().title;
+  }
+
+  JsonArray updates = doc["newChapters"].to<JsonArray>();
+  const size_t startIndex =
+      lastChapterUrl.empty() ? 0 : (lastKnownIndex >= 0 ? static_cast<size_t>(lastKnownIndex + 1) : 0);
+  for (size_t i = startIndex; i < chapters.size(); i++) {
+    appendHakoChapterRef(updates, chapters[i]);
+  }
+
+  sendJsonResponse(server.get(), doc);
 }
 
 // WebSocket callback trampoline

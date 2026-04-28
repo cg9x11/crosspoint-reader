@@ -33,6 +33,11 @@ class Activity {
 
   virtual void render(RenderLock&&) {}
 
+  virtual bool handleAutomationTextInput(const std::string& text) {
+    (void)text;
+    return false;
+  }
+
   // If immediate is true, the update will be triggered immediately.
   // Otherwise, it will be deferred until the end of the current loop iteration.
   virtual void requestUpdate(bool immediate = false);
@@ -43,6 +48,7 @@ class Activity {
   virtual bool skipLoopDelay() { return false; }
   virtual bool preventAutoSleep() { return false; }
   virtual bool isReaderActivity() const { return false; }
+  const std::string& getName() const { return name; }
 
   // Start a new activity without destroying the current one
   // Note: requestUpdate() will be invoked automatically once resultHandler finishes

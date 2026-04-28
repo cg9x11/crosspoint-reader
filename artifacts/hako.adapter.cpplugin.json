@@ -1,0 +1,41 @@
+{
+  "plugin": {
+    "id": "hako-novel",
+    "name": "Hako Novel",
+    "version": 12,
+    "author": "vBook",
+    "deviceSupport": [
+      "x3",
+      "x4"
+    ],
+    "description": "Đọc truyện trên trang Hako"
+  },
+  "runtime": {
+    "mode": "adapter",
+    "adapter": {
+      "origin": "vbook",
+      "profile": "hako",
+      "sourceLanguage": "javascript",
+      "scriptFiles": [
+        "base64.js",
+        "chap.js",
+        "comment.js",
+        "config.js",
+        "detail.js",
+        "gen.js",
+        "genre.js",
+        "home.js",
+        "search.js",
+        "toc.js"
+      ]
+    }
+  },
+  "source": {
+    "baseUrl": "https://docln.sbs",
+    "locale": "vi-VN",
+    "contentType": "webnovel",
+    "supportsSearch": true,
+    "supportsTrackedUpdates": true,
+    "regexp": "(www.)?(ln.hako.vn|ln.hako.re|docln.net|docln.sbs)/[^/]+/[^/]+/?$"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "plugin": {
+    "id": "truyen-full",
+    "name": "Truyện Full",
+    "version": 10,
+    "author": "vBook",
+    "deviceSupport": [
+      "x3",
+      "x4"
+    ],
+    "description": "Đọc truyện trên trang Truyện Full"
+  },
+  "runtime": {
+    "mode": "adapter",
+    "adapter": {
+      "origin": "vbook",
+      "profile": "truyenfull",
+      "sourceLanguage": "javascript",
+      "scriptFiles": [
+        "chap.js",
+        "config.js",
+        "detail.js",
+        "gen.js",
+        "genre.js",
+        "home.js",
+        "page.js",
+        "search.js",
+        "toc.js"
+      ]
+    }
+  },
+  "source": {
+    "baseUrl": "https://truyenfull.vision",
+    "locale": "vi-VN",
+    "contentType": "webnovel",
+    "supportsSearch": true,
+    "supportsTrackedUpdates": false,
+    "regexp": "(www.)?truyenfull.(vn|net|io|bio|vision)/[^/]+/?$"
+  }
+}

@@ -41,7 +41,7 @@ std::string Txt::getTitle() const {
   std::string filename = (lastSlash != std::string::npos) ? filepath.substr(lastSlash + 1) : filepath;
 
   // Remove .txt extension
-  if (FsHelpers::hasTxtExtension(filename)) {
+  if (FsHelpers::hasTxtExtension(std::string_view(filename))) {
     filename = filename.substr(0, filename.length() - 4);
   }
 
@@ -129,7 +129,7 @@ bool Txt::generateCoverBmp() const {
     }
     LOG_DBG("TXT", "Copied BMP cover to cache");
     return true;
-  } else if (FsHelpers::hasJpgExtension(coverImagePath)) {
+  } else if (FsHelpers::hasJpgExtension(std::string_view(coverImagePath))) {
     // Convert JPG/JPEG to BMP (same approach as Epub)
     LOG_DBG("TXT", "Generating BMP from JPG cover image");
     FsFile coverJpg, coverBmp;

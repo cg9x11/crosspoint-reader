@@ -221,6 +221,53 @@
       gap: 8px;
       margin-top: 8px;
     }
+    .section-stack {
+      display: grid;
+      gap: 15px;
+    }
+    .plugin-card {
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 12px;
+      margin: 10px 0;
+    }
+    .plugin-title-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .plugin-meta {
+      color: var(--label-color);
+      font-size: 0.92em;
+      margin: 0;
+    }
+    .plugin-json-input {
+      width: 100%;
+      min-height: 180px;
+      box-sizing: border-box;
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+      background: var(--card-bg);
+      color: var(--font-color);
+      resize: vertical;
+    }
+    .plugin-import-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .plugin-file-hint {
+      color: var(--label-color);
+      font-size: 0.9em;
+    }
     .btn-small {
       padding: 6px 14px;
       border: none;
@@ -300,6 +347,7 @@
   </div>
 
   <div id="opds-container"></div>
+  <div id="plugin-container"></div>
 
   <div class="card">
     <p style="text-align: center; color: #95a5a6; margin: 0;">
@@ -595,6 +643,136 @@
   }
 
   loadOpdsServers();
+
+  // --- Plugin Registry Management ---
+  let plugins = [];
+
+  function pluginDevices(plugin) {
+    const devices = [];
+    if (plugin.supportsX3) devices.push('X3');
+    if (plugin.supportsX4) devices.push('X4');
+    return devices.length ? devices.join(', ') : 'Unknown';
+  }
+
+  function renderPlugin(plugin) {
+    return '<div class="plugin-card">' +
+      '<div class="plugin-title-row">' +
+        '<div>' +
+          '<h3 style="margin:0 0 4px 0;">' + escapeHtml(plugin.name || plugin.id || 'Unnamed Plugin') + '</h3>' +
+          '<p class="plugin-meta">ID: ' + escapeHtml(plugin.id || '') + ' | Version: ' + escapeHtml(String(plugin.version || 0)) + '</p>' +
+        '</div>' +
+        '<button class="btn-small btn-delete" onclick="deletePlugin(\'' + escapeHtml(plugin.id || '') + '\')">Delete</button>' +
+      '</div>' +
+      '<div class="setting-row"><span class="setting-name">Runtime</span><span class="setting-control">' + escapeHtml(plugin.runtimeMode || '-') + '</span></div>' +
+      '<div class="setting-row"><span class="setting-name">Adapter</span><span class="setting-control">' + escapeHtml(plugin.runtimeProfile || '-') + '</span></div>' +
+      '<div class="setting-row"><span class="setting-name">Origin</span><span class="setting-control">' + escapeHtml(plugin.runtimeOrigin || '-') + '</span></div>' +
+      '<div class="setting-row"><span class="setting-name">Base URL</span><span class="setting-control">' + escapeHtml(plugin.baseUrl || '-') + '</span></div>' +
+      '<div class="setting-row"><span class="setting-name">Locale</span><span class="setting-control">' + escapeHtml(plugin.locale || '-') + '</span></div>' +
+      '<div class="setting-row"><span class="setting-name">Content Type</span><span class="setting-control">' + escapeHtml(plugin.contentType || '-') + '</span></div>' +
+      '<div class="setting-row"><span class="setting-name">Capabilities</span><span class="setting-control">Search: ' + (plugin.supportsSearch ? 'Yes' : 'No') + ' | Updates: ' + (plugin.supportsTrackedUpdates ? 'Yes' : 'No') + '</span></div>' +
+      '<div class="setting-row"><span class="setting-name">Devices</span><span class="setting-control">' + escapeHtml(pluginDevices(plugin)) + '</span></div>' +
+      '<div class="setting-row"><span class="setting-name">Registry Path</span><span class="setting-control">' + escapeHtml(plugin.filePath || '-') + '</span></div>' +
+    '</div>';
+  }
+
+  function renderPluginSection() {
+    const container = document.getElementById('plugin-container');
+    let html = '<div class="card"><h2>Plugin Registry</h2>' +
+      '<p style="color:var(--label-color);margin-top:0;">Import cpplugin JSON to register a source adapter on device storage. A helper tool can convert supported vBook extensions into this format.</p>' +
+      '<div class="section-stack">';
+
+    html += '<div class="plugin-card">' +
+      '<h3 style="margin-top:0;">Import Plugin</h3>' +
+      '<textarea id="plugin-json-input" class="plugin-json-input" placeholder="Paste cpplugin JSON here"></textarea>' +
+      '<div class="plugin-import-actions">' +
+        '<input type="file" id="plugin-file-input" accept=".json,.cpplugin" onchange="loadPluginFile(event)">' +
+        '<button class="btn-small btn-add" onclick="importPlugin()">Import Plugin</button>' +
+        '<span class="plugin-file-hint">You can paste JSON directly or load it from a local file.</span>' +
+      '</div>' +
+    '</div>';
+
+    html += '<div class="plugin-card">' +
+      '<h3 style="margin-top:0;">Installed Plugins (' + plugins.length + ')</h3>';
+    if (plugins.length === 0) {
+      html += '<p style="color:var(--label-color);text-align:center;">No plugins installed</p>';
+    } else {
+      plugins.forEach(function(plugin) {
+        html += renderPlugin(plugin);
+      });
+    }
+    html += '</div></div></div>';
+
+    container.innerHTML = html;
+  }
+
+  async function loadPlugins() {
+    try {
+      const resp = await fetch('/api/plugins');
+      if (!resp.ok) throw new Error('Failed to load plugins');
+      const data = await resp.json();
+      plugins = Array.isArray(data.plugins) ? data.plugins : [];
+      renderPluginSection();
+    } catch (e) {
+      console.error('Plugin load error:', e);
+      document.getElementById('plugin-container').innerHTML =
+        '<div class="card"><h2>Plugin Registry</h2><p style="color:#e74c3c;text-align:center;">Failed to load plugin registry</p></div>';
+    }
+  }
+
+  function loadPluginFile(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function() {
+      document.getElementById('plugin-json-input').value = reader.result || '';
+    };
+    reader.onerror = function() {
+      showMessage('Failed to read plugin file', true);
+    };
+    reader.readAsText(file);
+  }
+
+  async function importPlugin() {
+    const input = document.getElementById('plugin-json-input');
+    const body = input.value.trim();
+    if (!body) {
+      showMessage('Paste plugin JSON before importing.', true);
+      return;
+    }
+
+    try {
+      const resp = await fetch('/api/plugins/import', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      input.value = '';
+      showMessage('Plugin imported successfully!', false);
+      await loadPlugins();
+    } catch (e) {
+      showMessage('Error: ' + e.message, true);
+    }
+  }
+
+  async function deletePlugin(id) {
+    if (!confirm('Delete plugin "' + id + '"?')) return;
+    try {
+      const resp = await fetch('/api/plugins/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id})
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      showMessage('Plugin deleted', false);
+      await loadPlugins();
+    } catch (e) {
+      showMessage('Error: ' + e.message, true);
+    }
+  }
+
+  loadPlugins();
 </script>
 </body>
 </html>

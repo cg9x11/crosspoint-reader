@@ -134,6 +134,12 @@
     .folder-action-btn:hover {
       background-color: #d68910;
     }
+    .source-action-btn {
+      background-color: #2980b9;
+    }
+    .source-action-btn:hover {
+      background-color: #1f6694;
+    }
     .delete-action-btn {
       background-color: #e74c3c;
     }
@@ -168,6 +174,9 @@
     }
     .modal.picker-mode {
       max-width: 920px;
+    }
+    .modal.source-modal {
+      max-width: 980px;
     }
     .picker-columns.picker-active {
       display: flex;
@@ -222,6 +231,166 @@
     }
     .modal-close.disabled:hover {
       color: var(--label-color);
+    }
+    .source-tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .source-tab {
+      border: 1px solid var(--border-color);
+      background: transparent;
+      color: var(--font-color);
+      border-radius: 20px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .source-tab.active {
+      background: var(--accent-color);
+      color: white;
+      border-color: var(--accent-color);
+    }
+    .source-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 1fr;
+      gap: 16px;
+    }
+    .source-column {
+      min-width: 0;
+    }
+    .source-panel {
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+      background: rgba(110, 154, 130, 0.04);
+    }
+    .source-panel h4 {
+      margin: 0 0 10px 0;
+      color: var(--title-color);
+    }
+    .source-search-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .source-search-row input {
+      flex: 1;
+      min-width: 0;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 0.95em;
+      background: var(--card-bg);
+      color: var(--font-color);
+    }
+    .source-list {
+      display: grid;
+      gap: 10px;
+      max-height: 48vh;
+      overflow-y: auto;
+    }
+    .source-item {
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 12px;
+      background: var(--card-bg);
+    }
+    .source-item h5 {
+      margin: 0 0 6px 0;
+      font-size: 1em;
+      color: var(--title-color);
+    }
+    .source-meta {
+      color: var(--label-color);
+      font-size: 0.9em;
+      margin: 0;
+    }
+    .source-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .source-btn {
+      border: none;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 0.92em;
+      font-weight: 600;
+      cursor: pointer;
+      color: white;
+      background: var(--accent-color);
+    }
+    .source-btn:hover {
+      background: var(--accent-hover-color);
+    }
+    .source-btn.secondary {
+      background: #7f8c8d;
+    }
+    .source-btn.secondary:hover {
+      background: #6c7a7b;
+    }
+    .source-btn.warn {
+      background: #f39c12;
+    }
+    .source-btn.warn:hover {
+      background: #d68910;
+    }
+    .source-btn.danger {
+      background: #e74c3c;
+    }
+    .source-btn.danger:hover {
+      background: #c0392b;
+    }
+    .source-empty {
+      text-align: center;
+      color: var(--label-color);
+      padding: 18px 10px;
+    }
+    .source-status {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      background: rgba(52, 152, 219, 0.12);
+      color: #2980b9;
+      font-size: 0.92em;
+    }
+    .source-status.error {
+      background: rgba(231, 76, 60, 0.12);
+      color: #c0392b;
+    }
+    .source-progress {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(127, 140, 141, 0.18);
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .source-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #2980b9, #27ae60);
+      transition: width 0.2s ease;
+    }
+    .source-detail-body {
+      max-height: 48vh;
+      overflow-y: auto;
+    }
+    .source-description {
+      color: var(--font-color);
+      font-size: 0.92em;
+      line-height: 1.5;
+    }
+    .source-pill {
+      display: inline-block;
+      margin: 4px 6px 0 0;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.8em;
+      background: rgba(110, 154, 130, 0.12);
+      color: var(--accent-color);
     }
     .file-table {
       width: 100%;
@@ -1242,6 +1411,7 @@
       }
       .action-buttons {
         gap: 6px;
+        flex-wrap: wrap;
       }
       .action-btn {
         padding: 8px 10px;
@@ -1263,6 +1433,9 @@
         padding: 2px 5px;
         font-size: 0.65em;
         margin-left: 4px;
+      }
+      .source-grid {
+        grid-template-columns: 1fr;
       }
       .contents-header {
         margin-bottom: 8px;
@@ -1477,6 +1650,7 @@
   </div>
 
   <div class="action-buttons">
+    <button class="action-btn source-action-btn" onclick="openSourceModal()">Hako</button>
     <button class="action-btn upload-action-btn" onclick="openUploadModal()">📤 Upload</button>
     <button class="action-btn folder-action-btn" onclick="openFolderModal()">📁 New Folder</button>
     <button class="action-btn delete-action-btn" onclick="openDeleteSelectedModal()">🗑️ Delete Selected</button>
@@ -1510,6 +1684,61 @@
   <p style="text-align: center; color: #95a5a6; margin: 0;">
     CrossPoint E-Reader • Open Source
   </p>
+</div>
+
+<!-- Source Modal -->
+<div class="modal-overlay" id="sourceModal">
+  <div class="modal source-modal">
+    <button class="modal-close" id="sourceModalClose" onclick="closeSourceModal()">&times;</button>
+    <h3>Hako Source</h3>
+    <p class="file-info">Download novels into <strong id="sourcePathDisplay"></strong> and keep tracked EPUBs updated.</p>
+
+    <div class="source-tabs">
+      <button class="source-tab active" id="sourceTabDiscover" onclick="switchSourceTab('discover')">Discover</button>
+      <button class="source-tab" id="sourceTabTracked" onclick="switchSourceTab('tracked')">Tracked EPUBs</button>
+    </div>
+
+    <div id="sourcePluginWarning" class="source-status" style="display:none;"></div>
+
+    <div id="sourceDiscoverTab">
+      <div class="source-grid">
+        <div class="source-column">
+          <div class="source-panel">
+            <h4>Search Hako</h4>
+            <div class="source-search-row">
+              <input type="text" id="sourceSearchInput" placeholder="Search title or keyword..." onkeydown="if(event.key === 'Enter'){ searchHakoBooks(); }">
+              <button class="source-btn" onclick="searchHakoBooks()">Search</button>
+            </div>
+            <div class="source-list" id="sourceSearchResults">
+              <div class="source-empty">Search a title to load results.</div>
+            </div>
+          </div>
+        </div>
+        <div class="source-column">
+          <div class="source-panel">
+            <h4>Book Detail</h4>
+            <div class="source-detail-body" id="sourceBookDetail">
+              <div class="source-empty">Select a title from the search results.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="sourceTrackedTab" style="display:none;">
+      <div class="source-panel">
+        <h4>Tracked Series</h4>
+        <div class="source-list" id="trackedSeriesList">
+          <div class="source-empty">No tracked series yet.</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="sourceStatusBox" class="source-status" style="display:none;">
+      <div id="sourceStatusText"></div>
+      <div class="source-progress"><div class="source-progress-fill" id="sourceProgressFill"></div></div>
+    </div>
+  </div>
 </div>
 
 <!-- Upload Modal -->
@@ -1839,6 +2068,7 @@
           if (overlay.id === 'deleteModal') return closeDeleteModal();
           if (overlay.id === 'renameModal') return closeRenameModal();
           if (overlay.id === 'moveModal') return closeMoveModal();
+          if (overlay.id === 'sourceModal') return closeSourceModal();
           overlay.classList.remove('open');
         }
       });
@@ -4528,7 +4758,7 @@ function getWsUrl() {
 }
 
 // Upload file via WebSocket (faster, binary protocol)
-function uploadFileWebSocket(file, onProgress, onComplete, onError) {
+function uploadFileWebSocket(file, onProgress, onComplete, onError, targetPath = currentPath) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(getWsUrl());
     currentUploadWs = ws;
@@ -4541,7 +4771,7 @@ function uploadFileWebSocket(file, onProgress, onComplete, onError) {
     ws.onopen = function() {
       console.log('[WS] Connected, starting upload:', file.name);
       // Send start message: START:<filename>:<size>:<path>
-      ws.send(`START:${file.name}:${file.size}:${currentPath}`);
+      ws.send(`START:${file.name}:${file.size}:${targetPath}`);
     };
 
     ws.onmessage = async function(event) {
@@ -4637,14 +4867,14 @@ function uploadFileWebSocket(file, onProgress, onComplete, onError) {
 }
 
 // Upload file via HTTP (fallback method)
-function uploadFileHTTP(file, onProgress, onComplete, onError) {
+function uploadFileHTTP(file, onProgress, onComplete, onError, targetPath = currentPath) {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
     formData.append('file', file);
 
     const xhr = new XMLHttpRequest();
     currentUploadXhr = xhr;
-    xhr.open('POST', '/upload?path=' + encodeURIComponent(currentPath), true);
+    xhr.open('POST', '/upload?path=' + encodeURIComponent(targetPath), true);
 
     xhr.upload.onprogress = function(e) {
       if (e.lengthComputable && onProgress) {
@@ -5199,6 +5429,643 @@ function retryAllFailedUploads() {
     };
 
     xhr.send(formData);
+  }
+
+  let installedPlugins = [];
+  let trackedSeries = [];
+  let trackedSeriesUpdateCache = {};
+  let selectedHakoDetail = null;
+  let selectedHakoToc = [];
+  let selectedHakoUrl = '';
+  let sourceModalBusy = false;
+
+  function getInstalledPlugin(pluginId) {
+    return installedPlugins.find(plugin => plugin.id === pluginId) || null;
+  }
+
+  function setSourceBusy(busy) {
+    sourceModalBusy = busy;
+    const closeBtn = document.getElementById('sourceModalClose');
+    if (closeBtn) {
+      closeBtn.classList.toggle('disabled', busy);
+    }
+  }
+
+  function updateSourceStatus(message, progress = null, isError = false) {
+    const box = document.getElementById('sourceStatusBox');
+    const text = document.getElementById('sourceStatusText');
+    const fill = document.getElementById('sourceProgressFill');
+    box.style.display = 'block';
+    box.classList.toggle('error', !!isError);
+    text.textContent = message;
+    fill.style.width = progress == null ? '0%' : Math.max(0, Math.min(100, progress)) + '%';
+  }
+
+  function clearSourceStatus() {
+    const box = document.getElementById('sourceStatusBox');
+    if (!box) return;
+    box.style.display = 'none';
+    box.classList.remove('error');
+    document.getElementById('sourceStatusText').textContent = '';
+    document.getElementById('sourceProgressFill').style.width = '0%';
+  }
+
+  function renderSourcePluginWarning() {
+    const warning = document.getElementById('sourcePluginWarning');
+    const plugin = getInstalledPlugin('hako');
+    if (plugin) {
+      warning.style.display = 'none';
+      warning.textContent = '';
+      return true;
+    }
+    warning.style.display = 'block';
+    warning.textContent = 'Hako plugin is not installed yet. Import the cpplugin from Settings before using this flow.';
+    return false;
+  }
+
+  async function fetchJsonOrThrow(url, options) {
+    const response = await fetch(url, options);
+    if (!response.ok) {
+      throw new Error(await response.text() || ('Request failed: ' + response.status));
+    }
+    return await response.json();
+  }
+
+  async function loadInstalledPlugins() {
+    const data = await fetchJsonOrThrow('/api/plugins');
+    installedPlugins = Array.isArray(data.plugins) ? data.plugins : [];
+  }
+
+  async function loadTrackedSeries() {
+    const data = await fetchJsonOrThrow('/api/plugins/tracked');
+    trackedSeries = Array.isArray(data.items) ? data.items : [];
+  }
+
+  function openSourceModal() {
+    document.getElementById('sourcePathDisplay').textContent = currentPath === '/' ? '/' : currentPath;
+    document.getElementById('sourceModal').classList.add('open');
+    switchSourceTab('discover');
+    refreshSourceModal().catch(error => {
+      console.error(error);
+      showNotification('Failed to load source data: ' + error.message, 'error');
+    });
+  }
+
+  function closeSourceModal() {
+    if (sourceModalBusy) {
+      return;
+    }
+    document.getElementById('sourceModal').classList.remove('open');
+    clearSourceStatus();
+  }
+
+  function switchSourceTab(tab) {
+    document.getElementById('sourceTabDiscover').classList.toggle('active', tab === 'discover');
+    document.getElementById('sourceTabTracked').classList.toggle('active', tab === 'tracked');
+    document.getElementById('sourceDiscoverTab').style.display = tab === 'discover' ? '' : 'none';
+    document.getElementById('sourceTrackedTab').style.display = tab === 'tracked' ? '' : 'none';
+  }
+
+  async function refreshSourceModal() {
+    await Promise.all([loadInstalledPlugins(), loadTrackedSeries()]);
+    renderSourcePluginWarning();
+    renderTrackedSeries();
+  }
+
+  function renderHakoSearchResults(results) {
+    const container = document.getElementById('sourceSearchResults');
+    if (!results || results.length === 0) {
+      container.innerHTML = '<div class="source-empty">No results found.</div>';
+      return;
+    }
+    container.innerHTML = results.map((item, index) =>
+      `<div class="source-item">
+        <h5>${escapeHtml(item.title || 'Untitled')}</h5>
+        <p class="source-meta">${escapeHtml(item.description || item.url || '')}</p>
+        <div class="source-actions">
+          <button class="source-btn" onclick="selectHakoBook(${index})">Load Detail</button>
+        </div>
+      </div>`
+    ).join('');
+  }
+
+  async function searchHakoBooks() {
+    if (!renderSourcePluginWarning()) return;
+    const query = document.getElementById('sourceSearchInput').value.trim();
+    if (!query) {
+      showNotification('Enter a search keyword first.', 'warning');
+      return;
+    }
+    updateSourceStatus('Searching Hako...', 5);
+    try {
+      const data = await fetchJsonOrThrow('/api/plugins/hako/search?query=' + encodeURIComponent(query) + '&page=1');
+      window.hakoSearchResults = Array.isArray(data.results) ? data.results : [];
+      renderHakoSearchResults(window.hakoSearchResults);
+      clearSourceStatus();
+    } catch (error) {
+      updateSourceStatus('Search failed: ' + error.message, null, true);
+    }
+  }
+
+  function renderSelectedHakoBook() {
+    const container = document.getElementById('sourceBookDetail');
+    if (!selectedHakoDetail || selectedHakoToc.length === 0) {
+      container.innerHTML = '<div class="source-empty">Select a title from the search results.</div>';
+      return;
+    }
+
+    const detail = selectedHakoDetail;
+    const chapterCount = selectedHakoToc.length;
+    const lastChapter = selectedHakoToc[chapterCount - 1];
+    const genres = Array.isArray(detail.genres) ? detail.genres : [];
+
+    container.innerHTML = `
+      <div class="source-item">
+        <h5>${escapeHtml(detail.title || 'Untitled')}</h5>
+        <p class="source-meta">${escapeHtml(detail.author || 'Unknown author')} | ${detail.ongoing ? 'Ongoing' : 'Completed'} | ${chapterCount} chapters</p>
+        <div>${genres.map(tag => `<span class="source-pill">${escapeHtml(tag)}</span>`).join('')}</div>
+        <div class="source-description">${detail.descriptionHtml || '<p>No description.</p>'}</div>
+        <p class="source-meta" style="margin-top:10px;">Latest: ${escapeHtml(lastChapter ? lastChapter.title : '')}</p>
+        <div class="source-actions">
+          <button class="source-btn" onclick="downloadSelectedHakoBook(true)">Download & Track EPUB</button>
+          <button class="source-btn secondary" onclick="downloadSelectedHakoBook(false)">Download Only</button>
+        </div>
+      </div>
+    `;
+  }
+
+  async function selectHakoBook(index) {
+    if (!Array.isArray(window.hakoSearchResults) || !window.hakoSearchResults[index]) return;
+    const item = window.hakoSearchResults[index];
+    updateSourceStatus('Loading book detail...', 10);
+    try {
+      const [detail, toc] = await Promise.all([
+        fetchJsonOrThrow('/api/plugins/hako/detail?url=' + encodeURIComponent(item.url)),
+        fetchJsonOrThrow('/api/plugins/hako/toc?url=' + encodeURIComponent(item.url))
+      ]);
+      selectedHakoDetail = detail;
+      selectedHakoToc = Array.isArray(toc.chapters) ? toc.chapters : [];
+      selectedHakoUrl = item.url;
+      renderSelectedHakoBook();
+      clearSourceStatus();
+    } catch (error) {
+      updateSourceStatus('Failed to load detail: ' + error.message, null, true);
+    }
+  }
+
+  function renderTrackedSeries() {
+    const container = document.getElementById('trackedSeriesList');
+    if (!trackedSeries.length) {
+      container.innerHTML = '<div class="source-empty">No tracked series yet.</div>';
+      return;
+    }
+
+    container.innerHTML = trackedSeries.map(item => {
+      const updates = trackedSeriesUpdateCache[item.id];
+      const updateText = updates
+        ? (updates.lastKnownFound === false
+            ? 'Last known chapter not found on remote source'
+            : (updates.newChapters && updates.newChapters.length > 0
+                ? `${updates.newChapters.length} new chapter(s) available`
+                : 'Up to date'))
+        : 'Update status not checked yet';
+
+      return `<div class="source-item">
+        <h5>${escapeHtml(item.title || item.seriesUrl)}</h5>
+        <p class="source-meta">${escapeHtml(item.author || 'Unknown author')}</p>
+        <p class="source-meta">EPUB: ${escapeHtml(item.epubPath || '')}</p>
+        <p class="source-meta">Last chapter: ${escapeHtml(item.lastChapterTitle || item.lastChapterUrl || 'Unknown')}</p>
+        <p class="source-meta">${escapeHtml(updateText)}</p>
+        <div class="source-actions">
+          <button class="source-btn warn" onclick="checkTrackedSeries('${item.id}')">Check Updates</button>
+          <button class="source-btn" onclick="updateTrackedSeries('${item.id}')">Update EPUB</button>
+          <button class="source-btn danger" onclick="removeTrackedSeries('${item.id}')">Remove</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  async function saveTrackedSeriesRecord(record) {
+    const response = await fetch('/api/plugins/tracked', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record)
+    });
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+  }
+
+  async function removeTrackedSeries(id) {
+    if (!confirm('Remove this tracked series?')) return;
+    try {
+      const response = await fetch('/api/plugins/tracked/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      trackedSeries = trackedSeries.filter(item => item.id !== id);
+      delete trackedSeriesUpdateCache[id];
+      renderTrackedSeries();
+      showNotification('Tracked series removed.', 'success');
+    } catch (error) {
+      showNotification('Failed to remove tracked series: ' + error.message, 'error');
+    }
+  }
+
+  async function checkTrackedSeries(id, silent = false) {
+    const item = trackedSeries.find(entry => entry.id === id);
+    if (!item) return null;
+    if (!silent) updateSourceStatus('Checking for updates...', 10);
+    try {
+      const data = await fetchJsonOrThrow(
+        '/api/plugins/hako/updates?url=' + encodeURIComponent(item.seriesUrl) +
+        '&lastChapterUrl=' + encodeURIComponent(item.lastChapterUrl || '')
+      );
+      trackedSeriesUpdateCache[id] = data;
+      renderTrackedSeries();
+      if (!silent) {
+        clearSourceStatus();
+        showNotification(
+          data.lastKnownFound === false
+            ? 'Remote source changed. A rebuild will be needed.'
+            : (data.newChapters && data.newChapters.length ? `${data.newChapters.length} new chapter(s) found.` : 'No new chapters.'),
+          data.newChapters && data.newChapters.length ? 'info' : 'success'
+        );
+      }
+      return data;
+    } catch (error) {
+      if (!silent) updateSourceStatus('Update check failed: ' + error.message, null, true);
+      throw error;
+    }
+  }
+
+  function sanitizeFilenameForEpub(name) {
+    return (name || 'book').replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ').replace(/\s+/g, ' ').trim() || 'book';
+  }
+
+  function buildFilePath(dir, fileName) {
+    const base = normalizePath(dir || '/');
+    return base === '/' ? '/' + fileName : base + '/' + fileName;
+  }
+
+  function makeChapterFileName(index) {
+    return `text/chapter-${String(index).padStart(4, '0')}.xhtml`;
+  }
+
+  function makeChapterItemId(index) {
+    return `chapter-${String(index).padStart(4, '0')}`;
+  }
+
+  function buildRelativePath(fromPath, toPath) {
+    const fromParts = fromPath.split('/').filter(Boolean);
+    const toParts = toPath.split('/').filter(Boolean);
+    fromParts.pop();
+    while (fromParts.length && toParts.length && fromParts[0] === toParts[0]) {
+      fromParts.shift();
+      toParts.shift();
+    }
+    return '../'.repeat(fromParts.length) + toParts.join('/');
+  }
+
+  function buildHakoChapterDocument(title, html) {
+    return `<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <title>${xmlEscape(title)}</title>
+  <link rel="stylesheet" type="text/css" href="../styles.css"/>
+</head>
+<body>
+  <section class="chapter">
+    <h1>${xmlEscape(title)}</h1>
+    <div class="chapter-body">${html}</div>
+  </section>
+</body>
+</html>`;
+  }
+
+  function buildHakoStyles() {
+    return `body{font-family:serif;line-height:1.6;margin:0;padding:1em;}h1{font-size:1.3em;margin:0 0 1em;}img{max-width:100%;height:auto;display:block;margin:1em auto;}p{margin:0 0 1em;}a{text-decoration:none;color:inherit;}`;
+  }
+
+  function buildHakoNav(detail, chapters) {
+    return `<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>${xmlEscape(detail.title)}</title></head>
+<body>
+  <nav epub:type="toc" id="toc">
+    <h1>${xmlEscape(detail.title)}</h1>
+    <ol>
+      ${chapters.map(chapter => `<li><a href="${xmlEscape(makeChapterFileName(chapter.index))}">${xmlEscape(chapter.title)}</a></li>`).join('')}
+    </ol>
+  </nav>
+</body>
+</html>`;
+  }
+
+  function buildHakoNcx(detail, chapters, identifier) {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="${xmlEscape(identifier)}"/></head>
+  <docTitle><text>${xmlEscape(detail.title)}</text></docTitle>
+  <navMap>
+    ${chapters.map((chapter, idx) => `<navPoint id="navPoint-${idx + 1}" playOrder="${idx + 1}"><navLabel><text>${xmlEscape(chapter.title)}</text></navLabel><content src="${xmlEscape(makeChapterFileName(chapter.index))}"/></navPoint>`).join('')}
+  </navMap>
+</ncx>`;
+  }
+
+  function buildHakoOpf(detail, chapters, identifier) {
+    return `<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="BookId">${xmlEscape(identifier)}</dc:identifier>
+    <dc:title>${xmlEscape(detail.title)}</dc:title>
+    <dc:creator>${xmlEscape(detail.author || 'Unknown')}</dc:creator>
+    <dc:language>vi</dc:language>
+    <meta property="dcterms:modified">2026-04-24T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="style" href="styles.css" media-type="text/css"/>
+    ${chapters.map(chapter => `<item id="${makeChapterItemId(chapter.index)}" href="${makeChapterFileName(chapter.index)}" media-type="application/xhtml+xml"/>`).join('')}
+  </manifest>
+  <spine toc="ncx">
+    ${chapters.map(chapter => `<itemref idref="${makeChapterItemId(chapter.index)}"/>`).join('')}
+  </spine>
+</package>`;
+  }
+
+  async function fetchHakoChapterContents(chapterRefs, label) {
+    const chapters = [];
+    for (let i = 0; i < chapterRefs.length; i++) {
+      const chapterRef = chapterRefs[i];
+      const progress = Math.round((i / Math.max(1, chapterRefs.length)) * 100);
+      updateSourceStatus(`${label} ${i + 1}/${chapterRefs.length}: ${chapterRef.title}`, progress);
+      const chapter = await fetchJsonOrThrow(
+        '/api/plugins/hako/chapter?url=' + encodeURIComponent(chapterRef.url) +
+        '&title=' + encodeURIComponent(chapterRef.title || '') +
+        '&index=' + encodeURIComponent(String(chapterRef.index || (i + 1)))
+      );
+      chapters.push(chapter);
+    }
+    return chapters;
+  }
+
+  async function buildHakoEpubBlob(detail, chapters) {
+    const zip = new JSZip();
+    const identifier = 'urn:crosspoint:hako:' + encodeURIComponent(detail.url || detail.title || 'book');
+    zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
+    zip.file('META-INF/container.xml', `<?xml version="1.0" encoding="UTF-8"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`);
+    zip.file('OEBPS/styles.css', buildHakoStyles());
+    zip.file('OEBPS/nav.xhtml', buildHakoNav(detail, chapters));
+    zip.file('OEBPS/toc.ncx', buildHakoNcx(detail, chapters, identifier));
+    zip.file('OEBPS/content.opf', buildHakoOpf(detail, chapters, identifier));
+    chapters.forEach(chapter => {
+      zip.file('OEBPS/' + makeChapterFileName(chapter.index), buildHakoChapterDocument(chapter.title, chapter.html));
+    });
+    return await zip.generateAsync({ type: 'blob', mimeType: 'application/epub+zip' });
+  }
+
+  async function appendHakoChaptersToExistingEpub(existingBlob, newChapters, existingChapterCount) {
+    const zip = await JSZip.loadAsync(existingBlob);
+    const opfPath = await findOPFPath(zip);
+    if (!opfPath || !zip.files[opfPath]) {
+      throw new Error('Existing EPUB is missing OPF metadata');
+    }
+
+    const opfText = await safeReadText(zip.files[opfPath]);
+    const opfDoc = new DOMParser().parseFromString(opfText, 'application/xml');
+    if (opfDoc.querySelector('parsererror')) {
+      throw new Error('Failed to parse existing OPF');
+    }
+
+    const manifest = opfDoc.getElementsByTagNameNS('*', 'manifest')[0];
+    const spine = opfDoc.getElementsByTagNameNS('*', 'spine')[0];
+    if (!manifest || !spine) {
+      throw new Error('Existing EPUB manifest/spine is incomplete');
+    }
+
+    const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/')) : '';
+    let navHref = '';
+    let ncxHref = '';
+    Array.from(manifest.children).forEach(item => {
+      const mediaType = item.getAttribute('media-type') || '';
+      const properties = item.getAttribute('properties') || '';
+      if (!navHref && properties.includes('nav')) navHref = item.getAttribute('href') || '';
+      if (!ncxHref && mediaType === 'application/x-dtbncx+xml') ncxHref = item.getAttribute('href') || '';
+    });
+
+    newChapters.forEach((chapter, offset) => {
+      const index = existingChapterCount + offset + 1;
+      const href = makeChapterFileName(index);
+      const fullPath = opfDir ? opfDir + '/' + href : href;
+      zip.file(fullPath, buildHakoChapterDocument(chapter.title, chapter.html));
+
+      const itemEl = opfDoc.createElement('item');
+      itemEl.setAttribute('id', makeChapterItemId(index));
+      itemEl.setAttribute('href', href);
+      itemEl.setAttribute('media-type', 'application/xhtml+xml');
+      manifest.appendChild(itemEl);
+
+      const itemRef = opfDoc.createElement('itemref');
+      itemRef.setAttribute('idref', makeChapterItemId(index));
+      spine.appendChild(itemRef);
+    });
+
+    zip.file(opfPath, safeSerialize(opfDoc, opfText));
+
+    if (navHref) {
+      const navPath = opfDir ? opfDir + '/' + navHref : navHref;
+      const navText = await safeReadText(zip.files[navPath]);
+      const navDoc = new DOMParser().parseFromString(navText, 'application/xhtml+xml');
+      const ol = navDoc.querySelector('nav ol') || navDoc.querySelector('ol');
+      if (ol) {
+        newChapters.forEach((chapter, offset) => {
+          const index = existingChapterCount + offset + 1;
+          const li = navDoc.createElement('li');
+          const a = navDoc.createElement('a');
+          a.setAttribute('href', buildRelativePath(navHref, makeChapterFileName(index)));
+          a.textContent = chapter.title;
+          li.appendChild(a);
+          ol.appendChild(li);
+        });
+        zip.file(navPath, safeSerialize(navDoc, navText));
+      }
+    }
+
+    if (ncxHref) {
+      const ncxPath = opfDir ? opfDir + '/' + ncxHref : ncxHref;
+      const ncxText = await safeReadText(zip.files[ncxPath]);
+      const ncxDoc = new DOMParser().parseFromString(ncxText, 'application/xml');
+      const navMap = ncxDoc.getElementsByTagNameNS('*', 'navMap')[0];
+      if (navMap) {
+        let playOrder = ncxDoc.getElementsByTagNameNS('*', 'navPoint').length;
+        newChapters.forEach((chapter, offset) => {
+          const index = existingChapterCount + offset + 1;
+          playOrder += 1;
+          const navPoint = ncxDoc.createElement('navPoint');
+          navPoint.setAttribute('id', 'navPoint-' + playOrder);
+          navPoint.setAttribute('playOrder', String(playOrder));
+          const navLabel = ncxDoc.createElement('navLabel');
+          const text = ncxDoc.createElement('text');
+          text.textContent = chapter.title;
+          navLabel.appendChild(text);
+          const content = ncxDoc.createElement('content');
+          content.setAttribute('src', buildRelativePath(ncxHref, makeChapterFileName(index)));
+          navPoint.appendChild(navLabel);
+          navPoint.appendChild(content);
+          navMap.appendChild(navPoint);
+        });
+        zip.file(ncxPath, safeSerialize(ncxDoc, ncxText));
+      }
+    }
+
+    return await zip.generateAsync({ type: 'blob', mimeType: 'application/epub+zip' });
+  }
+
+  async function uploadPreparedFile(file, targetPath, label) {
+    let useWebSocket = true;
+    const onProgress = (loaded, total) => {
+      const percent = total > 0 ? Math.round((loaded / total) * 100) : 0;
+      updateSourceStatus(`${label} ${file.name}${useWebSocket ? ' [WS]' : ' [HTTP]'} - ${percent}%`, percent);
+    };
+
+    try {
+      if (useWebSocket) {
+        await uploadFileWebSocket(file, onProgress, null, null, targetPath);
+      } else {
+        await uploadFileHTTP(file, onProgress, null, null, targetPath);
+      }
+    } catch (error) {
+      if (useWebSocket && error.message === 'WebSocket connection failed') {
+        useWebSocket = false;
+        await uploadFileHTTP(file, onProgress, null, null, targetPath);
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  async function downloadSelectedHakoBook(trackAfterDownload) {
+    if (!selectedHakoDetail || !selectedHakoToc.length) {
+      showNotification('Select a title first.', 'warning');
+      return;
+    }
+
+    setSourceBusy(true);
+    try {
+      const chapters = await fetchHakoChapterContents(selectedHakoToc, 'Fetching chapters');
+      const epubBlob = await buildHakoEpubBlob(selectedHakoDetail, chapters);
+      const fileName = sanitizeFilenameForEpub(selectedHakoDetail.title) + '.epub';
+      await uploadPreparedFile(new File([epubBlob], fileName, { type: 'application/epub+zip' }), currentPath, 'Uploading EPUB');
+
+      if (trackAfterDownload) {
+        const lastChapter = selectedHakoToc[selectedHakoToc.length - 1];
+        await fetch('/api/plugins/tracked', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pluginId: 'hako',
+            title: selectedHakoDetail.title,
+            author: selectedHakoDetail.author,
+            seriesUrl: selectedHakoUrl || selectedHakoDetail.url,
+            coverUrl: selectedHakoDetail.coverUrl,
+            epubPath: buildFilePath(currentPath, fileName),
+            lastChapterUrl: lastChapter ? lastChapter.url : '',
+            lastChapterTitle: lastChapter ? lastChapter.title : '',
+            chapterCount: selectedHakoToc.length
+          })
+        }).then(async response => {
+          if (!response.ok) throw new Error(await response.text());
+        });
+        await loadTrackedSeries();
+        renderTrackedSeries();
+      }
+
+      clearSourceStatus();
+      showNotification(trackAfterDownload ? 'Hako EPUB downloaded and tracked.' : 'Hako EPUB downloaded.', 'success');
+    } catch (error) {
+      console.error(error);
+      updateSourceStatus('Download failed: ' + error.message, null, true);
+    } finally {
+      setSourceBusy(false);
+    }
+  }
+
+  async function updateTrackedSeries(id) {
+    const item = trackedSeries.find(entry => entry.id === id);
+    if (!item) return;
+
+    setSourceBusy(true);
+    try {
+      const updates = await checkTrackedSeries(id, true);
+      if (!updates) {
+        throw new Error('No update metadata returned');
+      }
+
+      let finalBlob;
+      if (updates.lastKnownFound === false) {
+        const tocData = await fetchJsonOrThrow('/api/plugins/hako/toc?url=' + encodeURIComponent(item.seriesUrl));
+        const allChapters = await fetchHakoChapterContents(tocData.chapters || [], 'Rebuilding EPUB');
+        finalBlob = await buildHakoEpubBlob({
+          title: updates.title || item.title,
+          author: updates.author || item.author,
+          url: item.seriesUrl
+        }, allChapters);
+      } else if (!updates.newChapters || updates.newChapters.length === 0) {
+        clearSourceStatus();
+        showNotification('Tracked EPUB is already up to date.', 'success');
+        setSourceBusy(false);
+        return;
+      } else {
+        updateSourceStatus('Downloading current EPUB...', 5);
+        const response = await fetch('/download?path=' + encodeURIComponent(item.epubPath));
+        if (!response.ok) throw new Error('Failed to download existing EPUB');
+        const existingBlob = await response.blob();
+        const newChapterContents = await fetchHakoChapterContents(updates.newChapters, 'Fetching new chapters');
+        finalBlob = await appendHakoChaptersToExistingEpub(existingBlob, newChapterContents, item.chapterCount || 0);
+      }
+
+      const fileName = item.epubPath.split('/').pop();
+      await uploadPreparedFile(
+        new File([finalBlob], fileName, { type: 'application/epub+zip' }),
+        getParentPath(item.epubPath),
+        'Uploading updated EPUB'
+      );
+
+      const latestChapterUrl = updates.latestChapterUrl || item.lastChapterUrl;
+      const latestChapterTitle = updates.latestChapterTitle || item.lastChapterTitle;
+      await fetch('/api/plugins/tracked', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...item,
+          title: updates.title || item.title,
+          author: updates.author || item.author,
+          coverUrl: updates.coverUrl || item.coverUrl,
+          lastChapterUrl: latestChapterUrl,
+          lastChapterTitle: latestChapterTitle,
+          chapterCount: updates.chapterCount || item.chapterCount
+        })
+      }).then(async response => {
+        if (!response.ok) throw new Error(await response.text());
+      });
+
+      await loadTrackedSeries();
+      trackedSeriesUpdateCache[id] = { ...updates, newChapters: [] };
+      renderTrackedSeries();
+      clearSourceStatus();
+      showNotification('Tracked EPUB updated successfully.', 'success');
+    } catch (error) {
+      console.error(error);
+      updateSourceStatus('Update failed: ' + error.message, null, true);
+    } finally {
+      setSourceBusy(false);
+    }
   }
   hydrate();
 </script>

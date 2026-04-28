@@ -33,6 +33,7 @@ class KeyboardEntryActivity : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  bool handleAutomationTextInput(const std::string& text) override;
 
  private:
   std::string title;
@@ -70,6 +71,7 @@ class KeyboardEntryActivity : public Activity {
   int delPressCount = 0;
   bool hintVisible = false;
   unsigned long hintShowTime = 0;
+  bool automationSubmitPending = false;
 
   void onComplete(std::string text);
   void onCancel();

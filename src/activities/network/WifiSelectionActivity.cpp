@@ -5,6 +5,7 @@
 #include <Logging.h>
 #include <WiFi.h>
 
+#include <algorithm>
 #include <map>
 
 #include "MappedInputManager.h"
