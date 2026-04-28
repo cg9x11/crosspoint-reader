@@ -27,6 +27,7 @@
 #include "components/icons/transfer.h"
 #include "components/icons/wifi.h"
 #include "fontIds.h"
+#include "util/ScreenDebugState.h"
 
 // Internal constants
 namespace {
@@ -139,6 +140,7 @@ void LyraTheme::drawBatteryRight(const GfxRenderer& renderer, Rect rect, const b
 }
 
 void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle) const {
+  SCREEN_DEBUG.setHeader(title, subtitle);
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
 
   const bool showBatteryPercentage =
@@ -189,6 +191,7 @@ void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
 }
 
 void LyraTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label, const char* rightLabel) const {
+  SCREEN_DEBUG.setSubHeader(label, rightLabel);
   int currentX = rect.x + LyraMetrics::values.contentSidePadding;
   int rightSpace = LyraMetrics::values.contentSidePadding;
   if (rightLabel) {
@@ -284,6 +287,8 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
   // Draw all items
   const auto pageStartIndex = selectedIndex / pageItems * pageItems;
   int iconY = (rowSubtitle != nullptr) ? 16 : 10;
+  std::vector<ScreenDebugListItem> debugItems;
+  debugItems.reserve(pageItems > 0 ? pageItems : 0);
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
     const int itemY = rect.y + (i % pageItems) * rowHeight;
     int rowTextWidth = textWidth;
@@ -329,11 +334,33 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       renderer.drawText(UI_10_FONT_ID, rect.x + contentWidth - LyraMetrics::values.contentSidePadding - valueWidth,
                         itemY + 6, valueText.c_str(), !(i == selectedIndex && highlightValue));
     }
+
+    ScreenDebugListItem debugItem;
+    debugItem.title = rowTitle(i);
+    debugItem.subtitle = rowSubtitle != nullptr ? rowSubtitle(i) : std::string{};
+    debugItem.value = rowValue != nullptr ? rowValue(i) : std::string{};
+    debugItems.push_back(std::move(debugItem));
   }
+  const int selectedVisibleIndex =
+      (selectedIndex >= pageStartIndex && selectedIndex < pageStartIndex + static_cast<int>(debugItems.size()))
+          ? (selectedIndex - pageStartIndex)
+          : -1;
+  const char* selectedTitle = nullptr;
+  const char* selectedSubtitle = nullptr;
+  const char* selectedValue = nullptr;
+  if (selectedVisibleIndex >= 0 && selectedVisibleIndex < static_cast<int>(debugItems.size())) {
+    const auto& selectedItem = debugItems[selectedVisibleIndex];
+    selectedTitle = selectedItem.title.c_str();
+    selectedSubtitle = selectedItem.subtitle.c_str();
+    selectedValue = selectedItem.value.c_str();
+  }
+  SCREEN_DEBUG.setList(itemCount, selectedIndex, selectedVisibleIndex, selectedTitle, selectedSubtitle, selectedValue,
+                       debugItems);
 }
 
 void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                 const char* btn4) const {
+  SCREEN_DEBUG.setButtonHints(btn1, btn2, btn3, btn4);
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
@@ -527,6 +554,8 @@ void LyraTheme::drawEmptyRecents(const GfxRenderer& renderer, const Rect rect) c
 void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
+  std::vector<std::string> debugLabels;
+  debugLabels.reserve(buttonCount);
   for (int i = 0; i < buttonCount; ++i) {
     int tileWidth = rect.width - LyraMetrics::values.contentSidePadding * 2;
     Rect tileRect = Rect{rect.x + LyraMetrics::values.contentSidePadding,
@@ -540,6 +569,7 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
     }
 
     std::string labelStr = buttonLabel(i);
+    debugLabels.push_back(labelStr);
     const char* label = labelStr.c_str();
     int textX = tileRect.x + 16;
     const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
@@ -556,9 +586,14 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
 
     renderer.drawText(UI_12_FONT_ID, textX, textY, label, true);
   }
+  const char* selectedLabel =
+      (selectedIndex >= 0 && selectedIndex < static_cast<int>(debugLabels.size())) ? debugLabels[selectedIndex].c_str()
+                                                                                    : nullptr;
+  SCREEN_DEBUG.setButtonMenu(selectedIndex, selectedLabel, debugLabels);
 }
 
 Rect LyraTheme::drawPopup(const GfxRenderer& renderer, const char* message) const {
+  SCREEN_DEBUG.setPopup(message);
   // Scale y position proportionally to screen height (16.5% from top)
   const int y = static_cast<int>(renderer.getScreenHeight() * 0.165f);
   constexpr int outline = 2;

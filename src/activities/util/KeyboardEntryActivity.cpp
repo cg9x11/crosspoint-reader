@@ -2,6 +2,7 @@
 
 #include <HalGPIO.h>
 #include <I18n.h>
+#include <Logging.h>
 
 #include <algorithm>
 
@@ -29,10 +30,25 @@ void KeyboardEntryActivity::onEnter() {
   rightLongHandled = false;
   savedCursorPos = 0;
   rightStartCursorPos = 0;
+  automationSubmitPending = false;
   requestUpdate();
 }
 
 void KeyboardEntryActivity::onExit() { Activity::onExit(); }
+
+bool KeyboardEntryActivity::handleAutomationTextInput(const std::string& value) {
+  text = value;
+  cursorPos = text.length();
+  symMode = false;
+  urlMode = false;
+  cursorMode = false;
+  togglePos = false;
+  hintVisible = false;
+  shiftState = 0;
+  automationSubmitPending = true;
+  requestUpdate();
+  return true;
+}
 
 int KeyboardEntryActivity::getContentRowCount() const {
   if (urlMode) return 3;
@@ -187,6 +203,13 @@ void KeyboardEntryActivity::mapColContentBottom(int& col, bool goingUp) const {
 }
 
 void KeyboardEntryActivity::loop() {
+  if (automationSubmitPending) {
+    automationSubmitPending = false;
+    LOG_DBG("KBD", "Automation submit text='%s'", text.c_str());
+    onComplete(text);
+    return;
+  }
+
   const int totalRows = getTotalRowCount();
 
   if (!cursorMode && mappedInput.wasPressed(MappedInputManager::Button::Up)) {
@@ -350,6 +373,7 @@ void KeyboardEntryActivity::loop() {
   }
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    LOG_DBG("KBD", "Back pressed -> cancel");
     onCancel();
   }
 
@@ -741,11 +765,13 @@ void KeyboardEntryActivity::render(RenderLock&&) {
 }
 
 void KeyboardEntryActivity::onComplete(std::string text) {
+  LOG_DBG("KBD", "Complete text='%s'", text.c_str());
   setResult(KeyboardResult{std::move(text)});
   finish();
 }
 
 void KeyboardEntryActivity::onCancel() {
+  LOG_DBG("KBD", "Cancel");
   ActivityResult result;
   result.isCancelled = true;
   setResult(std::move(result));

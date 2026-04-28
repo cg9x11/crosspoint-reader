@@ -14,6 +14,7 @@
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
+#include "util/ScreenDebugState.h"
 #include "util/FullScreenMessageActivity.h"
 
 void ActivityManager::begin() {
@@ -39,6 +40,7 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+      SCREEN_DEBUG.beginFrame(currentActivity->getName());
       currentActivity->render(std::move(lock));
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
@@ -233,6 +235,40 @@ bool ActivityManager::preventAutoSleep() const { return currentActivity && curre
 bool ActivityManager::isReaderActivity() const { return currentActivity && currentActivity->isReaderActivity(); }
 
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
+
+std::string ActivityManager::getCurrentActivityName() const {
+  return currentActivity ? currentActivity->getName() : std::string{};
+}
+
+std::vector<std::string> ActivityManager::getStackActivityNames() const {
+  std::vector<std::string> names;
+  names.reserve(stackActivities.size());
+  for (const auto& activity : stackActivities) {
+    names.push_back(activity ? activity->getName() : std::string{});
+  }
+  return names;
+}
+
+std::string ActivityManager::getPendingActivityName() const {
+  return pendingActivity ? pendingActivity->getName() : std::string{};
+}
+
+const char* ActivityManager::getPendingActionName() const {
+  switch (pendingAction) {
+    case PendingAction::None: return "none";
+    case PendingAction::Push: return "push";
+    case PendingAction::Pop: return "pop";
+    case PendingAction::Replace: return "replace";
+  }
+  return "unknown";
+}
+
+bool ActivityManager::injectAutomationText(const std::string& text) {
+  if (!currentActivity) {
+    return false;
+  }
+  return currentActivity->handleAutomationTextInput(text);
+}
 
 void ActivityManager::requestUpdate(bool immediate) {
   if (immediate) {

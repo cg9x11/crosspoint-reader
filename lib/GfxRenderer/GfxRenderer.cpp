@@ -1,9 +1,12 @@
 #include "GfxRenderer.h"
 
+#include <cassert>
+
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
 #include <Logging.h>
 #include <Utf8.h>
+#include "../../src/util/ScreenDebugState.h"
 
 #include "FontCacheManager.h"
 
@@ -508,20 +511,20 @@ void GfxRenderer::maskRoundedRectOutsideCorners(const int x, const int y, const 
       if (tx * tx + ty * ty > rr2) {
         if (color == Color::White || color == Color::Black) {
           bool state = color == Color::Black;
-          drawPixel(x + dx, y + dy, state);                           // top-left
-          drawPixel(x + width - 1 - dx, y + dy, state);               // top-right
-          drawPixel(x + dx, y + height - 1 - dy, state);              // bottom-left
-          drawPixel(x + width - 1 - dx, y + height - 1 - dy, state);  // bottom-right
+          drawPixel(x + dx, y + dy, state);
+          drawPixel(x + width - 1 - dx, y + dy, state);
+          drawPixel(x + dx, y + height - 1 - dy, state);
+          drawPixel(x + width - 1 - dx, y + height - 1 - dy, state);
         } else if (color == Color::LightGray) {
-          drawPixelDither<Color::LightGray>(x + dx, y + dy);                           // top-left
-          drawPixelDither<Color::LightGray>(x + width - 1 - dx, y + dy);               // top-right
-          drawPixelDither<Color::LightGray>(x + dx, y + height - 1 - dy);              // bottom-left
-          drawPixelDither<Color::LightGray>(x + width - 1 - dx, y + height - 1 - dy);  // bottom-right
+          drawPixelDither<Color::LightGray>(x + dx, y + dy);
+          drawPixelDither<Color::LightGray>(x + width - 1 - dx, y + dy);
+          drawPixelDither<Color::LightGray>(x + dx, y + height - 1 - dy);
+          drawPixelDither<Color::LightGray>(x + width - 1 - dx, y + height - 1 - dy);
         } else if (color == Color::DarkGray) {
-          drawPixelDither<Color::DarkGray>(x + dx, y + dy);                           // top-left
-          drawPixelDither<Color::DarkGray>(x + width - 1 - dx, y + dy);               // top-right
-          drawPixelDither<Color::DarkGray>(x + dx, y + height - 1 - dy);              // bottom-left
-          drawPixelDither<Color::DarkGray>(x + width - 1 - dx, y + height - 1 - dy);  // bottom-right
+          drawPixelDither<Color::DarkGray>(x + dx, y + dy);
+          drawPixelDither<Color::DarkGray>(x + width - 1 - dx, y + dy);
+          drawPixelDither<Color::DarkGray>(x + dx, y + height - 1 - dy);
+          drawPixelDither<Color::DarkGray>(x + width - 1 - dx, y + height - 1 - dy);
         }
       }
     }
@@ -929,6 +932,7 @@ void GfxRenderer::invertScreen() const {
 void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const {
   auto elapsed = millis() - start_ms;
   LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
+  SCREEN_DEBUG.presentFrame();
   display.displayBuffer(refreshMode, fadingFix);
 }
 

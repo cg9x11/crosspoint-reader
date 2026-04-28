@@ -541,7 +541,7 @@ bool Epub::generateCoverBmp(bool cropped) const {
     return false;
   }
 
-  if (FsHelpers::hasJpgExtension(coverImageHref)) {
+  if (FsHelpers::hasJpgExtension(std::string_view(coverImageHref))) {
     LOG_DBG("EBP", "Generating BMP from JPG cover image (%s mode)", cropped ? "cropped" : "fit");
     const auto coverJpgTempPath = getCachePath() + "/.cover.jpg";
 
@@ -575,7 +575,7 @@ bool Epub::generateCoverBmp(bool cropped) const {
     return success;
   }
 
-  if (FsHelpers::hasPngExtension(coverImageHref)) {
+  if (FsHelpers::hasPngExtension(std::string_view(coverImageHref))) {
     LOG_DBG("EBP", "Generating BMP from PNG cover image (%s mode)", cropped ? "cropped" : "fit");
     const auto coverPngTempPath = getCachePath() + "/.cover.png";
 
@@ -630,7 +630,7 @@ bool Epub::generateThumbBmp(int height) const {
   const auto coverImageHref = bookMetadataCache->coreMetadata.coverItemHref;
   if (coverImageHref.empty()) {
     LOG_DBG("EBP", "No known cover image for thumbnail");
-  } else if (FsHelpers::hasJpgExtension(coverImageHref)) {
+  } else if (FsHelpers::hasJpgExtension(std::string_view(coverImageHref))) {
     LOG_DBG("EBP", "Generating thumb BMP from JPG cover image");
     const auto coverJpgTempPath = getCachePath() + "/.cover.jpg";
 
@@ -667,7 +667,7 @@ bool Epub::generateThumbBmp(int height) const {
     }
     LOG_DBG("EBP", "Generated thumb BMP from JPG cover image, success: %s", success ? "yes" : "no");
     return success;
-  } else if (FsHelpers::hasPngExtension(coverImageHref)) {
+  } else if (FsHelpers::hasPngExtension(std::string_view(coverImageHref))) {
     LOG_DBG("EBP", "Generating thumb BMP from PNG cover image");
     const auto coverPngTempPath = getCachePath() + "/.cover.png";
 

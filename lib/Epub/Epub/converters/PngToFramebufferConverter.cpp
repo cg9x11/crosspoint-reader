@@ -398,5 +398,5 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
 }
 
 bool PngToFramebufferConverter::supportsFormat(const std::string& extension) {
-  return FsHelpers::hasPngExtension(extension);
+  return FsHelpers::hasPngExtension(std::string_view(extension));
 }

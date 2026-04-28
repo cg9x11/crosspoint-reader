@@ -99,6 +99,11 @@ class ActivityManager {
   bool preventAutoSleep() const;
   bool isReaderActivity() const;
   bool skipLoopDelay() const;
+  std::string getCurrentActivityName() const;
+  std::vector<std::string> getStackActivityNames() const;
+  std::string getPendingActivityName() const;
+  const char* getPendingActionName() const;
+  bool injectAutomationText(const std::string& text);
 
   // If immediate is true, the update will be triggered immediately.
   // Otherwise, it will be deferred until the end of the current loop iteration.

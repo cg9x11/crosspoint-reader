@@ -95,17 +95,31 @@ typedef struct {
 
 /// Maps a codepoint to a kerning class ID, sorted by codepoint for binary search.
 /// Class IDs are 1-based; codepoints not in the table have implicit class 0 (no kerning).
+#if defined(_MSC_VER)
+#pragma pack(push, 1)
+#endif
 typedef struct {
   uint16_t codepoint;  ///< Unicode codepoint
   uint8_t classId;     ///< 1-based kerning class ID
-} __attribute__((packed)) EpdKernClassEntry;
+}
+#if !defined(_MSC_VER)
+    __attribute__((packed))
+#endif
+EpdKernClassEntry;
 
 /// Ligature substitution for a specific glyph pair, sorted by `pair` for binary search.
 /// `pair` encodes (leftCodepoint << 16 | rightCodepoint) for single-key lookup.
 typedef struct {
   uint32_t pair;        ///< Packed codepoint pair (left << 16 | right)
   uint32_t ligatureCp;  ///< Codepoint of the replacement ligature glyph
-} __attribute__((packed)) EpdLigaturePair;
+}
+#if !defined(_MSC_VER)
+    __attribute__((packed))
+#endif
+EpdLigaturePair;
+#if defined(_MSC_VER)
+#pragma pack(pop)
+#endif
 
 /// Data stored for FONT AS A WHOLE
 typedef struct {

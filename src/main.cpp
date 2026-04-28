@@ -17,10 +17,13 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "BackgroundDownloadManager.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
+#include "PluginStore.h"
 #include "RecentBooksStore.h"
+#include "TrackedSeriesStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "components/UITheme.h"
@@ -257,8 +260,11 @@ void setup() {
 
   SETTINGS.loadFromFile();
   I18N.loadSettings();
+  TRACKED_SERIES_STORE.loadFromDisk();
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
+  PLUGIN_STORE.loadFromDisk();
+  BACKGROUND_DOWNLOAD_MANAGER.begin();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
 
@@ -346,9 +352,14 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || activityManager.preventAutoSleep()) {
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || activityManager.preventAutoSleep() ||
+      BACKGROUND_DOWNLOAD_MANAGER.hasActiveWork()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
+  }
+
+  if (BACKGROUND_DOWNLOAD_MANAGER.consumeUiRefreshRequested()) {
+    activityManager.requestUpdate();
   }
 
   static bool screenshotButtonsReleased = true;

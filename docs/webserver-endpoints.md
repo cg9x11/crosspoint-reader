@@ -12,6 +12,17 @@ This document describes all HTTP and WebSocket endpoints available on the CrossP
     - [POST `/upload` - Upload File](#post-upload---upload-file)
     - [POST `/mkdir` - Create Folder](#post-mkdir---create-folder)
     - [POST `/delete` - Delete File or Folder](#post-delete---delete-file-or-folder)
+    - [GET `/api/plugins` - List Installed Plugins](#get-apiplugins---list-installed-plugins)
+    - [POST `/api/plugins/import` - Import cpplugin](#post-apipluginsimport---import-cpplugin)
+    - [POST `/api/plugins/delete` - Delete cpplugin](#post-apipluginsdelete---delete-cpplugin)
+    - [GET `/api/plugins/tracked` - List Tracked Series](#get-apipluginstracked---list-tracked-series)
+    - [POST `/api/plugins/tracked` - Upsert Tracked Series](#post-apipluginstracked---upsert-tracked-series)
+    - [POST `/api/plugins/tracked/delete` - Delete Tracked Series](#post-apipluginstrackeddelete---delete-tracked-series)
+    - [GET `/api/plugins/hako/search` - Search Hako Titles](#get-apipluginshakosearch---search-hako-titles)
+    - [GET `/api/plugins/hako/detail` - Fetch Hako Title Metadata](#get-apipluginshakodetail---fetch-hako-title-metadata)
+    - [GET `/api/plugins/hako/toc` - Fetch Hako Table Of Contents](#get-apipluginshakotoc---fetch-hako-table-of-contents)
+    - [GET `/api/plugins/hako/chapter` - Fetch Hako Chapter Content](#get-apipluginshakochapter---fetch-hako-chapter-content)
+    - [GET `/api/plugins/hako/updates` - Check Hako Updates](#get-apipluginshakoupdates---check-hako-updates)
   - [WebSocket Endpoint](#websocket-endpoint)
     - [Port 81 - Fast Binary Upload](#port-81---fast-binary-upload)
   - [Network Modes](#network-modes)
@@ -243,6 +254,325 @@ Deleted successfully
 - Files/folders starting with `.`
 - `System Volume Information`
 - `XTCache`
+
+---
+
+### GET `/api/plugins` - List Installed Plugins
+
+Returns installed `cpplugin` metadata discovered under `/.crosspoint/plugins/`.
+
+**Request:**
+```bash
+curl http://crosspoint.local/api/plugins
+```
+
+**Response (200 OK):**
+```json
+{
+  "plugins": [
+    {
+      "id": "hako",
+      "name": "Hako",
+      "version": 1,
+      "runtimeMode": "adapter",
+      "runtimeProfile": "hako",
+      "runtimeOrigin": "vbook",
+      "baseUrl": "https://docln.sbs",
+      "locale": "vi-VN",
+      "contentType": "webnovel",
+      "supportsSearch": true,
+      "supportsTrackedUpdates": true,
+      "supportsX3": true,
+      "supportsX4": true,
+      "filePath": "/.crosspoint/plugins/hako.cpplugin.json"
+    }
+  ]
+}
+```
+
+---
+
+### POST `/api/plugins/import` - Import cpplugin
+
+Imports a raw `cpplugin` JSON document into `/.crosspoint/plugins/`.
+
+**Request:**
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  --data @hako.cpplugin.json \
+  http://crosspoint.local/api/plugins/import
+```
+
+**Response:** `OK`
+
+**Validation notes:**
+- requires `plugin`, `source`, and `runtime` sections
+- requires a safe plugin id
+- requires plugin version > 0
+- requires `source.baseUrl`
+- `runtime.mode = "adapter"` also requires `runtime.adapter.profile`
+- requires at least one supported device in `deviceSupport`
+
+**vBook conversion helper:**
+```bash
+python tools/convert_vbook_extension.py ../vbook-extensions/hako \
+  --output artifacts/hako.adapter.cpplugin.json
+```
+
+---
+
+### POST `/api/plugins/delete` - Delete cpplugin
+
+Deletes an installed plugin by id.
+
+**Request:**
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d "{\"id\":\"hako\"}" \
+  http://crosspoint.local/api/plugins/delete
+```
+
+**Response:** `OK`
+
+---
+
+### GET `/api/plugins/tracked` - List Tracked Series
+
+Returns tracked series metadata used by the Hako EPUB update flow.
+
+**Request:**
+```bash
+curl http://crosspoint.local/api/plugins/tracked
+```
+
+**Response (200 OK):**
+```json
+{
+  "items": [
+    {
+      "id": "hako-12345678",
+      "pluginId": "hako",
+      "runtimeProfile": "hako",
+      "title": "Example Title",
+      "author": "Author Name",
+      "seriesUrl": "https://docln.sbs/truyen/1234-example",
+      "coverUrl": "https://docln.sbs/img/example.jpg",
+      "epubPath": "/Books/Example Title.epub",
+      "lastChapterUrl": "https://docln.sbs/truyen/1234-example/chuong-99",
+      "lastChapterTitle": "Chapter 99",
+      "chapterCount": 99
+    }
+  ]
+}
+```
+
+---
+
+### POST `/api/plugins/tracked` - Upsert Tracked Series
+
+Creates or updates a tracked series record.
+
+**Request:**
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d "{\"pluginId\":\"hako\",\"title\":\"Example Title\",\"seriesUrl\":\"https://docln.sbs/truyen/1234-example\",\"epubPath\":\"/Books/Example Title.epub\",\"lastChapterUrl\":\"https://docln.sbs/truyen/1234-example/chuong-99\",\"lastChapterTitle\":\"Chapter 99\",\"chapterCount\":99}" \
+  http://crosspoint.local/api/plugins/tracked
+```
+
+**Notes:**
+- `id` is optional for create; when omitted the firmware store generates/preserves the identity
+- sending an existing `id` updates the record in place
+- `runtimeProfile` is optional but recommended for adapter-imported sources so queued jobs still resolve the correct runtime path
+
+**Response:** `OK`
+
+---
+
+### POST `/api/plugins/tracked/delete` - Delete Tracked Series
+
+Deletes one tracked series record by id.
+
+**Request:**
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d "{\"id\":\"hako-12345678\"}" \
+  http://crosspoint.local/api/plugins/tracked/delete
+```
+
+**Response:** `OK`
+
+---
+
+### GET `/api/plugins/hako/search` - Search Hako Titles
+
+Executes the built-in Hako firmware adapter against the remote source search page.
+
+**Request:**
+```bash
+curl "http://crosspoint.local/api/plugins/hako/search?query=overlord&page=1"
+```
+
+**Query Parameters:**
+
+| Parameter | Required | Default | Description           |
+| --------- | -------- | ------- | --------------------- |
+| `query`   | Yes      | -       | Search keyword string |
+| `page`    | No       | `1`     | Search result page    |
+
+**Response (200 OK):**
+```json
+{
+  "query": "overlord",
+  "page": 1,
+  "results": [
+    {
+      "title": "Overlord",
+      "url": "https://docln.sbs/truyen/...",
+      "description": "Latest chapter ...",
+      "coverUrl": "https://docln.sbs/img/..."
+    }
+  ]
+}
+```
+
+---
+
+### GET `/api/plugins/hako/detail` - Fetch Hako Title Metadata
+
+Fetches metadata for a Hako series detail page.
+
+**Request:**
+```bash
+curl "http://crosspoint.local/api/plugins/hako/detail?url=https://docln.sbs/truyen/1234-example"
+```
+
+**Query Parameters:**
+
+| Parameter | Required | Default | Description       |
+| --------- | -------- | ------- | ----------------- |
+| `url`     | Yes      | -       | Series detail URL |
+
+**Response (200 OK):**
+```json
+{
+  "title": "Example Title",
+  "url": "https://docln.sbs/truyen/1234-example",
+  "author": "Author Name",
+  "coverUrl": "https://docln.sbs/img/example.jpg",
+  "descriptionHtml": "<p>Series summary...</p>",
+  "genres": ["Action", "Fantasy"],
+  "ongoing": true
+}
+```
+
+---
+
+### GET `/api/plugins/hako/toc` - Fetch Hako Table Of Contents
+
+Fetches the chapter list for a Hako series.
+
+**Request:**
+```bash
+curl "http://crosspoint.local/api/plugins/hako/toc?url=https://docln.sbs/truyen/1234-example"
+```
+
+**Query Parameters:**
+
+| Parameter | Required | Default | Description       |
+| --------- | -------- | ------- | ----------------- |
+| `url`     | Yes      | -       | Series detail URL |
+
+**Response (200 OK):**
+```json
+{
+  "url": "https://docln.sbs/truyen/1234-example",
+  "chapters": [
+    {
+      "index": 1,
+      "title": "Volume 1 Chapter 1",
+      "url": "https://docln.sbs/truyen/1234-example/chuong-1"
+    }
+  ]
+}
+```
+
+---
+
+### GET `/api/plugins/hako/chapter` - Fetch Hako Chapter Content
+
+Fetches and decodes a Hako chapter body, including protected chapter content when possible.
+
+**Request:**
+```bash
+curl "http://crosspoint.local/api/plugins/hako/chapter?url=https://docln.sbs/truyen/1234-example/chuong-1&title=Chapter%201&index=1"
+```
+
+**Query Parameters:**
+
+| Parameter | Required | Default | Description               |
+| --------- | -------- | ------- | ------------------------- |
+| `url`     | Yes      | -       | Chapter URL               |
+| `title`   | No       | `""`    | Optional chapter title    |
+| `index`   | No       | `0`     | Optional chapter sequence |
+
+**Response (200 OK):**
+```json
+{
+  "title": "Chapter 1",
+  "url": "https://docln.sbs/truyen/1234-example/chuong-1",
+  "index": 1,
+  "html": "<div id=\"chapter-content\">...</div>",
+  "text": "Plain text chapter content..."
+}
+```
+
+---
+
+### GET `/api/plugins/hako/updates` - Check Hako Updates
+
+Compares the currently tracked chapter with the live Hako TOC and returns the delta needed to append or rebuild an EPUB.
+
+**Request:**
+```bash
+curl "http://crosspoint.local/api/plugins/hako/updates?url=https://docln.sbs/truyen/1234-example&lastChapterUrl=https://docln.sbs/truyen/1234-example/chuong-99"
+```
+
+**Query Parameters:**
+
+| Parameter        | Required | Default | Description |
+| ---------------- | -------- | ------- | ----------- |
+| `url`            | Yes      | -       | Series detail URL |
+| `lastChapterUrl` | No       | `""`    | Last chapter already included in the local EPUB |
+
+**Response (200 OK):**
+```json
+{
+  "url": "https://docln.sbs/truyen/1234-example",
+  "title": "Example Title",
+  "author": "Author Name",
+  "coverUrl": "https://docln.sbs/img/example.jpg",
+  "chapterCount": 103,
+  "lastKnownFound": true,
+  "hasUpdates": true,
+  "latestChapterUrl": "https://docln.sbs/truyen/1234-example/chuong-103",
+  "latestChapterTitle": "Chapter 103",
+  "newChapters": [
+    {
+      "index": 100,
+      "title": "Chapter 100",
+      "url": "https://docln.sbs/truyen/1234-example/chuong-100"
+    }
+  ]
+}
+```
+
+**Notes:**
+- `lastKnownFound=false` means the remote TOC changed and the client should rebuild the EPUB instead of appending
+- `newChapters` may contain the full TOC when no `lastChapterUrl` is provided
 
 ---
 

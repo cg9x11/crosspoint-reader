@@ -112,4 +112,17 @@ class CrossPointWebServer {
   void handleGetOpdsServers() const;
   void handlePostOpdsServer();
   void handleDeleteOpdsServer();
+
+  // Plugin handlers
+  void handleGetPlugins() const;
+  void handleImportPlugin();
+  void handleDeletePlugin();
+  void handleGetTrackedSeries() const;
+  void handlePostTrackedSeries();
+  void handleDeleteTrackedSeries();
+  void handleHakoPluginSearch() const;
+  void handleHakoPluginDetail() const;
+  void handleHakoPluginToc() const;
+  void handleHakoPluginChapter() const;
+  void handleHakoPluginUpdates() const;
 };
