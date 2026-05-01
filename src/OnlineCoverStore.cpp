@@ -333,6 +333,7 @@ bool OnlineCoverStore::getOrCreateThumb(const std::string& coverUrl, int targetH
   const std::string tempImagePath = basePath + ".img";
   const auto downloadResult = HttpDownloader::downloadToFile(coverUrl, tempImagePath);
   if (downloadResult != HttpDownloader::OK) {
+    LOG_ERR(MODULE, "Cover download failed: %s (%s)", coverUrl.c_str(), HttpDownloader::getLastError().c_str());
     if (Storage.exists(tempImagePath.c_str())) {
       Storage.remove(tempImagePath.c_str());
     }

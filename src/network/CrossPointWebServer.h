@@ -9,6 +9,9 @@
 #include <string>
 #include <vector>
 
+class GfxRenderer;
+class MappedInputManager;
+
 // Structure to hold file information
 struct FileInfo {
   String name;
@@ -45,10 +48,22 @@ class CrossPointWebServer {
     std::vector<uint8_t> buffer;
     size_t bufferPos = 0;
 
-    UploadState() { buffer.resize(UPLOAD_BUFFER_SIZE); }
+    bool ensureBuffer() {
+      if (!buffer.empty()) {
+        return true;
+      }
+      buffer.resize(UPLOAD_BUFFER_SIZE);
+      return !buffer.empty();
+    }
+
+    void releaseBuffer() {
+      buffer.clear();
+      buffer.shrink_to_fit();
+      bufferPos = 0;
+    }
   } upload;
 
-  CrossPointWebServer();
+  CrossPointWebServer(GfxRenderer& renderer, MappedInputManager& mappedInput);
   ~CrossPointWebServer();
 
   // Start the web server (call after WiFi is connected)
@@ -69,6 +84,8 @@ class CrossPointWebServer {
   uint16_t getPort() const { return port; }
 
  private:
+  GfxRenderer& renderer;
+  MappedInputManager& mappedInput;
   std::unique_ptr<WebServer> server = nullptr;
   std::unique_ptr<WebSocketsServer> wsServer = nullptr;
   bool running = false;
@@ -90,9 +107,14 @@ class CrossPointWebServer {
 
   // Request handlers
   void handleRoot() const;
+  void handleRemotePage() const;
   void handleJszip() const;
   void handleNotFound() const;
   void handleStatus() const;
+  void handleGetRemoteStatus() const;
+  void handlePostRemoteText();
+  void handlePostRemoteButton();
+  void handleRemoteScreenBmp() const;
   void handleFileList() const;
   void handleFileListData() const;
   void handleDownload() const;

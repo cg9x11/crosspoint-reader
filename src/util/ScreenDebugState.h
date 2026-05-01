@@ -43,6 +43,7 @@ struct ScreenDebugDiagnostics {
 };
 
 struct ScreenDebugSnapshot {
+  uint64_t frameId = 0;
   std::string activityName;
   std::string headerTitle;
   std::string headerSubtitle;
@@ -63,6 +64,7 @@ class ScreenDebugState {
   void beginFrame(const std::string& activityName);
   void presentFrame();
   void setHeader(const char* title, const char* subtitle);
+  void setDiagnostics(const ScreenDebugDiagnostics& diagnostics);
   void setSubHeader(const char* label, const char* rightLabel);
   void setBodyText(const char* primary, const char* secondary = nullptr, const char* tertiary = nullptr);
   void setList(int itemCount, int selectedIndex, int selectedVisibleIndex, const char* selectedTitle,
@@ -80,6 +82,7 @@ class ScreenDebugState {
   ScreenDebugSnapshot workingSnapshot_;
   ScreenDebugSnapshot presentedSnapshot_;
   bool hasPresentedSnapshot_ = false;
+  uint64_t nextFrameId_ = 1;
 };
 
 extern ScreenDebugState SCREEN_DEBUG;

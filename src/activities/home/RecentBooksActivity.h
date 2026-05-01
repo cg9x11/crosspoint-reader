@@ -20,6 +20,8 @@ class RecentBooksActivity final : public Activity {
 
   // Data loading
   void loadRecentBooks();
+  void onSelectBook(const RecentBook& book);
+  void openOnlineRecentBook(const RecentBook& book);
 
  public:
   explicit RecentBooksActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

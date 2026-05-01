@@ -38,6 +38,7 @@ struct HakoChapterContent {
   HakoChapterRef ref;
   std::string html;
   std::string text;
+  std::string textFilePath;
 };
 
 class HakoPluginExecutor {
@@ -48,5 +49,6 @@ class HakoPluginExecutor {
   static bool search(const std::string& query, int page, std::vector<HakoSearchResult>& outResults);
   static bool fetchDetail(const std::string& url, HakoBookDetail& outDetail);
   static bool fetchToc(const std::string& url, std::vector<HakoChapterRef>& outToc);
-  static bool fetchChapter(const HakoChapterRef& ref, HakoChapterContent& outContent);
+  static bool fetchChapter(const HakoChapterRef& ref, HakoChapterContent& outContent, bool includePlainText = true);
+  static void clearMemoryCaches();
 };

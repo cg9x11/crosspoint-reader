@@ -1,5 +1,7 @@
 #pragma once
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -40,6 +42,8 @@ class HakoSearchActivity final : public Activity {
   int previewSelectionIndex = -1;
   unsigned long previewSelectionChangedAtMs = 0;
   PendingLoadKind pendingLoadKind = PendingLoadKind::None;
+  uint32_t activeLoadToken = 0;
+  TaskHandle_t activeLoadTaskHandle = nullptr;
   int pendingSearchPage = 1;
   bool isLoading = false;
   bool hasRenderedOnce = false;
@@ -48,20 +52,22 @@ class HakoSearchActivity final : public Activity {
   unsigned long popupUntilMs = 0;
   unsigned long homeFeedLoadEarliestAtMs = 0;
 
-  static constexpr int SEARCH_PAGE_SIZE = 20;
+  static constexpr int SEARCH_PAGE_SIZE = 12;
   static constexpr int MIN_SEARCH_QUERY_LENGTH = 3;
-  static constexpr size_t MAX_PREVIEW_CACHE_ENTRIES = 6;
-  static constexpr size_t MAX_COVER_CACHE_ENTRIES = 6;
+  static constexpr size_t MAX_PREVIEW_CACHE_ENTRIES = 4;
+  static constexpr size_t MAX_COVER_CACHE_ENTRIES = 4;
   static constexpr unsigned long PREVIEW_FETCH_DELAY_MS = 900;
   static constexpr unsigned long COVER_FETCH_DELAY_MS = 1500;
-  static constexpr unsigned long HOME_FEED_INITIAL_DELAY_MS = 450;
-  static constexpr unsigned long HOME_FEED_SLOW_SOURCE_DELAY_MS = 2500;
+  static constexpr unsigned long HOME_FEED_INITIAL_DELAY_MS = 0;
+  static constexpr unsigned long HOME_FEED_SLOW_SOURCE_DELAY_MS = 250;
 
   void openSearchPrompt();
   void triggerHomeFeedAction();
   void queueHomeFeedLoad();
   void queueSearchLoad(int page = 1);
   void executePendingLoad();
+  void pollAsyncLoad();
+  void cancelActiveLoad();
   int getDisplayItemCount() const;
   bool hasPreviousPage() const;
   bool isPreviousPageItem(int index) const;
@@ -87,6 +93,7 @@ class HakoSearchActivity final : public Activity {
   int selectedPreviewVisibleLineCapacity() const;
   bool selectedPreviewOverflows() const;
   unsigned long initialHomeFeedDelayMs() const;
+  bool supportsHomeFeed() const;
   void showPopupMessage(const std::string& message, unsigned long durationMs = 1800);
 
  public:
@@ -94,6 +101,7 @@ class HakoSearchActivity final : public Activity {
       : Activity("HakoSearch", renderer, mappedInput), pluginInfo(std::move(pluginInfo)) {}
 
   void onEnter() override;
+  void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 };

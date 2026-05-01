@@ -50,6 +50,58 @@ bool KeyboardEntryActivity::handleAutomationTextInput(const std::string& value) 
   return true;
 }
 
+bool KeyboardEntryActivity::handleExternalKeyboardEvent(const ExternalKeyboardEvent& event) {
+  bool changed = false;
+
+  switch (event.key) {
+    case ExternalKeyboardKey::Character:
+      if (event.character != '\0') {
+        changed = insertChar(event.character);
+      }
+      break;
+    case ExternalKeyboardKey::Backspace:
+      if (cursorPos > 0 && !text.empty()) {
+        text.erase(cursorPos - 1, 1);
+        cursorPos--;
+        changed = true;
+      }
+      break;
+    case ExternalKeyboardKey::Submit:
+      onComplete(text);
+      return true;
+    case ExternalKeyboardKey::Left:
+      if (cursorPos > 0) {
+        cursorPos--;
+        changed = true;
+      }
+      break;
+    case ExternalKeyboardKey::Right:
+      if (cursorPos < text.length()) {
+        cursorPos++;
+        changed = true;
+      }
+      break;
+    case ExternalKeyboardKey::Escape:
+      onCancel();
+      return true;
+    case ExternalKeyboardKey::Tab:
+      changed = insertChar('\t');
+      break;
+    case ExternalKeyboardKey::Up:
+    case ExternalKeyboardKey::Down:
+      break;
+  }
+
+  if (!changed) {
+    return false;
+  }
+
+  hintVisible = false;
+  automationSubmitPending = false;
+  requestUpdate();
+  return true;
+}
+
 int KeyboardEntryActivity::getContentRowCount() const {
   if (urlMode) return 3;
   return ABC_ROWS;

@@ -14,6 +14,7 @@
 
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
+struct ExternalKeyboardEvent;
 
 /**
  * ActivityManager
@@ -42,7 +43,7 @@ class ActivityManager {
 
   // Pending activity to be launched on next loop iteration
   std::unique_ptr<Activity> pendingActivity;
-  enum class PendingAction { None, Push, Pop, Replace };
+  enum class PendingAction { None, Push, Pop, Replace, ReplacePreserveStack };
   PendingAction pendingAction = PendingAction::None;
 
   // Task to render and display the activity
@@ -75,6 +76,8 @@ class ActivityManager {
 
   // Will replace currentActivity and drop all activities on stack
   void replaceActivity(std::unique_ptr<Activity>&& newActivity);
+  // Will replace currentActivity but keep the existing parent activity stack intact
+  void replaceCurrentActivity(std::unique_ptr<Activity>&& newActivity);
 
   // goTo... functions are convenient wrapper for replaceActivity()
   void goToFileTransfer();
@@ -104,6 +107,8 @@ class ActivityManager {
   std::string getPendingActivityName() const;
   const char* getPendingActionName() const;
   bool injectAutomationText(const std::string& text);
+  bool currentActivitySupportsAutomationTextInput() const;
+  bool injectExternalKeyboardEvent(const ExternalKeyboardEvent& event);
 
   // If immediate is true, the update will be triggered immediately.
   // Otherwise, it will be deferred until the end of the current loop iteration.

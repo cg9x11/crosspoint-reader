@@ -3,16 +3,47 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <WiFi.h>
 
 #include <algorithm>
 
 #include "MappedInputManager.h"
+#include "PluginStore.h"
 #include "RecentBooksStore.h"
+#include "activities/network/WifiSelectionActivity.h"
+#include "activities/online/HakoBookDetailActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "plugins/OnlineSourceBridge.h"
 
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
+
+bool isWifiReadyForOnlineRecent() {
+  return WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
+}
+
+CpPluginInfo resolvePluginForRecentBook(const RecentBook& book) {
+  if (const auto* exact = PLUGIN_STORE.getPlugin(book.pluginId)) {
+    return *exact;
+  }
+
+  const std::string family = PluginStore::canonicalizeRuntimeProfile(book.pluginId, book.runtimeProfile);
+  const CpPluginInfo* best = nullptr;
+  for (const auto& plugin : PLUGIN_STORE.getPlugins()) {
+    if (PluginStore::canonicalizeRuntimeProfile(plugin.id, plugin.runtimeProfile) != family) {
+      continue;
+    }
+    if (!plugin.supportsSearch || !OnlineSourceBridge::supportsNativeUi(plugin)) {
+      continue;
+    }
+    if (!best || (best->runtimeOrigin != "server" && plugin.runtimeOrigin == "server")) {
+      best = &plugin;
+    }
+  }
+
+  return best ? *best : OnlineSourceBridge::makeFallbackPluginInfo(book.pluginId, book.runtimeProfile);
+}
 }  // namespace
 
 void RecentBooksActivity::loadRecentBooks() {
@@ -22,7 +53,7 @@ void RecentBooksActivity::loadRecentBooks() {
 
   for (const auto& book : books) {
     // Skip if file no longer exists
-    if (!Storage.exists(book.path.c_str())) {
+    if (book.isLocalFile() && !Storage.exists(book.path.c_str())) {
       continue;
     }
     recentBooks.push_back(book);
@@ -50,7 +81,7 @@ void RecentBooksActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (!recentBooks.empty() && selectorIndex < static_cast<int>(recentBooks.size())) {
       LOG_DBG("RBA", "Selected recent book: %s", recentBooks[selectorIndex].path.c_str());
-      onSelectBook(recentBooks[selectorIndex].path);
+      onSelectBook(recentBooks[selectorIndex]);
       return;
     }
   }
@@ -82,6 +113,66 @@ void RecentBooksActivity::loop() {
   });
 }
 
+void RecentBooksActivity::onSelectBook(const RecentBook& book) {
+  if (!book.isOnlineSource()) {
+    activityManager.goToReader(book.path);
+    return;
+  }
+
+  if (book.pluginId.empty() || book.seriesUrl.empty()) {
+    RenderLock lock(*this);
+    GUI.drawPopup(renderer, "Unsupported recent item");
+    requestUpdate();
+    return;
+  }
+
+  if (isWifiReadyForOnlineRecent()) {
+    openOnlineRecentBook(book);
+    return;
+  }
+
+  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+                         [this, book](const ActivityResult& result) {
+                           if (result.isCancelled) {
+                             requestUpdate();
+                             return;
+                           }
+                           openOnlineRecentBook(book);
+                         });
+}
+
+void RecentBooksActivity::openOnlineRecentBook(const RecentBook& book) {
+  const CpPluginInfo plugin = resolvePluginForRecentBook(book);
+  if (!OnlineSourceBridge::supportsNativeUi(plugin)) {
+    RenderLock lock(*this);
+    GUI.drawPopup(renderer, "Unsupported source");
+    requestUpdate();
+    return;
+  }
+
+  HakoBookDetail detail;
+  {
+    RenderLock lock(*this);
+    GUI.drawPopup(renderer, "Loading series...");
+    renderer.displayBuffer();
+  }
+  if (!OnlineSourceBridge::fetchDetail(plugin, book.seriesUrl, detail)) {
+    RenderLock lock(*this);
+    const std::string message =
+        OnlineSourceBridge::getLastError().empty() ? "Failed to load series" : OnlineSourceBridge::getLastError();
+    GUI.drawPopup(renderer, message.c_str());
+    requestUpdate();
+    return;
+  }
+
+  startActivityForResult(
+      std::make_unique<HakoBookDetailActivity>(renderer, mappedInput, plugin, std::move(detail), std::vector<HakoChapterRef>{}),
+      [this](const ActivityResult&) {
+        loadRecentBooks();
+        requestUpdate();
+      });
+}
+
 void RecentBooksActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
@@ -101,7 +192,9 @@ void RecentBooksActivity::render(RenderLock&&) {
     GUI.drawList(
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, recentBooks.size(), selectorIndex,
         [this](int index) { return recentBooks[index].title; }, [this](int index) { return recentBooks[index].author; },
-        [this](int index) { return UITheme::getFileIcon(recentBooks[index].path); });
+        [this](int index) {
+          return recentBooks[index].isOnlineSource() ? Library : UITheme::getFileIcon(recentBooks[index].path);
+        });
   }
 
   // Help text

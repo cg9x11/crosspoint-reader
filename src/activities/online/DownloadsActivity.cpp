@@ -5,6 +5,8 @@
 #include <I18n.h>
 
 #include "../../util/StringUtils.h"
+#include "../../util/RuntimeDebugMetrics.h"
+#include "../../util/ScreenDebugState.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -17,6 +19,28 @@ bool isCancellable(DownloadJobStatus status) { return !isTerminal(status); }
 
 bool isActive(DownloadJobStatus status) {
   return status == DownloadJobStatus::Queued || status == DownloadJobStatus::Running || status == DownloadJobStatus::RetryWait;
+}
+
+ScreenDebugDiagnostics buildDownloadsDiagnostics(const std::vector<DownloadJobInfo>& jobs) {
+  const auto runtime = RuntimeDebugMetrics::capture();
+  ScreenDebugDiagnostics diagnostics;
+  diagnostics.trackedSeriesLoaded = runtime.trackedSeriesLoaded;
+  diagnostics.trackedSeriesCount = runtime.trackedSeriesCount;
+  diagnostics.coverCacheFileCount = runtime.coverCacheFileCount;
+  diagnostics.totalJobCount = jobs.size();
+  diagnostics.activeJobCount = 0;
+  for (const auto& job : jobs) {
+    if (isActive(job.status)) {
+      diagnostics.activeJobCount++;
+    }
+  }
+  diagnostics.summary =
+      RuntimeDebugMetrics::summaryLine(RuntimeDebugMetricsSnapshot{diagnostics.trackedSeriesLoaded,
+                                                                   diagnostics.trackedSeriesCount,
+                                                                   diagnostics.totalJobCount,
+                                                                   diagnostics.activeJobCount,
+                                                                   diagnostics.coverCacheFileCount});
+  return diagnostics;
 }
 }  // namespace
 
@@ -170,6 +194,7 @@ void DownloadsActivity::render(RenderLock&&) {
   const int pageItems = std::max(1, contentHeight / std::max(1, metrics.listWithSubtitleRowHeight));
   const std::string subtitle = headerSubtitle(pageItems);
   const std::string emptyHint = "Queue background download or update jobs";
+  SCREEN_DEBUG.setDiagnostics(buildDownloadsDiagnostics(jobs));
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, "Downloads", subtitle.c_str());
 
   if (jobs.empty()) {

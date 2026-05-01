@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include "HomeActivity.h"
 
 #include <Bitmap.h>
@@ -6,6 +7,8 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Logging.h>
+#include <WiFi.h>
 #include <Utf8.h>
 #include <Xtc.h>
 
@@ -15,11 +18,44 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
+#include "OnlineCoverStore.h"
 #include "OpdsServerStore.h"
+#include "PluginStore.h"
 #include "RecentBooksStore.h"
+#include "activities/network/WifiSelectionActivity.h"
+#include "activities/online/HakoBookDetailActivity.h"
 #include "activities/online/OnlineLibraryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "plugins/OnlineSourceBridge.h"
+
+namespace {
+bool isWifiReadyForOnlineRecent() {
+  return WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
+}
+
+CpPluginInfo resolvePluginForRecentBook(const RecentBook& book) {
+  if (const auto* exact = PLUGIN_STORE.getPlugin(book.pluginId)) {
+    return *exact;
+  }
+
+  const std::string family = PluginStore::canonicalizeRuntimeProfile(book.pluginId, book.runtimeProfile);
+  const CpPluginInfo* best = nullptr;
+  for (const auto& plugin : PLUGIN_STORE.getPlugins()) {
+    if (PluginStore::canonicalizeRuntimeProfile(plugin.id, plugin.runtimeProfile) != family) {
+      continue;
+    }
+    if (!plugin.supportsSearch || !OnlineSourceBridge::supportsNativeUi(plugin)) {
+      continue;
+    }
+    if (!best || (best->runtimeOrigin != "server" && plugin.runtimeOrigin == "server")) {
+      best = &plugin;
+    }
+  }
+
+  return best ? *best : OnlineSourceBridge::makeFallbackPluginInfo(book.pluginId, book.runtimeProfile);
+}
+}  // namespace
 
 int HomeActivity::getMenuItemCount() const {
   int count = 5;  // File Browser, Recents, Online Library, File transfer, Settings
@@ -44,7 +80,7 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
     }
 
     // Skip if file no longer exists
-    if (!Storage.exists(book.path.c_str())) {
+    if (book.isLocalFile() && !Storage.exists(book.path.c_str())) {
       continue;
     }
 
@@ -53,56 +89,61 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
 }
 
 void HomeActivity::loadRecentCovers(int coverHeight) {
-  recentsLoading = true;
-  bool showingLoading = false;
-  Rect popupRect;
+  if (recentsLoaded || recentsLoading) {
+    return;
+  }
 
-  int progress = 0;
-  for (RecentBook& book : recentBooks) {
-    if (!book.coverBmpPath.empty()) {
-      std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
-      if (!Storage.exists(coverPath.c_str())) {
-        // If epub, try to load the metadata for title/author and cover
-        if (FsHelpers::hasEpubExtension(book.path)) {
-          Epub epub(book.path, "/.crosspoint");
-          // Skip loading css since we only need metadata here
-          epub.load(false, true);
+  while (recentCoverWarmIndex < recentBooks.size()) {
+    RecentBook& book = recentBooks[recentCoverWarmIndex];
+    recentCoverWarmIndex++;
 
-          // Try to generate thumbnail image for Continue Reading card
-          if (!showingLoading) {
-            showingLoading = true;
-            popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-          }
-          GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-          bool success = epub.generateThumbBmp(coverHeight);
-          if (!success) {
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-            book.coverBmpPath = "";
-          }
-          coverRendered = false;
-          requestUpdate();
-        } else if (FsHelpers::hasXtcExtension(book.path)) {
-          // Handle XTC file
-          Xtc xtc(book.path, "/.crosspoint");
-          if (xtc.load()) {
-            // Try to generate thumbnail image for Continue Reading card
-            if (!showingLoading) {
-              showingLoading = true;
-              popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-            }
-            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-            bool success = xtc.generateThumbBmp(coverHeight);
-            if (!success) {
-              RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-              book.coverBmpPath = "";
-            }
-            coverRendered = false;
-            requestUpdate();
-          }
-        }
+    const std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
+    if (!book.coverBmpPath.empty() && Storage.exists(coverPath.c_str())) {
+      continue;
+    }
+    if (book.coverBmpPath.empty() && !book.isOnlineSource()) {
+      continue;
+    }
+
+    recentsLoading = true;
+    const unsigned long startedAt = millis();
+    LOG_DBG("HOME", "Warming recent cover %u/%u (heap=%u, largest=%u): %s",
+            static_cast<unsigned>(recentCoverWarmIndex), static_cast<unsigned>(recentBooks.size()), ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap(), book.path.c_str());
+
+    bool success = false;
+    std::string resolvedCoverPath = coverPath;
+    if (book.isOnlineSource()) {
+      if (!book.coverUrl.empty()) {
+        success = OnlineCoverStore::getOrCreateThumb(book.coverUrl, coverHeight, resolvedCoverPath);
+      }
+    } else if (FsHelpers::hasEpubExtension(book.path)) {
+      Epub epub(book.path, "/.crosspoint");
+      if (epub.load(false, true)) {
+        success = epub.generateThumbBmp(coverHeight);
+      }
+    } else if (FsHelpers::hasXtcExtension(book.path)) {
+      Xtc xtc(book.path, "/.crosspoint");
+      if (xtc.load()) {
+        success = xtc.generateThumbBmp(coverHeight);
       }
     }
-    progress++;
+
+    if (success && book.isOnlineSource()) {
+      RECENT_BOOKS.updateBook(book.path, book.title, book.author, resolvedCoverPath);
+      book.coverBmpPath = resolvedCoverPath;
+    } else if (!success) {
+      RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
+      book.coverBmpPath.clear();
+    }
+
+    coverRendered = false;
+    freeCoverBuffer();
+    recentsLoading = false;
+    LOG_DBG("HOME", "Recent cover warm finished in %lu ms, success=%s (heap=%u, largest=%u)", millis() - startedAt,
+            success ? "yes" : "no", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    requestUpdate();
+    return;
   }
 
   recentsLoaded = true;
@@ -118,6 +159,8 @@ void HomeActivity::onEnter() {
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   loadRecentBooks(metrics.homeRecentBooksCount);
+  resetRecentState();
+  firstRenderDone = false;
 
   // Trigger first update
   requestUpdate();
@@ -172,6 +215,14 @@ void HomeActivity::freeCoverBuffer() {
   coverBufferStored = false;
 }
 
+void HomeActivity::resetRecentState() {
+  recentCoverWarmIndex = 0;
+  recentsLoading = false;
+  recentsLoaded = recentBooks.empty();
+  coverRendered = false;
+  freeCoverBuffer();
+}
+
 void HomeActivity::loop() {
   const int menuCount = getMenuItemCount();
 
@@ -185,7 +236,7 @@ void HomeActivity::loop() {
     requestUpdate();
   });
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     // Calculate dynamic indices based on which options are available
     int idx = 0;
     int menuSelectedIndex = selectorIndex - static_cast<int>(recentBooks.size());
@@ -197,7 +248,7 @@ void HomeActivity::loop() {
     const int settingsIdx = idx;
 
     if (selectorIndex < recentBooks.size()) {
-      onSelectBook(recentBooks[selectorIndex].path);
+      onSelectBook(recentBooks[selectorIndex]);
     } else if (menuSelectedIndex == fileBrowserIdx) {
       onFileBrowserOpen();
     } else if (menuSelectedIndex == recentsIdx) {
@@ -211,6 +262,11 @@ void HomeActivity::loop() {
     } else if (menuSelectedIndex == settingsIdx) {
       onSettingsOpen();
     }
+  }
+
+  if (firstRenderDone && !recentsLoaded && !recentsLoading) {
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    loadRecentCovers(metrics.homeCoverHeight);
   }
 }
 
@@ -255,13 +311,70 @@ void HomeActivity::render(RenderLock&&) {
   if (!firstRenderDone) {
     firstRenderDone = true;
     requestUpdate();
-  } else if (!recentsLoaded && !recentsLoading) {
-    recentsLoading = true;
-    loadRecentCovers(metrics.homeCoverHeight);
   }
 }
 
-void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }
+void HomeActivity::onSelectBook(const RecentBook& book) {
+  if (!book.isOnlineSource()) {
+    activityManager.goToReader(book.path);
+    return;
+  }
+
+  if (book.pluginId.empty() || book.seriesUrl.empty()) {
+    RenderLock lock(*this);
+    GUI.drawPopup(renderer, "Unsupported recent item");
+    requestUpdate();
+    return;
+  }
+
+  if (isWifiReadyForOnlineRecent()) {
+    openOnlineRecentBook(book);
+    return;
+  }
+
+  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+                         [this, book](const ActivityResult& result) {
+                           if (result.isCancelled) {
+                             requestUpdate();
+                             return;
+                           }
+                           openOnlineRecentBook(book);
+                         });
+}
+
+void HomeActivity::openOnlineRecentBook(const RecentBook& book) {
+  const CpPluginInfo plugin = resolvePluginForRecentBook(book);
+  if (!OnlineSourceBridge::supportsNativeUi(plugin)) {
+    RenderLock lock(*this);
+    GUI.drawPopup(renderer, "Unsupported source");
+    requestUpdate();
+    return;
+  }
+
+  HakoBookDetail detail;
+  {
+    RenderLock lock(*this);
+    GUI.drawPopup(renderer, "Loading series...");
+    renderer.displayBuffer();
+  }
+  if (!OnlineSourceBridge::fetchDetail(plugin, book.seriesUrl, detail)) {
+    RenderLock lock(*this);
+    const std::string message =
+        OnlineSourceBridge::getLastError().empty() ? "Failed to load series" : OnlineSourceBridge::getLastError();
+    GUI.drawPopup(renderer, message.c_str());
+    requestUpdate();
+    return;
+  }
+
+  startActivityForResult(
+      std::make_unique<HakoBookDetailActivity>(renderer, mappedInput, plugin, std::move(detail), std::vector<HakoChapterRef>{}),
+      [this](const ActivityResult&) {
+        const auto& metrics = UITheme::getInstance().getMetrics();
+        loadRecentBooks(metrics.homeRecentBooksCount);
+        resetRecentState();
+        requestUpdate();
+      });
+}
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 

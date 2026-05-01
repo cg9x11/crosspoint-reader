@@ -34,6 +34,9 @@ class PluginStore {
 
   static PluginStore& getInstance() { return instance; }
 
+  static std::string canonicalizePluginId(const std::string& pluginId, const std::string& runtimeProfile = "");
+  static std::string canonicalizeRuntimeProfile(const std::string& pluginId, const std::string& runtimeProfile = "");
+
   bool loadFromDisk();
   bool installPluginJson(const std::string& pluginJson, std::string* outError = nullptr);
   bool removePlugin(const std::string& pluginId, std::string* outError = nullptr);

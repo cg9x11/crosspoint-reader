@@ -93,6 +93,7 @@ void EpubReaderActivity::onEnter() {
   APP_STATE.openEpubPath = epub->getPath();
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
+  RECENT_BOOKS.startReadingSession(epub->getPath());
 
   // Trigger first update
   requestUpdate();
@@ -106,6 +107,7 @@ void EpubReaderActivity::onExit() {
 
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
+  RECENT_BOOKS.finishReadingSession(epub->getPath());
   section.reset();
   epub.reset();
 }
@@ -677,6 +679,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
   }
   silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
+  const float chapterProgress = (section->pageCount > 0) ? (static_cast<float>(section->currentPage) / section->pageCount) : 0.0f;
+  const int progressPercent = clampPercent(static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f + 0.5f));
+  RECENT_BOOKS.updateReadingProgress(epub->getPath(), static_cast<uint8_t>(progressPercent));
   saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
 
   if (pendingScreenshot) {
@@ -739,6 +744,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const auto t0 = millis();
   auto* fcm = renderer.getFontCacheManager();
   fcm->resetStats();
+  const bool useTextAA = ReaderUtils::shouldUseTextAntiAliasing();
 
   // Font prewarm: scan pass accumulates text, then prewarm, then real render
   const uint32_t heapBefore = esp_get_free_heap_size();
@@ -753,7 +759,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           (int32_t)heapAfter - (int32_t)heapBefore);
 
   // Force special handling for pages with images when anti-aliasing is on
-  bool imagePageWithAA = page->hasImages() && SETTINGS.textAntiAliasing;
+  bool imagePageWithAA = page->hasImages() && useTextAA;
 
   page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
   renderStatusBar();
@@ -790,7 +796,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
   // grayscale rendering
   // TODO: Only do this if font supports it
-  if (SETTINGS.textAntiAliasing) {
+  if (useTextAA) {
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
     page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);

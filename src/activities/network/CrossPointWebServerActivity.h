@@ -17,6 +17,8 @@ enum class WebServerActivityState {
   SHUTTING_DOWN    // Shutting down server and WiFi
 };
 
+void tickBackgroundWebServerNetworkServices();
+
 /**
  * CrossPointWebServerActivity is the entry point for file transfer functionality.
  * It:
@@ -36,6 +38,7 @@ class CrossPointWebServerActivity final : public Activity {
 
   // Web server - owned by this activity
   std::unique_ptr<CrossPointWebServer> webServer;
+  bool handoffToBackground = false;
 
   // Server status
   std::string connectedIP;

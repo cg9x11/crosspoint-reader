@@ -3,12 +3,17 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <ESP.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 
 #include <algorithm>
 #include <cctype>
+#include <memory>
 #include <utility>
 
 #include "../../OnlineCoverStore.h"
+#include "../../network/OnlineDebugLog.h"
 #include "../../util/ScreenDebugState.h"
 #include "../../util/StringUtils.h"
 #include "../../plugins/OnlineSourceBridge.h"
@@ -20,6 +25,284 @@
 
 namespace {
 constexpr int MAX_SUMMARY_WRAP_LINES = 96;
+constexpr uint32_t ONLINE_SOURCE_LOAD_TASK_STACK_BYTES = 7168;
+constexpr uint32_t MIN_FREE_HEAP_FOR_PREVIEW_DETAIL = 90000;
+constexpr uint32_t MIN_FREE_HEAP_FOR_PREVIEW_COVER = 85000;
+constexpr uint32_t MIN_LARGEST_BLOCK_FOR_PREVIEW = 70000;
+constexpr int PREVIEW_COVER_TARGET_HEIGHT = 92;
+
+enum class AsyncLoadKind : uint8_t { Home = 1, Search = 2 };
+
+struct AsyncLoadResult {
+  uint32_t token = 0;
+  AsyncLoadKind kind = AsyncLoadKind::Home;
+  int searchPage = 1;
+  bool success = false;
+  std::vector<HakoSearchResult> results;
+  std::string errorMessage;
+};
+
+struct AsyncLoadContext {
+  uint32_t token = 0;
+  AsyncLoadKind kind = AsyncLoadKind::Home;
+  CpPluginInfo pluginInfo;
+  std::string query;
+  int searchPage = 1;
+};
+
+struct AsyncLoadTaskEntry {
+  uint32_t token = 0;
+  TaskHandle_t handle = nullptr;
+};
+
+bool canLoadPreviewDetailNow() {
+  return ESP.getFreeHeap() >= MIN_FREE_HEAP_FOR_PREVIEW_DETAIL && ESP.getMaxAllocHeap() >= MIN_LARGEST_BLOCK_FOR_PREVIEW;
+}
+
+bool canLoadPreviewCoverNow() {
+  return ESP.getFreeHeap() >= MIN_FREE_HEAP_FOR_PREVIEW_COVER && ESP.getMaxAllocHeap() >= MIN_LARGEST_BLOCK_FOR_PREVIEW;
+}
+
+bool shouldUseMinimalDetailFallbackNow() {
+  return ESP.getFreeHeap() < 70000 || ESP.getMaxAllocHeap() < 60000;
+}
+
+std::string trimAsciiSpaces(std::string value) {
+  auto isSpace = [](unsigned char ch) { return std::isspace(ch) != 0; };
+  value.erase(value.begin(), std::find_if(value.begin(), value.end(), [&](char ch) { return !isSpace(static_cast<unsigned char>(ch)); }));
+  value.erase(std::find_if(value.rbegin(), value.rend(), [&](char ch) { return !isSpace(static_cast<unsigned char>(ch)); }).base(),
+              value.end());
+  return value;
+}
+
+std::string lowerAscii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return value;
+}
+
+std::string authorFromSearchDescription(const std::string& description) {
+  const std::string safe = StringUtils::toDisplaySafeAscii(description);
+  const std::string lower = lowerAscii(safe);
+  const char* prefixes[] = {"tac gia:", "author:"};
+  for (const char* prefix : prefixes) {
+    const std::string needle(prefix);
+    if (lower.rfind(needle, 0) == 0) {
+      return trimAsciiSpaces(safe.substr(needle.size()));
+    }
+  }
+  return trimAsciiSpaces(safe);
+}
+
+HakoBookDetail minimalDetailFromSearchResult(const HakoSearchResult& selected) {
+  HakoBookDetail detail;
+  detail.title = StringUtils::toDisplaySafeAscii(selected.title);
+  detail.url = selected.url;
+  detail.author = authorFromSearchDescription(selected.description);
+  detail.coverUrl = selected.coverUrl;
+  detail.descriptionHtml.clear();
+  detail.latestChapterTitle = selected.homeLatestChapterTitle;
+  detail.ongoing = true;
+  return detail;
+}
+
+SemaphoreHandle_t g_asyncLoadMutex = nullptr;
+std::vector<AsyncLoadResult> g_asyncLoadResults;
+std::vector<AsyncLoadTaskEntry> g_asyncLoadTasks;
+std::vector<uint32_t> g_asyncLoadDiscardedTokens;
+uint32_t g_nextAsyncLoadToken = 1;
+
+SemaphoreHandle_t ensureAsyncLoadMutex() {
+  if (g_asyncLoadMutex == nullptr) {
+    g_asyncLoadMutex = xSemaphoreCreateMutex();
+  }
+  return g_asyncLoadMutex;
+}
+
+uint32_t nextAsyncLoadToken() {
+  auto* mutex = ensureAsyncLoadMutex();
+  if (mutex == nullptr) {
+    return 0;
+  }
+
+  xSemaphoreTake(mutex, portMAX_DELAY);
+  uint32_t token = g_nextAsyncLoadToken++;
+  if (g_nextAsyncLoadToken == 0) {
+    g_nextAsyncLoadToken = 1;
+  }
+  xSemaphoreGive(mutex);
+  return token;
+}
+
+void storeAsyncLoadResult(AsyncLoadResult&& result) {
+  auto* mutex = ensureAsyncLoadMutex();
+  if (mutex == nullptr) {
+    return;
+  }
+
+  xSemaphoreTake(mutex, portMAX_DELAY);
+  g_asyncLoadResults.erase(
+      std::remove_if(g_asyncLoadResults.begin(), g_asyncLoadResults.end(),
+                     [&](const AsyncLoadResult& item) { return item.token == result.token; }),
+      g_asyncLoadResults.end());
+  g_asyncLoadResults.push_back(std::move(result));
+  if (g_asyncLoadResults.size() > 8) {
+    g_asyncLoadResults.erase(g_asyncLoadResults.begin(),
+                             g_asyncLoadResults.begin() + (g_asyncLoadResults.size() - 8));
+  }
+  xSemaphoreGive(mutex);
+}
+
+bool takeAsyncLoadResult(uint32_t token, AsyncLoadResult& outResult) {
+  auto* mutex = ensureAsyncLoadMutex();
+  if (mutex == nullptr) {
+    return false;
+  }
+
+  bool found = false;
+  xSemaphoreTake(mutex, portMAX_DELAY);
+  for (auto it = g_asyncLoadResults.begin(); it != g_asyncLoadResults.end(); ++it) {
+    if (it->token == token) {
+      outResult = std::move(*it);
+      g_asyncLoadResults.erase(it);
+      found = true;
+      break;
+    }
+  }
+  xSemaphoreGive(mutex);
+  return found;
+}
+
+void clearAsyncLoadResult(uint32_t token) {
+  auto* mutex = ensureAsyncLoadMutex();
+  if (mutex == nullptr) {
+    return;
+  }
+
+  xSemaphoreTake(mutex, portMAX_DELAY);
+  g_asyncLoadResults.erase(
+      std::remove_if(g_asyncLoadResults.begin(), g_asyncLoadResults.end(),
+                     [&](const AsyncLoadResult& item) { return item.token == token; }),
+      g_asyncLoadResults.end());
+  xSemaphoreGive(mutex);
+}
+
+void registerAsyncLoadTask(uint32_t token, TaskHandle_t handle) {
+  auto* mutex = ensureAsyncLoadMutex();
+  if (mutex == nullptr) {
+    return;
+  }
+
+  xSemaphoreTake(mutex, portMAX_DELAY);
+  g_asyncLoadTasks.erase(
+      std::remove_if(g_asyncLoadTasks.begin(), g_asyncLoadTasks.end(),
+                     [&](const AsyncLoadTaskEntry& item) { return item.token == token; }),
+      g_asyncLoadTasks.end());
+  g_asyncLoadTasks.push_back(AsyncLoadTaskEntry{token, handle});
+  xSemaphoreGive(mutex);
+}
+
+void markAsyncLoadDiscarded(uint32_t token) {
+  auto* mutex = ensureAsyncLoadMutex();
+  if (mutex == nullptr || token == 0) {
+    return;
+  }
+
+  xSemaphoreTake(mutex, portMAX_DELAY);
+  const bool exists =
+      std::find(g_asyncLoadDiscardedTokens.begin(), g_asyncLoadDiscardedTokens.end(), token) != g_asyncLoadDiscardedTokens.end();
+  if (!exists) {
+    g_asyncLoadDiscardedTokens.push_back(token);
+    if (g_asyncLoadDiscardedTokens.size() > 8) {
+      g_asyncLoadDiscardedTokens.erase(
+          g_asyncLoadDiscardedTokens.begin(),
+          g_asyncLoadDiscardedTokens.begin() + (g_asyncLoadDiscardedTokens.size() - 8));
+    }
+  }
+  xSemaphoreGive(mutex);
+}
+
+bool consumeAsyncLoadDiscarded(uint32_t token) {
+  auto* mutex = ensureAsyncLoadMutex();
+  if (mutex == nullptr || token == 0) {
+    return false;
+  }
+
+  bool discarded = false;
+  xSemaphoreTake(mutex, portMAX_DELAY);
+  const auto it = std::find(g_asyncLoadDiscardedTokens.begin(), g_asyncLoadDiscardedTokens.end(), token);
+  if (it != g_asyncLoadDiscardedTokens.end()) {
+    g_asyncLoadDiscardedTokens.erase(it);
+    discarded = true;
+  }
+  xSemaphoreGive(mutex);
+  return discarded;
+}
+
+TaskHandle_t unregisterAsyncLoadTask(uint32_t token) {
+  auto* mutex = ensureAsyncLoadMutex();
+  if (mutex == nullptr) {
+    return nullptr;
+  }
+
+  TaskHandle_t handle = nullptr;
+  xSemaphoreTake(mutex, portMAX_DELAY);
+  for (auto it = g_asyncLoadTasks.begin(); it != g_asyncLoadTasks.end(); ++it) {
+    if (it->token == token) {
+      handle = it->handle;
+      g_asyncLoadTasks.erase(it);
+      break;
+    }
+  }
+  xSemaphoreGive(mutex);
+  return handle;
+}
+
+TaskHandle_t findAsyncLoadTask(uint32_t token) {
+  auto* mutex = ensureAsyncLoadMutex();
+  if (mutex == nullptr) {
+    return nullptr;
+  }
+
+  TaskHandle_t handle = nullptr;
+  xSemaphoreTake(mutex, portMAX_DELAY);
+  for (const auto& item : g_asyncLoadTasks) {
+    if (item.token == token) {
+      handle = item.handle;
+      break;
+    }
+  }
+  xSemaphoreGive(mutex);
+  return handle;
+}
+
+void asyncLoadTaskTrampoline(void* param) {
+  std::unique_ptr<AsyncLoadContext> context(static_cast<AsyncLoadContext*>(param));
+  AsyncLoadResult result;
+  result.token = context ? context->token : 0;
+  result.kind = context ? context->kind : AsyncLoadKind::Home;
+  result.searchPage = context ? context->searchPage : 1;
+
+  if (context != nullptr) {
+    if (context->kind == AsyncLoadKind::Home) {
+      result.success = OnlineSourceBridge::fetchHomeFeed(context->pluginInfo, result.results);
+    } else {
+      result.success = OnlineSourceBridge::search(context->pluginInfo, context->query, context->searchPage, result.results);
+    }
+    if (!result.success) {
+      result.errorMessage = OnlineSourceBridge::getLastError();
+    }
+  } else {
+    result.errorMessage = "Failed to start request";
+  }
+
+  const bool discarded = consumeAsyncLoadDiscarded(result.token);
+  unregisterAsyncLoadTask(result.token);
+  if (!discarded) {
+    storeAsyncLoadResult(std::move(result));
+  }
+  vTaskDelete(nullptr);
+}
 
 std::string toLowerAscii(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
@@ -64,6 +347,37 @@ std::string chapterOnlyTitle(std::string value) {
   }
 
   return value;
+}
+
+int computePreviewHeight(int availableBodyHeight) {
+  if (availableBodyHeight <= 0) {
+    return 0;
+  }
+
+  const int target = (availableBodyHeight * 45) / 100;
+  const int minHeight = std::min(220, availableBodyHeight);
+  const int maxHeight = std::max(minHeight, availableBodyHeight - 120);
+  const int desiredHeight = std::max(minHeight, std::min(target, maxHeight));
+  return std::min(desiredHeight, std::max(0, availableBodyHeight - 140));
+}
+
+bool useRoundedRaffSearchLayout() {
+  return SETTINGS.uiTheme == CrossPointSettings::UI_THEME::ROUNDEDRAFF;
+}
+
+int computeSearchPreviewHeight(int availableBodyHeight) {
+  if (availableBodyHeight <= 0) {
+    return 0;
+  }
+
+  if (useRoundedRaffSearchLayout()) {
+    const int target = availableBodyHeight / 2;
+    const int minHeight = std::min(300, availableBodyHeight);
+    const int maxHeight = std::max(minHeight, availableBodyHeight - 110);
+    const int desiredHeight = std::max(minHeight, std::min(target, maxHeight));
+    return std::min(desiredHeight, std::max(0, availableBodyHeight - 150));
+  }
+  return computePreviewHeight(availableBodyHeight);
 }
 
 std::string clampSubtitle(std::string value, size_t maxLength = 88) {
@@ -214,34 +528,15 @@ void HakoSearchActivity::maybeLoadSelectedPreview() {
   }
 
   if (cached == nullptr) {
-    previewCache.push_back(PreviewCacheEntry{selected.url, fallbackPreviewTextForResult(selected), "", false, false});
+    previewCache.push_back(PreviewCacheEntry{
+        selected.url,
+        fallbackPreviewTextForResult(selected),
+        OnlineSourceBridge::buildAssetProxyUrl(pluginInfo, selected.coverUrl, selected.url),
+        true,
+        false});
     prunePreviewCache(selected.url);
     requestUpdate();
-    return;
   }
-
-  const unsigned long now = millis();
-  if (now < previewSelectionChangedAtMs + PREVIEW_FETCH_DELAY_MS) {
-    return;
-  }
-
-  HakoBookDetail detail;
-  if (!OnlineSourceBridge::fetchDetail(pluginInfo, selected.url, detail)) {
-    cached->text.clear();
-    cached->resolvedCoverUrl.clear();
-    cached->detailLoaded = true;
-    cached->failed = true;
-  } else {
-    std::string previewText = OnlineTextUtils::stripHtml(detail.descriptionHtml);
-    previewText = OnlineTextUtils::limitPreviewText(previewText, 520);
-    cached->text = previewText.empty() ? cached->text : previewText;
-    cached->resolvedCoverUrl = selected.coverUrl.empty() ? detail.coverUrl : selected.coverUrl;
-    cached->detailLoaded = true;
-    cached->failed = previewText.empty();
-  }
-  prunePreviewCache(selected.url);
-
-  requestUpdate();
 }
 
 void HakoSearchActivity::maybeLoadSelectedCover() {
@@ -250,24 +545,25 @@ void HakoSearchActivity::maybeLoadSelectedCover() {
     return;
   }
 
-  if (previewSelectionIndex != selectedIndex) {
-    return;
-  }
-
   const auto& selected = results[resultIndex];
   if (findCoverEntry(selected.url) != nullptr) {
     return;
   }
 
-  const unsigned long now = millis();
-  if (now < previewSelectionChangedAtMs + COVER_FETCH_DELAY_MS) {
+  if (previewSelectionIndex != selectedIndex) {
+    noteSelectionChanged();
     return;
   }
 
-  const std::string coverUrl = selectedResolvedCoverUrl();
+  if (millis() < previewSelectionChangedAtMs + COVER_FETCH_DELAY_MS || !canLoadPreviewCoverNow()) {
+    return;
+  }
+
   std::string coverPath;
-  const bool coverOk = !coverUrl.empty() && OnlineCoverStore::tryGetCachedThumb(coverUrl, 72, coverPath);
-  coverCache.push_back(CoverCacheEntry{selected.url, coverOk ? coverPath : "", !coverOk});
+  const std::string coverUrl = selectedResolvedCoverUrl();
+  const bool ok =
+      !coverUrl.empty() && OnlineCoverStore::getOrCreateThumb(coverUrl, PREVIEW_COVER_TARGET_HEIGHT, coverPath);
+  coverCache.push_back(CoverCacheEntry{selected.url, ok ? coverPath : "", !ok});
   pruneCoverCache(selected.url);
   requestUpdate();
 }
@@ -286,11 +582,12 @@ std::string HakoSearchActivity::selectedResolvedCoverUrl() const {
 
   const auto& selected = results[resultIndex];
   if (!selected.coverUrl.empty()) {
-    return selected.coverUrl;
+    return OnlineSourceBridge::buildAssetProxyUrl(pluginInfo, selected.coverUrl, selected.url);
   }
 
   const auto* cached = findPreviewEntry(selected.url);
-  return cached == nullptr ? std::string() : cached->resolvedCoverUrl;
+  return cached == nullptr ? std::string()
+                           : OnlineSourceBridge::buildAssetProxyUrl(pluginInfo, cached->resolvedCoverUrl, selected.url);
 }
 
 std::string HakoSearchActivity::getSelectedPreviewText() const {
@@ -323,23 +620,7 @@ bool HakoSearchActivity::selectedPreviewFailed() const {
 }
 
 bool HakoSearchActivity::selectedPreviewLoading() const {
-  const int resultIndex = getResultIndex(selectedIndex);
-  if (resultIndex < 0 || resultIndex >= static_cast<int>(results.size())) {
-    return false;
-  }
-  if (previewSelectionIndex != selectedIndex) {
-    return false;
-  }
-  const auto& selected = results[resultIndex];
-  const auto* cached = findPreviewEntry(selected.url);
-  if (cached != nullptr && (cached->detailLoaded || cached->failed)) {
-    return false;
-  }
-  const unsigned long now = millis();
-  if (now < previewSelectionChangedAtMs + PREVIEW_FETCH_DELAY_MS) {
-    return false;
-  }
-  return true;
+  return false;
 }
 
 std::string HakoSearchActivity::getSelectedCoverPath() const {
@@ -347,6 +628,7 @@ std::string HakoSearchActivity::getSelectedCoverPath() const {
   if (resultIndex < 0 || resultIndex >= static_cast<int>(results.size())) {
     return "";
   }
+
   const auto& selected = results[resultIndex];
   const auto* cached = findCoverEntry(selected.url);
   if (cached != nullptr) {
@@ -358,7 +640,8 @@ std::string HakoSearchActivity::getSelectedCoverPath() const {
 
   std::string coverPath;
   const std::string coverUrl = selectedResolvedCoverUrl();
-  if (!coverUrl.empty() && OnlineCoverStore::tryGetCachedThumb(coverUrl, 72, coverPath)) {
+  if (!coverUrl.empty() &&
+      OnlineCoverStore::tryGetCachedThumb(coverUrl, PREVIEW_COVER_TARGET_HEIGHT, coverPath)) {
     return coverPath;
   }
   return "";
@@ -369,6 +652,7 @@ bool HakoSearchActivity::selectedCoverFailed() const {
   if (resultIndex < 0 || resultIndex >= static_cast<int>(results.size())) {
     return false;
   }
+
   const auto& selected = results[resultIndex];
   const auto* cached = findCoverEntry(selected.url);
   if (cached != nullptr) {
@@ -380,7 +664,8 @@ bool HakoSearchActivity::selectedCoverFailed() const {
 
   std::string ignoredCoverPath;
   const std::string coverUrl = selectedResolvedCoverUrl();
-  return coverUrl.empty() || !OnlineCoverStore::tryGetCachedThumb(coverUrl, 72, ignoredCoverPath);
+  return coverUrl.empty() ||
+         !OnlineCoverStore::tryGetCachedThumb(coverUrl, PREVIEW_COVER_TARGET_HEIGHT, ignoredCoverPath);
 }
 
 int HakoSearchActivity::selectedPreviewVisibleLineCapacity() const {
@@ -391,16 +676,21 @@ int HakoSearchActivity::selectedPreviewVisibleLineCapacity() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageHeight = renderer.getScreenHeight();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int previewHeight = 188;
-  const int contentHeight =
-      pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2 - previewHeight;
+  const int availableBodyHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  const int previewHeight = computeSearchPreviewHeight(availableBodyHeight);
+  if (previewHeight <= metrics.verticalSpacing) {
+    return 1;
+  }
+  const int contentHeight = std::max(0, availableBodyHeight - previewHeight);
   const int previewTop = contentTop + contentHeight + metrics.verticalSpacing;
   const int previewBoxHeight = previewHeight - metrics.verticalSpacing;
   const int summaryTop = std::max(previewTop + 8 + 92 + 6, previewTop + 8 + 40);
   const int summaryTextY = summaryTop + renderer.getLineHeight(UI_10_FONT_ID) + 3;
   const int previewLineHeight = renderer.getLineHeight(UI_10_FONT_ID) + 2;
   const int previewBottomPadding = 8;
-  const int availablePreviewHeight = std::max(0, previewTop + previewBoxHeight - previewBottomPadding - summaryTextY);
+  const int hintReserve = renderer.getLineHeight(SMALL_FONT_ID) + 6;
+  const int availablePreviewHeight =
+      std::max(0, previewTop + previewBoxHeight - previewBottomPadding - summaryTextY - hintReserve);
   return std::max(1, availablePreviewHeight / std::max(1, previewLineHeight));
 }
 
@@ -425,17 +715,24 @@ bool HakoSearchActivity::selectedPreviewOverflows() const {
 }
 
 unsigned long HakoSearchActivity::initialHomeFeedDelayMs() const {
+  if (pluginInfo.runtimeOrigin == "server") {
+    return 0;
+  }
   if (pluginInfo.id == "hako" || pluginInfo.runtimeProfile == "hako") {
     return HOME_FEED_SLOW_SOURCE_DELAY_MS;
   }
   return HOME_FEED_INITIAL_DELAY_MS;
 }
 
+bool HakoSearchActivity::supportsHomeFeed() const {
+  return pluginInfo.runtimeOrigin == "server";
+}
+
 namespace {
 const char* coverDebugStatus(bool hasCover, bool failed) {
   if (hasCover) return "Cover ready";
   if (failed) return "Cover unavailable";
-  return "Cover pending";
+  return "Text-only preview";
 }
 }
 
@@ -460,7 +757,16 @@ void HakoSearchActivity::openSearchPrompt() {
 
         query = OnlineTextUtils::trimAscii(std::get<KeyboardResult>(result.data).text);
         if (query.empty()) {
-          queueHomeFeedLoad();
+          if (supportsHomeFeed()) {
+            queueHomeFeedLoad();
+          } else {
+            results.clear();
+            resetPreviewState();
+            currentPage = 1;
+            hasNextPage = false;
+            errorMessage.clear();
+            requestUpdate();
+          }
           return;
         }
         if (static_cast<int>(query.size()) < MIN_SEARCH_QUERY_LENGTH) {
@@ -477,6 +783,11 @@ void HakoSearchActivity::openSearchPrompt() {
 }
 
 void HakoSearchActivity::triggerHomeFeedAction() {
+  if (!supportsHomeFeed()) {
+    openSearchPrompt();
+    return;
+  }
+
   if (pendingLoadKind == PendingLoadKind::Home) {
     homeFeedLoadEarliestAtMs = millis();
     loadingMessage = "Loading source...";
@@ -497,7 +808,7 @@ void HakoSearchActivity::queueHomeFeedLoad() {
   selectedIndex = 0;
   hasNextPage = false;
   isLoading = true;
-  loadingMessage = "Pause to load source...";
+  loadingMessage = "Loading source...";
   pendingLoadKind = PendingLoadKind::Home;
   pendingSearchPage = 1;
   homeFeedLoadEarliestAtMs = millis() + initialHomeFeedDelayMs();
@@ -521,7 +832,7 @@ void HakoSearchActivity::queueSearchLoad(int page) {
 }
 
 void HakoSearchActivity::executePendingLoad() {
-  if (pendingLoadKind == PendingLoadKind::None) {
+  if (pendingLoadKind == PendingLoadKind::None || activeLoadToken != 0) {
     return;
   }
 
@@ -530,51 +841,163 @@ void HakoSearchActivity::executePendingLoad() {
     return;
   }
 
+  if (loadKind == PendingLoadKind::Search && static_cast<int>(query.size()) < MIN_SEARCH_QUERY_LENGTH) {
+    pendingLoadKind = PendingLoadKind::None;
+    isLoading = false;
+    loadingMessage.clear();
+    errorMessage = "Enter at least 3 characters";
+    requestUpdate();
+    return;
+  }
+
+  std::unique_ptr<AsyncLoadContext> context(new AsyncLoadContext{});
+  context->token = nextAsyncLoadToken();
+  if (context->token == 0) {
+    pendingLoadKind = PendingLoadKind::None;
+    isLoading = false;
+    loadingMessage.clear();
+    errorMessage = "Failed to start request";
+    requestUpdate();
+    return;
+  }
+  context->kind = loadKind == PendingLoadKind::Home ? AsyncLoadKind::Home : AsyncLoadKind::Search;
+  context->pluginInfo = pluginInfo;
+  context->query = query;
+  context->searchPage = pendingSearchPage < 1 ? 1 : pendingSearchPage;
+
+  activeLoadToken = context->token;
   pendingLoadKind = PendingLoadKind::None;
   errorMessage.clear();
 
-  if (loadKind == PendingLoadKind::Home) {
+  TaskHandle_t taskHandle = nullptr;
+  if (xTaskCreate(&asyncLoadTaskTrampoline, "OnlineSourceLoad", ONLINE_SOURCE_LOAD_TASK_STACK_BYTES, context.release(), 1,
+                  &taskHandle) != pdPASS) {
+    activeLoadToken = 0;
+    activeLoadTaskHandle = nullptr;
+    isLoading = false;
+    loadingMessage.clear();
+    errorMessage = "Failed to start request";
+    requestUpdate();
+    return;
+  }
+  activeLoadTaskHandle = taskHandle;
+  registerAsyncLoadTask(activeLoadToken, taskHandle);
+}
+
+void HakoSearchActivity::pollAsyncLoad() {
+  if (activeLoadToken == 0) {
+    return;
+  }
+
+  AsyncLoadResult result;
+  if (!takeAsyncLoadResult(activeLoadToken, result)) {
+    return;
+  }
+
+  activeLoadToken = 0;
+  activeLoadTaskHandle = nullptr;
+  isLoading = false;
+  loadingMessage.clear();
+  results.clear();
+  hasNextPage = false;
+
+  if (result.kind == AsyncLoadKind::Home) {
     homeFeedLoadEarliestAtMs = 0;
-    if (!OnlineSourceBridge::fetchHomeFeed(pluginInfo, results)) {
-      errorMessage = "Failed to load source";
-    } else if (results.empty()) {
-      errorMessage = "No stories found";
+    if (!result.success) {
+      errorMessage = result.errorMessage.empty() ? "Failed to load source" : result.errorMessage;
+      LOG_ERR("ONLINE", "Home feed load failed for %s: %s", pluginInfo.id.c_str(), errorMessage.c_str());
+    } else {
+      results = std::move(result.results);
+      if (results.empty()) {
+        errorMessage = "No stories found";
+      }
     }
   } else {
-    currentPage = pendingSearchPage < 1 ? 1 : pendingSearchPage;
-    if (static_cast<int>(query.size()) < MIN_SEARCH_QUERY_LENGTH) {
-      errorMessage = "Enter at least 3 characters";
-    } else if (!OnlineSourceBridge::search(pluginInfo, query, currentPage, results)) {
-      errorMessage = "Search failed";
-    } else if (results.empty()) {
-      errorMessage = currentPage == 1 ? "No results found" : "No more results";
+    currentPage = result.searchPage < 1 ? 1 : result.searchPage;
+    if (!result.success) {
+      errorMessage = result.errorMessage.empty() ? "Search failed" : result.errorMessage;
+      LOG_ERR("ONLINE", "Search failed for %s: %s", pluginInfo.id.c_str(), errorMessage.c_str());
     } else {
-      hasNextPage = static_cast<int>(results.size()) >= SEARCH_PAGE_SIZE;
+      results = std::move(result.results);
+      if (results.empty()) {
+        errorMessage = currentPage == 1 ? "No results found" : "No more results";
+      } else {
+        hasNextPage = static_cast<int>(results.size()) >= SEARCH_PAGE_SIZE;
+      }
     }
   }
 
-  isLoading = false;
-  loadingMessage.clear();
   if (!results.empty()) {
     noteSelectionChanged();
   }
   requestUpdate();
 }
 
+void HakoSearchActivity::cancelActiveLoad() {
+  pendingLoadKind = PendingLoadKind::None;
+  homeFeedLoadEarliestAtMs = 0;
+
+  if (activeLoadToken != 0) {
+    markAsyncLoadDiscarded(activeLoadToken);
+    unregisterAsyncLoadTask(activeLoadToken);
+    clearAsyncLoadResult(activeLoadToken);
+  }
+
+  activeLoadToken = 0;
+  activeLoadTaskHandle = nullptr;
+  isLoading = false;
+  loadingMessage.clear();
+}
+
 void HakoSearchActivity::onEnter() {
   Activity::onEnter();
+  OnlineDebugLog::logProbe("HakoSearchActivity::onEnter", pluginInfo.id);
   hasRenderedOnce = false;
   resetPreviewState();
-  queueHomeFeedLoad();
+  if (supportsHomeFeed()) {
+    queueHomeFeedLoad();
+    return;
+  }
+
+  showingHomeFeed = false;
+  query.clear();
+  results.clear();
+  errorMessage.clear();
+  loadingMessage.clear();
+  pendingLoadKind = PendingLoadKind::None;
+  isLoading = false;
+  currentPage = 1;
+  selectedIndex = 0;
+  hasNextPage = false;
+  homeFeedLoadEarliestAtMs = 0;
+  requestUpdate();
+}
+
+void HakoSearchActivity::onExit() {
+  cancelActiveLoad();
+  resetPreviewState();
+  results.clear();
+  if (results.capacity() > SEARCH_PAGE_SIZE * 2) {
+    results.shrink_to_fit();
+  }
+  errorMessage.clear();
+  query.clear();
+  loadingMessage.clear();
+  popupMessage.clear();
+  OnlineSourceBridge::clearMemoryCaches();
+  Activity::onExit();
 }
 
 void HakoSearchActivity::loop() {
+  pollAsyncLoad();
+
   if (!popupMessage.empty() && millis() >= popupUntilMs) {
     popupMessage.clear();
     requestUpdate();
   }
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    cancelActiveLoad();
     finish();
     return;
   }
@@ -591,6 +1014,10 @@ void HakoSearchActivity::loop() {
 
   if (pendingLoadKind != PendingLoadKind::None && hasRenderedOnce) {
     executePendingLoad();
+    return;
+  }
+
+  if (activeLoadToken != 0) {
     return;
   }
 
@@ -623,7 +1050,16 @@ void HakoSearchActivity::loop() {
       renderer.displayBuffer();
     }
     if (!OnlineSourceBridge::fetchDetail(pluginInfo, selected.url, detail)) {
-      errorMessage = "Failed to load book";
+      errorMessage = OnlineSourceBridge::getLastError();
+      if (errorMessage.empty()) {
+        errorMessage = "Failed to load book";
+      }
+      if (pluginInfo.id == "truyenfull" || shouldUseMinimalDetailFallbackNow()) {
+        HakoBookDetail fallbackDetail = minimalDetailFromSearchResult(selected);
+        activityManager.pushActivity(std::make_unique<HakoBookDetailActivity>(
+            renderer, mappedInput, pluginInfo, std::move(fallbackDetail), std::vector<HakoChapterRef>{}));
+        return;
+      }
       showPopupMessage(errorMessage);
       return;
     }
@@ -657,13 +1093,16 @@ void HakoSearchActivity::render(RenderLock&&) {
   const int pageHeight = renderer.getScreenHeight();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const bool showPreviewPanel = !results.empty();
-  const int previewHeight = showPreviewPanel ? 188 : 0;
-  const int contentHeight =
-      pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2 - previewHeight;
+  const int availableBodyHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  const bool compactRoundedPreview = useRoundedRaffSearchLayout();
+  const int previewHeight = showPreviewPanel ? computeSearchPreviewHeight(availableBodyHeight) : 0;
+  const int contentHeight = std::max(0, availableBodyHeight - previewHeight);
 
   std::string subtitle;
   if (showingHomeFeed) {
     subtitle = "Home | LEFT search";
+  } else if (query.empty()) {
+    subtitle = "Search";
   } else {
     subtitle = StringUtils::toDisplaySafeAscii(query) + " | Page " + std::to_string(currentPage);
   }
@@ -698,104 +1137,112 @@ void HakoSearchActivity::render(RenderLock&&) {
     const int previewTop = contentTop + contentHeight + metrics.verticalSpacing;
     const int previewX = metrics.contentSidePadding;
     const int previewWidth = pageWidth - metrics.contentSidePadding * 2;
-    const int previewBoxHeight = previewHeight - metrics.verticalSpacing;
-    renderer.drawRect(previewX, previewTop, previewWidth, previewBoxHeight);
-
-    const int coverBoxWidth = 64;
-    const int coverBoxHeight = 92;
-    const int coverX = previewX + 8;
-    const int coverY = previewTop + 8;
-    renderer.drawRect(coverX, coverY, coverBoxWidth, coverBoxHeight);
-    const int coverBottom = coverY + coverBoxHeight;
-
+    const int previewBoxHeight = std::max(0, previewHeight - metrics.verticalSpacing);
     const std::string coverPath = getSelectedCoverPath();
     const bool coverFailed = selectedCoverFailed();
-    if (!coverPath.empty()) {
-      FsFile coverFile;
-      if (Storage.openFileForRead("HSR", coverPath.c_str(), coverFile)) {
-        Bitmap bitmap(coverFile);
-        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-          renderer.drawBitmap(bitmap, coverX + 1, coverY + 1, coverBoxWidth - 2, coverBoxHeight - 2);
+
+    if (previewBoxHeight > 0) {
+      renderer.drawRect(previewX, previewTop, previewWidth, previewBoxHeight);
+
+      const int coverBoxWidth = 64;
+      const int coverBoxHeight = 92;
+      const int coverX = previewX + 8;
+      const int coverY = previewTop + 8;
+      renderer.drawRect(coverX, coverY, coverBoxWidth, coverBoxHeight);
+      const int coverBottom = coverY + coverBoxHeight;
+
+      if (!coverPath.empty()) {
+        FsFile coverFile;
+        if (Storage.openFileForRead("HSR", coverPath.c_str(), coverFile)) {
+          Bitmap bitmap(coverFile);
+          if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+            renderer.drawBitmap(bitmap, coverX + 1, coverY + 1, coverBoxWidth - 2, coverBoxHeight - 2);
+          }
+          coverFile.close();
         }
-        coverFile.close();
+      } else if (coverFailed) {
+        renderer.drawText(UI_10_FONT_ID, coverX + 2, coverY + 20, "Cover", true, EpdFontFamily::BOLD);
+        renderer.drawText(UI_10_FONT_ID, coverX + 4, coverY + 36, "not", true);
+        renderer.drawText(UI_10_FONT_ID, coverX + 1, coverY + 52, "avail.", true);
+      } else {
+        renderer.drawText(UI_10_FONT_ID, coverX + 7, coverY + 26, "No", true, EpdFontFamily::BOLD);
+        renderer.drawText(UI_10_FONT_ID, coverX + 2, coverY + 42, "Cover", true);
       }
-    } else if (coverFailed) {
-      renderer.drawText(UI_10_FONT_ID, coverX + 2, coverY + 20, "Cover", true, EpdFontFamily::BOLD);
-      renderer.drawText(UI_10_FONT_ID, coverX + 4, coverY + 36, "not", true);
-      renderer.drawText(UI_10_FONT_ID, coverX + 1, coverY + 52, "avail.", true);
-    } else {
-      renderer.drawText(UI_10_FONT_ID, coverX + 7, coverY + 26, "No", true, EpdFontFamily::BOLD);
-      renderer.drawText(UI_10_FONT_ID, coverX + 2, coverY + 42, "Cover", true);
-    }
 
-    const int textX = coverX + coverBoxWidth + 10;
-    int textY = previewTop + 8;
-    const int resultIndex = getResultIndex(selectedIndex);
-    const std::string selectedTitle =
-        resultIndex >= 0 ? StringUtils::toDisplaySafeAscii(results[resultIndex].title) : std::string("Selected Story");
-    const int headerTextWidth = previewWidth - (textX - previewX) - 8;
-    const auto titleLines =
-        renderer.wrappedText(UI_10_FONT_ID, selectedTitle.c_str(), headerTextWidth, 2, EpdFontFamily::BOLD);
-    for (const auto& line : titleLines) {
-      renderer.drawText(UI_10_FONT_ID, textX, textY, line.c_str(), true, EpdFontFamily::BOLD);
-      textY += renderer.getLineHeight(UI_10_FONT_ID) + 1;
-    }
-
-    if (resultIndex >= 0) {
-      const std::string metaLine = buildResultSubtitle(results[resultIndex], showingHomeFeed);
-      const auto metaLines = renderer.wrappedText(UI_10_FONT_ID, metaLine.c_str(), headerTextWidth, 3, EpdFontFamily::REGULAR);
-      for (const auto& line : metaLines) {
-        renderer.drawText(UI_10_FONT_ID, textX, textY, line.c_str(), true);
-        textY += renderer.getLineHeight(UI_10_FONT_ID);
+      const int textX = coverX + coverBoxWidth + 10;
+      int textY = previewTop + 8;
+      const int resultIndex = getResultIndex(selectedIndex);
+      const std::string selectedTitle =
+          resultIndex >= 0 ? StringUtils::toDisplaySafeAscii(results[resultIndex].title) : std::string("Selected Story");
+      const int headerTextWidth = previewWidth - (textX - previewX) - 8;
+      const int maxTitleLines = compactRoundedPreview ? 1 : 2;
+      const auto titleLines =
+          renderer.wrappedText(UI_10_FONT_ID, selectedTitle.c_str(), headerTextWidth, maxTitleLines, EpdFontFamily::BOLD);
+      for (const auto& line : titleLines) {
+        renderer.drawText(UI_10_FONT_ID, textX, textY, line.c_str(), true, EpdFontFamily::BOLD);
+        textY += renderer.getLineHeight(UI_10_FONT_ID) + 1;
       }
-    }
 
-    std::string previewText = getSelectedPreviewText();
-    if (selectedPreviewFailed()) {
-      previewText = "Summary unavailable for this story.";
-    } else if (previewText.empty()) {
-      previewText = selectedPreviewLoading() ? "Loading story summary..." : "Pause on a story to load a fuller summary.";
-    }
-
-    const int summaryTop = std::max(coverBottom + 6, textY + 6);
-    renderer.drawLine(previewX + 8, summaryTop - 4, previewX + previewWidth - 8, summaryTop - 4);
-    renderer.drawText(UI_10_FONT_ID, previewX + 8, summaryTop, "Summary", true, EpdFontFamily::BOLD);
-
-    const int previewLineHeight = renderer.getLineHeight(UI_10_FONT_ID) + 2;
-    const int previewBottomPadding = 8;
-    const int summaryTextY = summaryTop + renderer.getLineHeight(UI_10_FONT_ID) + 3;
-    const bool showPreviewHint = selectedPreviewOverflows();
-    const int hintReserve = showPreviewHint ? (previewLineHeight + 2) : 0;
-    const int availablePreviewHeight =
-        std::max(0, previewTop + previewBoxHeight - previewBottomPadding - summaryTextY - hintReserve);
-    const int maxPreviewLines = std::max(1, availablePreviewHeight / previewLineHeight);
-    const auto previewLines = renderer.wrappedText(UI_10_FONT_ID, previewText.c_str(), previewWidth - 16, MAX_SUMMARY_WRAP_LINES,
-                                                   EpdFontFamily::REGULAR);
-    const int startLine = 0;
-    const int endLine = std::min(static_cast<int>(previewLines.size()), maxPreviewLines);
-    textY = summaryTextY;
-    for (int lineIndex = startLine; lineIndex < endLine; ++lineIndex) {
-      if (textY + renderer.getLineHeight(UI_10_FONT_ID) > previewTop + previewBoxHeight - previewBottomPadding) {
-        break;
+      if (resultIndex >= 0) {
+        const std::string metaLine = buildResultSubtitle(results[resultIndex], showingHomeFeed);
+        const int maxMetaLines = compactRoundedPreview ? 2 : 3;
+        const auto metaLines =
+            renderer.wrappedText(UI_10_FONT_ID, metaLine.c_str(), headerTextWidth, maxMetaLines, EpdFontFamily::REGULAR);
+        for (const auto& line : metaLines) {
+          renderer.drawText(UI_10_FONT_ID, textX, textY, line.c_str(), true);
+          textY += renderer.getLineHeight(UI_10_FONT_ID);
+        }
       }
-      renderer.drawText(UI_10_FONT_ID, previewX + 8, textY, previewLines[lineIndex].c_str(), true);
-      textY += previewLineHeight;
-    }
 
-    if (showPreviewHint) {
-      const std::string hintText = "Select: open detail for full summary";
-      const std::string safeHint = renderer.truncatedText(UI_10_FONT_ID, hintText.c_str(), previewWidth - 16);
-      renderer.drawText(UI_10_FONT_ID, previewX + 8, previewTop + previewBoxHeight - previewBottomPadding - renderer.getLineHeight(UI_10_FONT_ID),
-                        safeHint.c_str(), true, EpdFontFamily::BOLD);
+      std::string previewText = getSelectedPreviewText();
+      if (selectedPreviewFailed()) {
+        previewText = "Summary unavailable for this story.";
+      } else if (previewText.empty()) {
+        previewText = selectedPreviewLoading() ? "Loading story summary..." : "Pause on a story to load a fuller summary.";
+      }
+
+      const int summaryTop = std::max(coverBottom + 6, textY + 6);
+      renderer.drawLine(previewX + 8, summaryTop - 4, previewX + previewWidth - 8, summaryTop - 4);
+      renderer.drawText(UI_10_FONT_ID, previewX + 8, summaryTop, "Summary", true, EpdFontFamily::BOLD);
+
+      const int previewLineHeight = renderer.getLineHeight(UI_10_FONT_ID) + 2;
+      const int previewBottomPadding = 8;
+      const int summaryTextY = summaryTop + renderer.getLineHeight(UI_10_FONT_ID) + 3;
+      const bool compactPreview = previewBoxHeight < 170 || compactRoundedPreview;
+      const bool showPreviewHint = selectedPreviewOverflows() && !compactPreview;
+      const int hintReserve = showPreviewHint ? (renderer.getLineHeight(SMALL_FONT_ID) + 6) : 0;
+      const int availablePreviewHeight =
+          std::max(0, previewTop + previewBoxHeight - previewBottomPadding - summaryTextY - hintReserve);
+      const int maxPreviewLines = std::max(1, availablePreviewHeight / previewLineHeight);
+      const auto previewLines = renderer.wrappedText(UI_10_FONT_ID, previewText.c_str(), previewWidth - 16,
+                                                     MAX_SUMMARY_WRAP_LINES, EpdFontFamily::REGULAR);
+      const int endLine = std::min(static_cast<int>(previewLines.size()), maxPreviewLines);
+      textY = summaryTextY;
+      for (int lineIndex = 0; lineIndex < endLine; ++lineIndex) {
+        if (textY + renderer.getLineHeight(UI_10_FONT_ID) > previewTop + previewBoxHeight - previewBottomPadding) {
+          break;
+        }
+        renderer.drawText(UI_10_FONT_ID, previewX + 8, textY, previewLines[lineIndex].c_str(), true);
+        textY += previewLineHeight;
+      }
+
+      if (showPreviewHint) {
+        const std::string hintText = "Select: open detail";
+        const std::string safeHint = renderer.truncatedText(SMALL_FONT_ID, hintText.c_str(), previewWidth - 16);
+        const int hintY =
+            previewTop + previewBoxHeight - previewBottomPadding - renderer.getLineHeight(SMALL_FONT_ID);
+        renderer.drawLine(previewX + 8, hintY - 3, previewX + previewWidth - 8, hintY - 3);
+        renderer.drawText(SMALL_FONT_ID, previewX + 8, hintY, safeHint.c_str(), true, EpdFontFamily::REGULAR);
+      }
+      SCREEN_DEBUG.setBodyText("Summary", previewText.c_str(), coverDebugStatus(!coverPath.empty(), coverFailed));
     }
-    SCREEN_DEBUG.setBodyText("Summary", previewText.c_str(), coverDebugStatus(!coverPath.empty(), coverFailed));
   }
 
   if (!popupMessage.empty()) {
     GUI.drawPopup(renderer, popupMessage.c_str());
   }
 
-  const char* rightLabel = showingHomeFeed ? "Refresh" : "Home";
+  const char* rightLabel = supportsHomeFeed() ? (showingHomeFeed ? "Refresh" : "Home") : "";
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "Search", rightLabel);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();

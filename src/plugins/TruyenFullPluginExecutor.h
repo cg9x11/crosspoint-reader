@@ -15,5 +15,7 @@ class TruyenFullPluginExecutor {
   static bool fetchTocPage(const std::string& baseUrl, const std::string& url, int page, std::vector<HakoChapterRef>& outToc,
                            int& outTotalPages);
   static bool fetchToc(const std::string& baseUrl, const std::string& url, std::vector<HakoChapterRef>& outToc);
-  static bool fetchChapter(const std::string& baseUrl, const HakoChapterRef& ref, HakoChapterContent& outContent);
+  static bool fetchChapter(const std::string& baseUrl, const HakoChapterRef& ref, HakoChapterContent& outContent,
+                           bool includePlainText = true);
+  static void clearMemoryCaches();
 };

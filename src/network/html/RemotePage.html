@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CrossPoint Remote</title>
+    <style>
+      :root {
+        --bg: #f4f4f1;
+        --card: #ffffff;
+        --text: #1e1e1e;
+        --muted: #6b7280;
+        --line: #d9dde3;
+        --accent: #2f6f5b;
+        --accent-2: #e9f2ee;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #141618;
+          --card: #1d2125;
+          --text: #f3f4f6;
+          --muted: #9ca3af;
+          --line: #30363d;
+          --accent: #6aa38c;
+          --accent-2: #20332c;
+          color-scheme: dark;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      main {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+      .nav-links {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .nav-links a {
+        padding: 10px 14px;
+        border-radius: 10px;
+        text-decoration: none;
+        color: var(--text);
+      }
+      .nav-links a.active {
+        background: var(--accent);
+        color: #fff;
+      }
+      .panel {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 14px;
+        margin-bottom: 14px;
+      }
+      .status {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+      }
+      .status-item {
+        padding: 10px;
+        background: var(--accent-2);
+        border-radius: 12px;
+      }
+      .status-item small {
+        display: block;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      .screen-wrap {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        overflow: hidden;
+      }
+      #screen {
+        width: 100%;
+        height: auto;
+        display: block;
+        background: #fff;
+      }
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }
+      .toolbar button,
+      .pad button,
+      .side-buttons button,
+      .text-row button {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--card);
+        color: var(--text);
+        min-height: 46px;
+        font-size: 16px;
+      }
+      .toolbar button {
+        padding: 0 14px;
+      }
+      .controls {
+        display: grid;
+        grid-template-columns: 1fr minmax(220px, 320px) 1fr;
+        gap: 12px;
+        align-items: center;
+      }
+      .pad {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+      .pad button {
+        width: 100%;
+      }
+      .side-buttons {
+        display: grid;
+        gap: 8px;
+      }
+      .text-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+      }
+      input[type="text"] {
+        width: 100%;
+        min-height: 46px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 0 14px;
+        background: var(--card);
+        color: var(--text);
+        font-size: 16px;
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 14px;
+        margin-top: 8px;
+      }
+      @media (max-width: 760px) {
+        .controls {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="nav-links">
+        <a href="/">Home</a>
+        <a href="/remote" class="active">Remote</a>
+        <a href="/files">File Manager</a>
+        <a href="/settings">Settings</a>
+      </div>
+
+      <section class="panel">
+        <div class="status">
+          <div class="status-item">
+            <small>Activity</small>
+            <strong id="activity">-</strong>
+          </div>
+          <div class="status-item">
+            <small>Text Input</small>
+            <strong id="text-support">Unknown</strong>
+          </div>
+          <div class="status-item">
+            <small>IP</small>
+            <strong id="ip">-</strong>
+          </div>
+          <div class="status-item">
+            <small>Free Heap</small>
+            <strong id="heap">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="screen-wrap">
+          <img id="screen" alt="CrossPoint screen snapshot" />
+        </div>
+        <div class="toolbar">
+          <button type="button" onclick="refreshScreen()">Refresh Screen</button>
+          <button type="button" onclick="refreshStatus()">Refresh Status</button>
+        </div>
+      </section>
+
+      <section class="panel controls">
+        <div class="side-buttons">
+          <button type="button" onclick="sendButton('page-back')">Page -</button>
+          <button type="button" onclick="sendButton('back')">Back</button>
+        </div>
+
+        <div class="pad">
+          <span></span>
+          <button type="button" onclick="sendButton('up')">Up</button>
+          <span></span>
+          <button type="button" onclick="sendButton('left')">Left</button>
+          <button type="button" onclick="sendButton('confirm')">OK</button>
+          <button type="button" onclick="sendButton('right')">Right</button>
+          <span></span>
+          <button type="button" onclick="sendButton('down')">Down</button>
+          <span></span>
+        </div>
+
+        <div class="side-buttons">
+          <button type="button" onclick="sendButton('page-forward')">Page +</button>
+          <button type="button" onclick="sendText()">Send Text</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="text-row">
+          <input id="text-input" type="text" placeholder="Text to submit to on-device keyboard" enterkeyhint="send" />
+          <button type="button" id="send-text-button" onclick="sendText()">Send</button>
+        </div>
+        <div class="hint">
+          Text submit only works when the current screen is a text-entry keyboard. It replaces the whole field and
+          confirms immediately.
+        </div>
+      </section>
+    </main>
+
+    <script>
+      let statusTimer = null;
+      let screenTimer = null;
+      let canAcceptText = false;
+
+      async function postJson(url, payload) {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        return response.json();
+      }
+
+      async function refreshStatus() {
+        try {
+          const response = await fetch('/api/remote/status', { cache: 'no-store' });
+          if (!response.ok) {
+            throw new Error('Status request failed');
+          }
+          const data = await response.json();
+          document.getElementById('activity').textContent = data.currentActivity || '-';
+          document.getElementById('text-support').textContent = data.canAcceptText ? 'Ready' : 'Inactive';
+          document.getElementById('ip').textContent = data.ip || '-';
+          document.getElementById('heap').textContent = data.freeHeap ? data.freeHeap.toLocaleString() + ' B' : '-';
+          canAcceptText = !!data.canAcceptText;
+          document.getElementById('text-input').disabled = !canAcceptText;
+          document.getElementById('send-text-button').disabled = !canAcceptText;
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      function refreshScreen() {
+        document.getElementById('screen').src = '/api/remote/screen.bmp?t=' + Date.now();
+      }
+
+      async function sendButton(button) {
+        try {
+          await postJson('/api/remote/button', { button });
+          queueRefresh();
+        } catch (error) {
+          alert(error.message);
+        }
+      }
+
+      async function sendText() {
+        if (!canAcceptText) {
+          return;
+        }
+        const input = document.getElementById('text-input');
+        try {
+          await postJson('/api/remote/text', { text: input.value });
+          queueRefresh(260);
+        } catch (error) {
+          alert(error.message);
+        }
+      }
+
+      function queueRefresh(delay = 180) {
+        window.clearTimeout(screenTimer);
+        window.clearTimeout(statusTimer);
+        screenTimer = window.setTimeout(refreshScreen, delay);
+        statusTimer = window.setTimeout(refreshStatus, delay);
+      }
+
+      document.getElementById('text-input').addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          sendText();
+        }
+      });
+
+      refreshStatus();
+      refreshScreen();
+      window.setInterval(refreshStatus, 2000);
+      window.setInterval(refreshScreen, 1500);
+    </script>
+  </body>
+</html>

@@ -36,8 +36,14 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .keyboardKeyWidth = 22,
                                  .keyboardKeyHeight = 30,
                                  .keyboardKeySpacing = 10,
-                                 .keyboardBottomAligned = false,
-                                 .keyboardCenteredText = false};
+                                 .keyboardBottomKeyHeight = 30,
+                                 .keyboardBottomKeySpacing = 5,
+                                 .keyboardBottomAligned = true,
+                                 .keyboardCenteredText = false,
+                                 .keyboardVerticalOffset = -6,
+                                 .keyboardTextFieldWidthPercent = 85,
+                                 .keyboardWidthPercent = 90,
+                                 .keyboardKeyCornerRadius = 10};
 }
 
 class RoundedRaffTheme : public BaseTheme {

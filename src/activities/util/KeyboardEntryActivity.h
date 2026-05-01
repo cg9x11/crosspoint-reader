@@ -34,6 +34,8 @@ class KeyboardEntryActivity : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   bool handleAutomationTextInput(const std::string& text) override;
+  bool supportsAutomationTextInput() const override { return true; }
+  bool handleExternalKeyboardEvent(const ExternalKeyboardEvent& event) override;
 
  private:
   std::string title;

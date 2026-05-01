@@ -97,12 +97,13 @@ def detect_profile(metadata: dict, sources: Dict[str, str]) -> str:
 
 def convert_to_cpplugin(plugin: dict, sources: Dict[str, str], plugin_id: str | None) -> dict:
     metadata = plugin.get("metadata") or {}
+    script_map = plugin.get("script") or {}
     if not metadata:
         raise ValueError("plugin.json is missing metadata")
 
     profile = detect_profile(metadata, sources)
     repaired_name = repair_text(metadata.get("name", profile))
-    resolved_plugin_id = plugin_id or slugify(repaired_name or str(metadata.get("name", profile)))
+    resolved_plugin_id = plugin_id or profile
 
     description = repair_text(metadata.get("description", ""))
     author = repair_text(metadata.get("author", "vBook")) or "vBook"
@@ -128,6 +129,11 @@ def convert_to_cpplugin(plugin: dict, sources: Dict[str, str], plugin_id: str | 
                 "profile": profile,
                 "sourceLanguage": str(metadata.get("language", "javascript")),
                 "scriptFiles": sorted(sources.keys()),
+                "entrypoints": {
+                    str(key): str(value)
+                    for key, value in script_map.items()
+                    if str(key).strip() and str(value).strip()
+                },
             },
         },
         "source": {

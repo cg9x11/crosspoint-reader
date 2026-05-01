@@ -5,9 +5,11 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 #include <esp_task_wdt.h>
 
 #include <cstddef>
+#include <new>
 
 #include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
@@ -15,6 +17,7 @@
 #include "activities/network/CalibreConnectActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/BackgroundWebServerRuntime.h"
 #include "util/QrUtils.h"
 
 namespace {
@@ -26,16 +29,38 @@ constexpr uint8_t AP_CHANNEL = 1;
 constexpr uint8_t AP_MAX_CONNECTIONS = 4;
 constexpr int QR_CODE_WIDTH = 198;
 constexpr int QR_CODE_HEIGHT = 198;
+constexpr uint32_t AP_MIN_HEAP_FOR_WEB_SERVER = 28000;
+constexpr uint32_t AP_MIN_HEAP_FOR_OPTIONAL_SERVICES = 42000;
 
 // DNS server for captive portal (redirects all DNS queries to our IP)
 DNSServer* dnsServer = nullptr;
 constexpr uint16_t DNS_PORT = 53;
+
+uint32_t largestHeapBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }
 }  // namespace
+
+void tickBackgroundWebServerNetworkServices() {
+  if (dnsServer) {
+    dnsServer->processNextRequest();
+  }
+}
 
 void CrossPointWebServerActivity::onEnter() {
   Activity::onEnter();
 
   LOG_DBG("WEBACT", "Free heap at onEnter: %d bytes", ESP.getFreeHeap());
+  handoffToBackground = false;
+
+  if (BACKGROUND_WEB_SERVER_RUNTIME.isRunning()) {
+    webServer = BACKGROUND_WEB_SERVER_RUNTIME.takeOwnership();
+    state = WebServerActivityState::SERVER_RUNNING;
+    networkMode = WiFi.getMode() & WIFI_MODE_AP ? NetworkMode::CREATE_HOTSPOT : NetworkMode::JOIN_NETWORK;
+    isApMode = (networkMode == NetworkMode::CREATE_HOTSPOT);
+    connectedIP = isApMode ? WiFi.softAPIP().toString().c_str() : WiFi.localIP().toString().c_str();
+    connectedSSID = isApMode ? WiFi.softAPSSID().c_str() : WiFi.SSID().c_str();
+    requestUpdate();
+    return;
+  }
 
   // Reset state
   state = WebServerActivityState::MODE_SELECTION;
@@ -60,6 +85,11 @@ void CrossPointWebServerActivity::onEnter() {
 
 void CrossPointWebServerActivity::onExit() {
   Activity::onExit();
+
+  if (handoffToBackground) {
+    LOG_DBG("WEBACT", "Leaving web server active in background");
+    return;
+  }
 
   LOG_DBG("WEBACT", "Free heap at onExit start: %d bytes", ESP.getFreeHeap());
 
@@ -183,7 +213,7 @@ void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) 
 
 void CrossPointWebServerActivity::startAccessPoint() {
   LOG_DBG("WEBACT", "Starting Access Point mode...");
-  LOG_DBG("WEBACT", "Free heap before AP start: %d bytes", ESP.getFreeHeap());
+  LOG_DBG("WEBACT", "Free heap before AP start: %d bytes, largest block: %u", ESP.getFreeHeap(), largestHeapBlock());
 
   // Configure and start the AP
   WiFi.mode(WIFI_AP);
@@ -216,6 +246,21 @@ void CrossPointWebServerActivity::startAccessPoint() {
   LOG_DBG("WEBACT", "Access Point started!");
   LOG_DBG("WEBACT", "SSID: %s", AP_SSID);
   LOG_DBG("WEBACT", "IP: %s", connectedIP.c_str());
+  LOG_DBG("WEBACT", "Free heap after AP init: %d bytes, largest block: %u", ESP.getFreeHeap(), largestHeapBlock());
+
+  // Start the web server first. On X3 the optional AP services below can consume
+  // enough heap to make the server allocation abort.
+  startWebServer();
+
+  if (state != WebServerActivityState::SERVER_RUNNING) {
+    return;
+  }
+
+  if (ESP.getFreeHeap() < AP_MIN_HEAP_FOR_OPTIONAL_SERVICES || largestHeapBlock() < 12000) {
+    LOG_DBG("WEBACT", "Skipping AP mDNS/DNS due to low heap: free=%d largest=%u", ESP.getFreeHeap(),
+            largestHeapBlock());
+    return;
+  }
 
   // Start mDNS for hostname resolution
   if (MDNS.begin(AP_HOSTNAME)) {
@@ -226,27 +271,39 @@ void CrossPointWebServerActivity::startAccessPoint() {
 
   // Start DNS server for captive portal behavior
   // This redirects all DNS queries to our IP, making any domain typed resolve to us
-  dnsServer = new DNSServer();
+  dnsServer = new (std::nothrow) DNSServer();
+  if (!dnsServer) {
+    LOG_ERR("WEBACT", "Failed to allocate DNS server");
+    return;
+  }
   dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
   dnsServer->start(DNS_PORT, "*", apIP);
   LOG_DBG("WEBACT", "DNS server started for captive portal");
-
-  LOG_DBG("WEBACT", "Free heap after AP start: %d bytes", ESP.getFreeHeap());
-
-  // Start the web server
-  startWebServer();
+  LOG_DBG("WEBACT", "Free heap after optional AP services: %d bytes, largest block: %u", ESP.getFreeHeap(),
+          largestHeapBlock());
 }
 
 void CrossPointWebServerActivity::startWebServer() {
-  LOG_DBG("WEBACT", "Starting web server...");
+  LOG_DBG("WEBACT", "Starting web server... free=%d largest=%u", ESP.getFreeHeap(), largestHeapBlock());
+
+  if (ESP.getFreeHeap() < AP_MIN_HEAP_FOR_WEB_SERVER || largestHeapBlock() < 16000) {
+    LOG_ERR("WEBACT", "Not enough heap to start web server safely");
+    onGoHome();
+    return;
+  }
 
   // Create the web server instance
-  webServer.reset(new CrossPointWebServer());
+  webServer.reset(new (std::nothrow) CrossPointWebServer(renderer, mappedInput));
+  if (!webServer) {
+    LOG_ERR("WEBACT", "Failed to allocate CrossPointWebServer");
+    onGoHome();
+    return;
+  }
   webServer->begin();
 
   if (webServer->isRunning()) {
     state = WebServerActivityState::SERVER_RUNNING;
-    LOG_DBG("WEBACT", "Web server started successfully");
+    LOG_DBG("WEBACT", "Web server started successfully, free=%d largest=%u", ESP.getFreeHeap(), largestHeapBlock());
 
     // Force an immediate render since we're transitioning from a subactivity
     // that had its own rendering task. We need to make sure our display is shown.
@@ -271,6 +328,13 @@ void CrossPointWebServerActivity::stopWebServer() {
 void CrossPointWebServerActivity::loop() {
   // Handle different states
   if (state == WebServerActivityState::SERVER_RUNNING) {
+    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm) && webServer && webServer->isRunning()) {
+      BACKGROUND_WEB_SERVER_RUNTIME.activate(std::move(webServer));
+      handoffToBackground = true;
+      onGoHome();
+      return;
+    }
+
     // Handle DNS requests for captive portal (AP mode only)
     if (isApMode && dnsServer) {
       dnsServer->processNextRequest();
@@ -437,6 +501,6 @@ void CrossPointWebServerActivity::renderServerRunning() const {
     renderer.drawCenteredText(SMALL_FONT_ID, startY, hostnameUrl.c_str(), true);
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");
+  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "Home", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

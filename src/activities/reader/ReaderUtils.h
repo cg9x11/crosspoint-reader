@@ -59,6 +59,10 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
   }
 }
 
+inline bool shouldUseTextAntiAliasing() {
+  return SETTINGS.textAntiAliasing != 0;
+}
+
 // Grayscale anti-aliasing pass. Renders content twice (LSB + MSB) to build
 // the grayscale buffer. Only the content callback is re-rendered — status bars
 // and other overlays should be drawn before calling this.

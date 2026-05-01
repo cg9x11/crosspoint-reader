@@ -8,20 +8,30 @@
 #include <cstdlib>
 
 #include "network/HttpDownloader.h"
+#include "network/OnlineDebugLog.h"
+#include "util/HtmlLiteTokenizer.h"
 #include "util/StringUtils.h"
 
 namespace {
 constexpr char MODULE[] = "HAKO";
 constexpr uint32_t CHAPTER_FETCH_RETRY_DELAYS_MS[] = {1500, 5000};
-constexpr unsigned long HOME_FEED_CACHE_TTL_MS = 120000;
+constexpr size_t HOME_FETCH_CAP_BYTES = 48 * 1024;
+constexpr size_t SEARCH_FETCH_CAP_BYTES = 48 * 1024;
+constexpr size_t DETAIL_FETCH_CAP_BYTES = 72 * 1024;
+constexpr size_t TOC_FETCH_CAP_BYTES = 96 * 1024;
+constexpr size_t CHAPTER_FETCH_CAP_BYTES = 160 * 1024;
+constexpr size_t DETAIL_DESCRIPTION_CAP_BYTES = 4096;
+constexpr const char* HOME_FEED_URL = "https://docln.sbs/danh-sach?sapxep=truyenmoi";
+constexpr uint32_t HEAVY_FALLBACK_MIN_FREE_HEAP = 98000;
+constexpr uint32_t HEAVY_FALLBACK_MIN_LARGEST_BLOCK = 72000;
 
-struct HomeFeedCacheEntry {
-  std::vector<HakoSearchResult> results;
-  unsigned long fetchedAtMs = 0;
-  bool valid = false;
-};
-
-HomeFeedCacheEntry g_homeFeedCache;
+void capRetainedHtml(std::string& html, size_t maxBytes) {
+  if (html.size() <= maxBytes) {
+    return;
+  }
+  html.resize(maxBytes);
+  html.shrink_to_fit();
+}
 
 std::string htmlDecode(std::string s) {
   auto replaceAll = [](std::string& value, const std::string& from, const std::string& to) {
@@ -144,7 +154,16 @@ std::string extractStyleUrl(const std::string& style) {
   return htmlDecode(style.substr(start, end - start));
 }
 
+bool shouldAttemptHeavyHtmlFallback() {
+  return ESP.getFreeHeap() >= HEAVY_FALLBACK_MIN_FREE_HEAP && ESP.getMaxAllocHeap() >= HEAVY_FALLBACK_MIN_LARGEST_BLOCK;
+}
+
 std::string getQueryParamSeparator(const std::string& url) { return url.find('?') == std::string::npos ? "?" : "&"; }
+
+bool hasHakoVolumeSegment(const std::string& url) {
+  const size_t tPos = url.find("/t");
+  return tPos != std::string::npos && tPos + 2 < url.size() && std::isdigit(static_cast<unsigned char>(url[tPos + 2])) != 0;
+}
 
 std::string urlEncode(const std::string& value) {
   static constexpr char kHex[] = "0123456789ABCDEF";
@@ -283,6 +302,62 @@ std::string buildHomeDisplaySubtitle(const std::string& sectionLabel, const std:
     subtitle = subtitle.empty() ? compactVolume : subtitle + " " + compactVolume;
   }
   return subtitle;
+}
+
+bool hasSeenUrl(const std::vector<std::string>& seenUrls, const std::string& url) {
+  return std::find(seenUrls.begin(), seenUrls.end(), url) != seenUrls.end();
+}
+
+bool appendHomeFeedResultFromBlock(const std::string& block, const std::string& sectionLabel,
+                                   std::vector<std::string>& seenUrls, std::vector<HakoSearchResult>& outResults,
+                                   bool styleCoverFallback = false) {
+  HakoSearchResult result;
+  std::string href;
+  if (!extractAttrNear(block, "series-title", "href", href)) return false;
+  result.url = makeAbsoluteUrl(href);
+  if (hasSeenUrl(seenUrls, result.url)) {
+    return false;
+  }
+
+  std::string titleHtml;
+  if (!extractTagContent(block, "series-title", ">", "</a>", titleHtml)) return false;
+  result.title = stripTags(titleHtml);
+
+  std::string chapterHtml;
+  std::string volumeHtml;
+  if (extractTagContent(block, "chapter-title", ">", "</div>", chapterHtml)) {
+    result.homeLatestChapterTitle = stripTags(chapterHtml);
+  }
+  if (extractTagContent(block, "volume-title", ">", "</div>", volumeHtml)) {
+    result.homeVolumeTitle = stripTags(volumeHtml);
+  }
+
+  result.homeSectionLabel = sectionLabel;
+  result.homeDisplaySubtitle =
+      buildHomeDisplaySubtitle(result.homeSectionLabel, result.homeVolumeTitle, result.homeLatestChapterTitle);
+
+  if (!result.homeSectionLabel.empty()) {
+    result.description = result.homeSectionLabel;
+  }
+  if (!result.homeVolumeTitle.empty()) {
+    result.description = result.description.empty() ? result.homeVolumeTitle
+                                                    : result.description + " | " + result.homeVolumeTitle;
+  }
+  if (!result.homeLatestChapterTitle.empty()) {
+    result.description = result.description.empty() ? result.homeLatestChapterTitle
+                                                    : result.description + " | " + result.homeLatestChapterTitle;
+  }
+
+  if (!extractAttrNear(block, "img-in-ratio", "data-bg", result.coverUrl) && styleCoverFallback) {
+    std::string style;
+    if (extractAttrNear(block, "img-in-ratio", "style", style)) {
+      result.coverUrl = extractStyleUrl(style);
+    }
+  }
+
+  seenUrls.push_back(result.url);
+  outResults.push_back(std::move(result));
+  return true;
 }
 
 std::vector<int> extractIntegers(const std::string& value) {
@@ -437,7 +512,287 @@ bool containsAsciiCaseInsensitive(const std::string& haystack, const std::string
 bool containsVerificationMarker(const std::string& html) {
   return containsAsciiCaseInsensitive(html, "captcha") || containsAsciiCaseInsensitive(html, "cloudflare") ||
          containsAsciiCaseInsensitive(html, "access denied") || containsAsciiCaseInsensitive(html, "ddos") ||
-         containsAsciiCaseInsensitive(html, "xác minh") || containsAsciiCaseInsensitive(html, "verify you are human");
+         containsAsciiCaseInsensitive(html, "xÃƒÆ’Ã‚Â¡c minh") || containsAsciiCaseInsensitive(html, "verify you are human");
+}
+
+
+bool parseHomeFeedBlocks(const std::string& html, std::vector<HakoSearchResult>& outResults) {
+  outResults.clear();
+  std::vector<std::string> seenUrls;
+  std::vector<std::string> sections;
+  if (extractSectionBlocks(html, "thumb-section-flow", sections)) {
+    for (const std::string& section : sections) {
+      const std::string label = extractSectionLabel(section);
+      const std::vector<std::string> blocks = collectBlocks(section, "thumb-item-flow");
+      for (const std::string& block : blocks) {
+        appendHomeFeedResultFromBlock(block, label, seenUrls, outResults, true);
+      }
+    }
+  }
+
+  if (!outResults.empty()) {
+    return true;
+  }
+
+  const std::vector<std::string> blocks = collectBlocks(html, "thumb-item-flow");
+  for (const std::string& block : blocks) {
+    appendHomeFeedResultFromBlock(block, std::string{}, seenUrls, outResults, true);
+  }
+  return !outResults.empty();
+}
+
+bool parseSearchResultBlocks(const std::string& html, std::vector<HakoSearchResult>& outResults) {
+  outResults.clear();
+  std::vector<std::string> seenUrls;
+  const std::vector<std::string> blocks = collectBlocks(html, "thumb-item-flow");
+  for (const std::string& block : blocks) {
+    appendHomeFeedResultFromBlock(block, std::string{}, seenUrls, outResults, true);
+  }
+  return !outResults.empty();
+}
+
+std::string extractTagNameAt(const std::string& html, size_t tagStart) {
+  if (tagStart >= html.size() || html[tagStart] != '<') {
+    return "";
+  }
+
+  size_t pos = tagStart + 1;
+  while (pos < html.size() && std::isspace(static_cast<unsigned char>(html[pos]))) {
+    ++pos;
+  }
+
+  const size_t nameStart = pos;
+  while (pos < html.size() && (std::isalnum(static_cast<unsigned char>(html[pos])) || html[pos] == '-' || html[pos] == ':')) {
+    ++pos;
+  }
+
+  if (pos <= nameStart) {
+    return "";
+  }
+  return html.substr(nameStart, pos - nameStart);
+}
+
+std::string extractTagTextByMarker(const std::string& html, const std::string& marker) {
+  const size_t markerPos = html.find(marker);
+  if (markerPos == std::string::npos) {
+    return "";
+  }
+
+  const size_t tagStart = html.rfind('<', markerPos);
+  if (tagStart == std::string::npos) {
+    return "";
+  }
+
+  const std::string tagName = extractTagNameAt(html, tagStart);
+  if (tagName.empty()) {
+    return "";
+  }
+
+  const size_t openEnd = html.find('>', markerPos);
+  if (openEnd == std::string::npos) {
+    return "";
+  }
+
+  const std::string closeTag = "</" + tagName + ">";
+  const size_t closePos = html.find(closeTag, openEnd + 1);
+  if (closePos == std::string::npos) {
+    return "";
+  }
+
+  return stripTags(html.substr(openEnd + 1, closePos - openEnd - 1));
+}
+
+std::vector<std::string> collectBalancedDivBlocks(const std::string& html, const std::string& marker) {
+  std::vector<std::string> blocks;
+  size_t searchPos = 0;
+  while (searchPos < html.size()) {
+    const size_t markerPos = html.find(marker, searchPos);
+    if (markerPos == std::string::npos) {
+      break;
+    }
+
+    const size_t divStart = html.rfind("<div", markerPos);
+    if (divStart == std::string::npos) {
+      searchPos = markerPos + marker.size();
+      continue;
+    }
+
+    const std::string block = findBalancedDiv(html.substr(divStart), marker);
+    if (block.empty()) {
+      searchPos = markerPos + marker.size();
+      continue;
+    }
+
+    blocks.push_back(block);
+    searchPos = divStart + block.size();
+  }
+  return blocks;
+}
+
+void parseDetailInfoBlocks(const std::string& html, HakoBookDetail& outDetail) {
+  const std::vector<std::string> infoBlocks = collectBalancedDivBlocks(html, "info-item");
+  for (const std::string& block : infoBlocks) {
+    const std::string label = toLowerAscii(extractTagTextByMarker(block, "info-name"));
+    const std::string value = extractTagTextByMarker(block, "info-value");
+    if (label.empty() || value.empty()) {
+      continue;
+    }
+
+    if (label.find("tac gia") != std::string::npos) {
+      outDetail.author = value;
+    } else if (label.find("tinh trang") != std::string::npos) {
+      const std::string status = toLowerAscii(value);
+      outDetail.ongoing = status.find("dang tien hanh") != std::string::npos;
+    }
+  }
+}
+
+bool parseDetailFromHtml(const std::string& html, const std::string& resolvedUrl, HakoBookDetail& outDetail) {
+  outDetail = HakoBookDetail{};
+  outDetail.url = resolvedUrl;
+
+  outDetail.title = extractTagTextByMarker(html, "series-name");
+
+  std::string coverBlock = findBalancedDiv(html, "series-cover");
+  if (!coverBlock.empty()) {
+    if (!extractAttrNear(coverBlock, "img-in-ratio", "data-bg", outDetail.coverUrl)) {
+      std::string style;
+      if (extractAttrNear(coverBlock, "img-in-ratio", "style", style)) {
+        outDetail.coverUrl = extractStyleUrl(style);
+      }
+    }
+  }
+
+  std::string summaryBlock = findBalancedDiv(html, "summary-content");
+  if (!summaryBlock.empty()) {
+    const std::string summary = stripTags(summaryBlock);
+    if (!summary.empty()) {
+      outDetail.descriptionHtml = "<p>" + summary + "</p>";
+      capRetainedHtml(outDetail.descriptionHtml, DETAIL_DESCRIPTION_CAP_BYTES);
+    }
+  }
+
+  size_t genrePos = 0;
+  while ((genrePos = html.find("series-gerne-item", genrePos)) != std::string::npos) {
+    const size_t openEnd = html.find('>', genrePos);
+    if (openEnd == std::string::npos) {
+      break;
+    }
+
+    const size_t closePos = html.find("</a>", openEnd + 1);
+    if (closePos == std::string::npos) {
+      break;
+    }
+
+    const std::string genre = stripTags(html.substr(openEnd + 1, closePos - openEnd - 1));
+    if (!genre.empty()) {
+      outDetail.genres.push_back(genre);
+    }
+    genrePos = closePos + 4;
+  }
+
+  parseDetailInfoBlocks(html, outDetail);
+  return !outDetail.title.empty();
+}
+
+void renumberToc(std::vector<HakoChapterRef>& toc, uint32_t startIndex = 1) {
+  for (auto& ref : toc) {
+    ref.index = startIndex++;
+  }
+}
+
+std::string extractVolumeTitleFromPageTitle(const std::string& html) {
+  const std::string pageTitle = extractTagTextByMarker(html, "<title>");
+  if (pageTitle.empty()) {
+    return "";
+  }
+
+  const size_t sepPos = pageTitle.find(" - Cổng Light Novel");
+  const std::string trimmed = sepPos == std::string::npos ? pageTitle : pageTitle.substr(0, sepPos);
+  const size_t seriesSep = trimmed.find(" - ");
+  if (seriesSep == std::string::npos || seriesSep + 3 >= trimmed.size()) {
+    return "";
+  }
+  return trim(trimmed.substr(seriesSep + 3));
+}
+
+void collectUniqueVolumeUrls(const std::string& html, std::vector<std::string>& outUrls) {
+  std::vector<std::string> seen;
+
+  auto appendCandidate = [&](std::string candidate) {
+    if (candidate.empty()) {
+      return;
+    }
+
+    const size_t quotePos = candidate.find('"');
+    if (quotePos != std::string::npos) {
+      candidate.resize(quotePos);
+    }
+    const size_t apostrophePos = candidate.find('\'');
+    if (apostrophePos != std::string::npos) {
+      candidate.resize(apostrophePos);
+    }
+    const size_t anglePos = candidate.find('<');
+    if (anglePos != std::string::npos) {
+      candidate.resize(anglePos);
+    }
+    const size_t spacePos = candidate.find(' ');
+    if (spacePos != std::string::npos) {
+      candidate.resize(spacePos);
+    }
+
+    candidate = htmlDecode(trim(candidate));
+    if (!hasHakoVolumeSegment(candidate)) {
+      return;
+    }
+
+    const std::string absoluteUrl = makeAbsoluteUrl(candidate);
+    if (!hasSeenUrl(seen, absoluteUrl)) {
+      seen.push_back(absoluteUrl);
+      outUrls.push_back(absoluteUrl);
+    }
+  };
+
+  size_t searchPos = 0;
+  while (searchPos < html.size()) {
+    const size_t hrefPos = html.find("href=\"", searchPos);
+    if (hrefPos == std::string::npos) {
+      break;
+    }
+
+    const size_t valueStart = hrefPos + 6;
+    const size_t valueEnd = html.find('"', valueStart);
+    if (valueEnd == std::string::npos) {
+      break;
+    }
+
+    appendCandidate(html.substr(valueStart, valueEnd - valueStart));
+
+    searchPos = valueEnd + 1;
+  }
+
+  if (!outUrls.empty()) {
+    return;
+  }
+
+  searchPos = 0;
+  while (searchPos < html.size()) {
+    const size_t urlPos = html.find("/truyen/", searchPos);
+    if (urlPos == std::string::npos) {
+      break;
+    }
+
+    size_t endPos = urlPos;
+    while (endPos < html.size()) {
+      const char ch = html[endPos];
+      if (ch == '"' || ch == '\'' || ch == '<' || std::isspace(static_cast<unsigned char>(ch)) != 0) {
+        break;
+      }
+      ++endPos;
+    }
+    appendCandidate(html.substr(urlPos, endPos - urlPos));
+    searchPos = endPos;
+  }
 }
 
 std::string extractChapterContainerHtml(const std::string& html) {
@@ -451,6 +806,128 @@ std::string extractChapterContainerHtml(const std::string& html) {
     return chapterHtml;
   }
 
+  return "";
+}
+
+class RawBalancedDivStreamExtractor {
+ public:
+  RawBalancedDivStreamExtractor(std::string startMarker, size_t maxBytes)
+      : startMarker_(std::move(startMarker)), maxBytes_(maxBytes) {
+    tail_.reserve(std::max<size_t>(startMarker_.size(), 32));
+    tagBuffer_.reserve(128);
+  }
+
+  bool feed(const uint8_t* data, size_t size) {
+    if (!data || size == 0 || finished_ || overflowed_) {
+      return !overflowed_;
+    }
+
+    if (!started_) {
+      std::string candidate = tail_;
+      candidate.append(reinterpret_cast<const char*>(data), size);
+      const size_t markerPos = candidate.find(startMarker_);
+      if (markerPos == std::string::npos) {
+        const size_t keep = startMarker_.size() > 1 ? startMarker_.size() - 1 : 0;
+        if (candidate.size() > keep) {
+          tail_.assign(candidate.data() + candidate.size() - keep, keep);
+        } else {
+          tail_ = std::move(candidate);
+        }
+        return true;
+      }
+
+      const size_t divStart = candidate.rfind("<div", markerPos);
+      const size_t captureStart = divStart == std::string::npos ? markerPos : divStart;
+      started_ = true;
+      tail_.clear();
+      return appendAndScan(candidate.data() + captureStart, candidate.size() - captureStart);
+    }
+
+    return appendAndScan(reinterpret_cast<const char*>(data), size);
+  }
+
+  bool started() const { return started_; }
+  bool finished() const { return finished_; }
+  bool overflowed() const { return overflowed_; }
+  const std::string& captured() const { return captured_; }
+
+ private:
+  bool appendAndScan(const char* data, size_t size) {
+    if (!data || size == 0) {
+      return true;
+    }
+
+    const size_t room = maxBytes_ > captured_.size() ? maxBytes_ - captured_.size() : 0;
+    if (room == 0) {
+      overflowed_ = true;
+      return false;
+    }
+
+    const size_t toCopy = std::min(room, size);
+    captured_.append(data, toCopy);
+    scanAppended(data, toCopy);
+    if (toCopy < size && !finished_) {
+      overflowed_ = true;
+      return false;
+    }
+    return !overflowed_ && !finished_;
+  }
+
+  void scanAppended(const char* data, size_t size) {
+    for (size_t i = 0; i < size && !finished_; ++i) {
+      const char ch = data[i];
+      if (inTag_) {
+        tagBuffer_.push_back(ch);
+        if (ch == '>') {
+          finalizeTag();
+        }
+        continue;
+      }
+
+      if (ch == '<') {
+        inTag_ = true;
+        tagBuffer_.clear();
+        tagBuffer_.push_back(ch);
+      }
+    }
+  }
+
+  void finalizeTag() {
+    inTag_ = false;
+    const std::string lowerTag = toLowerAscii(tagBuffer_);
+    if (lowerTag.rfind("<div", 0) == 0) {
+      ++depth_;
+    } else if (lowerTag.rfind("</div", 0) == 0) {
+      --depth_;
+      if (started_ && depth_ <= 0) {
+        finished_ = true;
+      }
+    }
+    tagBuffer_.clear();
+  }
+
+  std::string startMarker_;
+  size_t maxBytes_ = 0;
+  std::string tail_;
+  std::string captured_;
+  std::string tagBuffer_;
+  int depth_ = 0;
+  bool started_ = false;
+  bool finished_ = false;
+  bool overflowed_ = false;
+  bool inTag_ = false;
+};
+
+std::string streamChapterContainerHtml(const std::string& url, const std::string& marker) {
+  RawBalancedDivStreamExtractor extractor(marker, CHAPTER_FETCH_CAP_BYTES);
+  const bool fetchOk = HttpDownloader::fetchUrlFromMarkerStreamed(
+      url, marker, [&extractor](const uint8_t* data, size_t size) { return extractor.feed(data, size); });
+  if (fetchOk && extractor.started() && extractor.finished() && !extractor.overflowed()) {
+    return extractor.captured();
+  }
+  if (extractor.overflowed()) {
+    HttpDownloader::clearLastError();
+  }
   return "";
 }
 
@@ -587,224 +1064,725 @@ void cleanupChapterHtml(std::string& html) {
 }
 }  // namespace
 
-bool HakoPluginExecutor::search(const std::string& query, int page, std::vector<HakoSearchResult>& outResults) {
-  outResults.clear();
-  constexpr size_t SEARCH_PAGE_SIZE = 20;
-  std::string html;
-  const std::string url =
-      std::string(BASE_URL) + "/tim-kiem" + getQueryParamSeparator(std::string(BASE_URL) + "/tim-kiem") + "keywords=" + urlEncode(query) +
-      "&page=" + std::to_string(page);
-  if (!HttpDownloader::fetchUrl(url, html)) {
+bool classHasToken(const std::string& classAttr, const char* token) {
+  const std::string lower = toLowerAscii(classAttr);
+  const std::string needle = toLowerAscii(token);
+  size_t pos = 0;
+  while ((pos = lower.find(needle, pos)) != std::string::npos) {
+    const bool leftOk = pos == 0 || std::isspace(static_cast<unsigned char>(lower[pos - 1])) || lower[pos - 1] == '-';
+    const size_t end = pos + needle.size();
+    const bool rightOk = end >= lower.size() || std::isspace(static_cast<unsigned char>(lower[end])) || lower[end] == '-';
+    if (leftOk && rightOk) {
+      return true;
+    }
+    pos = end;
+  }
+  return false;
+}
+
+const std::string* findAttrValue(const HtmlLiteStartTag& tag, const char* name) {
+  for (const auto& attr : tag.attrs) {
+    if (attr.name == name) {
+      return &attr.value;
+    }
+  }
+  return nullptr;
+}
+
+struct HtmlNodeContext {
+  std::string tagName;
+  std::string classAttr;
+};
+
+class HakoHomeStreamParser {
+ public:
+  HakoHomeStreamParser()
+      : tokenizer_(
+            [this](const HtmlLiteStartTag& tag) { return onStartTag(tag); },
+            [this](const std::string& tagName) { return onEndTag(tagName); },
+            [this](const std::string& text) { return onText(text); }) {}
+
+  bool feed(const uint8_t* data, size_t size) {
+    if (snippet_.size() < 2048 && data && size > 0) {
+      const size_t toCopy = std::min<size_t>(2048 - snippet_.size(), size);
+      snippet_.append(reinterpret_cast<const char*>(data), toCopy);
+    }
+    return tokenizer_.feed(reinterpret_cast<const char*>(data), size);
+  }
+
+  bool finish() {
+    const bool ok = tokenizer_.finish();
+    finalizeCurrentItem();
+    return ok;
+  }
+
+  const std::vector<HakoSearchResult>& results() const { return results_; }
+  std::vector<HakoSearchResult> takeResults() { return std::move(results_); }
+  const std::string& snippet() const { return snippet_; }
+
+ private:
+  bool hasAncestorClass(const char* token) const {
+    for (auto it = stack_.rbegin(); it != stack_.rend(); ++it) {
+      if (classHasToken(it->classAttr, token)) {
+        return true;
+      }
+    }
     return false;
   }
 
-  auto blocks = collectBlocks(html, "thumb-item-flow");
-  for (const auto& block : blocks) {
-    HakoSearchResult result;
-    std::string href;
-    if (!extractAttrNear(block, "series-title", "href", href)) continue;
-    std::string titleHtml;
-    if (!extractTagContent(block, "series-title", ">", "</a>", titleHtml)) continue;
-    result.title = stripTags(titleHtml);
-    result.url = makeAbsoluteUrl(href);
-    std::string descHtml;
-    if (extractTagContent(block, "chapter-title", ">", "</div>", descHtml)) {
-      result.description = stripTags(descHtml);
+  static std::string normalizeText(const std::string& value) { return normalizeDisplayText(htmlDecode(value)); }
+
+  void finalizeCurrentItem() {
+    if (!itemActive_) {
+      return;
     }
-    extractAttrNear(block, "img-in-ratio", "data-bg", result.coverUrl);
-    outResults.push_back(std::move(result));
+
+    currentItem_.title = normalizeText(currentItem_.title);
+    currentItem_.homeLatestChapterTitle = normalizeText(currentItem_.homeLatestChapterTitle);
+    currentItem_.homeVolumeTitle = normalizeText(currentItem_.homeVolumeTitle);
+    currentItem_.homeSectionLabel = compactHomeSectionLabel(normalizeText(currentItem_.homeSectionLabel));
+    currentItem_.homeDisplaySubtitle =
+        buildHomeDisplaySubtitle(currentItem_.homeSectionLabel, currentItem_.homeVolumeTitle, currentItem_.homeLatestChapterTitle);
+
+    if (!currentItem_.homeSectionLabel.empty()) {
+      currentItem_.description = currentItem_.homeSectionLabel;
+    }
+    if (!currentItem_.homeVolumeTitle.empty()) {
+      currentItem_.description =
+          currentItem_.description.empty() ? currentItem_.homeVolumeTitle : currentItem_.description + " | " + currentItem_.homeVolumeTitle;
+    }
+    if (!currentItem_.homeLatestChapterTitle.empty()) {
+      currentItem_.description = currentItem_.description.empty()
+                                     ? currentItem_.homeLatestChapterTitle
+                                     : currentItem_.description + " | " + currentItem_.homeLatestChapterTitle;
+    }
+
+    if (!currentItem_.title.empty() && !currentItem_.url.empty() && !hasSeenUrl(seenUrls_, currentItem_.url)) {
+      seenUrls_.push_back(currentItem_.url);
+      results_.push_back(currentItem_);
+    }
+
+    currentItem_ = HakoSearchResult{};
+    itemActive_ = false;
+    itemDepth_ = 0;
   }
+
+  bool onStartTag(const HtmlLiteStartTag& tag) {
+    std::string classAttr;
+    if (const auto* classValue = findAttrValue(tag, "class")) {
+      classAttr = *classValue;
+    }
+
+    stack_.push_back(HtmlNodeContext{tag.name, classAttr});
+    const size_t depth = stack_.size();
+
+    if (classHasToken(classAttr, "section-title")) {
+      sectionTitleCapture_ = true;
+      sectionTitleDepth_ = depth;
+      sectionTitleText_.clear();
+    }
+
+    if (classHasToken(classAttr, "thumb-item-flow")) {
+      finalizeCurrentItem();
+      itemActive_ = true;
+      itemDepth_ = depth;
+      currentItem_ = HakoSearchResult{};
+      currentItem_.homeSectionLabel = currentSectionLabel_;
+    }
+
+    if (!itemActive_) {
+      return true;
+    }
+
+    if (classHasToken(classAttr, "img-in-ratio")) {
+      if (const auto* dataBg = findAttrValue(tag, "data-bg")) {
+        currentItem_.coverUrl = htmlDecode(*dataBg);
+      } else if (const auto* style = findAttrValue(tag, "style")) {
+        currentItem_.coverUrl = extractStyleUrl(*style);
+      }
+    }
+
+    if (classHasToken(classAttr, "chapter-title")) {
+      chapterCapture_ = true;
+      chapterDepth_ = depth;
+      chapterText_.clear();
+    }
+
+    if (classHasToken(classAttr, "volume-title")) {
+      volumeCapture_ = true;
+      volumeDepth_ = depth;
+      volumeText_.clear();
+    }
+
+    if (tag.name == "a" && hasAncestorClass("series-title")) {
+      seriesAnchorCapture_ = true;
+      seriesAnchorDepth_ = depth;
+      seriesAnchorText_.clear();
+      if (const auto* href = findAttrValue(tag, "href")) {
+        currentItem_.url = makeAbsoluteUrl(*href);
+      }
+      if (const auto* title = findAttrValue(tag, "title")) {
+        currentItem_.title = htmlDecode(*title);
+      }
+    }
+
+    return true;
+  }
+
+  bool onEndTag(const std::string&) {
+    if (stack_.empty()) {
+      return true;
+    }
+
+    const HtmlNodeContext node = stack_.back();
+    const size_t depth = stack_.size();
+
+    if (sectionTitleCapture_ && depth == sectionTitleDepth_ && classHasToken(node.classAttr, "section-title")) {
+      currentSectionLabel_ = compactHomeSectionLabel(normalizeText(sectionTitleText_));
+      sectionTitleCapture_ = false;
+      sectionTitleText_.clear();
+    }
+
+    if (seriesAnchorCapture_ && depth == seriesAnchorDepth_ && node.tagName == "a") {
+      if (currentItem_.title.empty()) {
+        currentItem_.title = normalizeText(seriesAnchorText_);
+      }
+      seriesAnchorCapture_ = false;
+      seriesAnchorText_.clear();
+    }
+
+    if (chapterCapture_ && depth == chapterDepth_ && classHasToken(node.classAttr, "chapter-title")) {
+      currentItem_.homeLatestChapterTitle = normalizeText(chapterText_);
+      chapterCapture_ = false;
+      chapterText_.clear();
+    }
+
+    if (volumeCapture_ && depth == volumeDepth_ && classHasToken(node.classAttr, "volume-title")) {
+      currentItem_.homeVolumeTitle = normalizeText(volumeText_);
+      volumeCapture_ = false;
+      volumeText_.clear();
+    }
+
+    if (itemActive_ && depth == itemDepth_ && classHasToken(node.classAttr, "thumb-item-flow")) {
+      finalizeCurrentItem();
+    }
+
+    stack_.pop_back();
+    return true;
+  }
+
+  bool onText(const std::string& text) {
+    if (sectionTitleCapture_) {
+      sectionTitleText_ += text;
+    }
+    if (seriesAnchorCapture_) {
+      seriesAnchorText_ += text;
+    }
+    if (chapterCapture_) {
+      chapterText_ += text;
+    }
+    if (volumeCapture_) {
+      volumeText_ += text;
+    }
+    return true;
+  }
+
+  HtmlLiteTokenizer tokenizer_;
+  std::vector<HtmlNodeContext> stack_;
+  std::vector<std::string> seenUrls_;
+  std::vector<HakoSearchResult> results_;
+  std::string snippet_;
+  std::string currentSectionLabel_;
+  HakoSearchResult currentItem_;
+  bool itemActive_ = false;
+  size_t itemDepth_ = 0;
+  bool sectionTitleCapture_ = false;
+  size_t sectionTitleDepth_ = 0;
+  std::string sectionTitleText_;
+  bool seriesAnchorCapture_ = false;
+  size_t seriesAnchorDepth_ = 0;
+  std::string seriesAnchorText_;
+  bool chapterCapture_ = false;
+  size_t chapterDepth_ = 0;
+  std::string chapterText_;
+  bool volumeCapture_ = false;
+  size_t volumeDepth_ = 0;
+  std::string volumeText_;
+};
+
+class HakoSeriesPageStreamParser {
+ public:
+  HakoSeriesPageStreamParser()
+      : tokenizer_(
+            [this](const HtmlLiteStartTag& tag) { return onStartTag(tag); },
+            [this](const std::string& tagName) { return onEndTag(tagName); },
+            [this](const std::string& text) { return onText(text); }) {}
+
+  bool feed(const uint8_t* data, size_t size) {
+    if (snippet_.size() < 4096 && data && size > 0) {
+      const size_t toCopy = std::min<size_t>(4096 - snippet_.size(), size);
+      snippet_.append(reinterpret_cast<const char*>(data), toCopy);
+    }
+    return tokenizer_.feed(reinterpret_cast<const char*>(data), size);
+  }
+
+  bool finish() {
+    const bool ok = tokenizer_.finish();
+    finalizeInfoItem();
+    return ok;
+  }
+
+  const HakoBookDetail& detail() const { return detail_; }
+  const std::vector<HakoChapterRef>& toc() const { return toc_; }
+  const std::string& snippet() const { return snippet_; }
+
+ private:
+  static std::string normalizeText(const std::string& value) { return normalizeDisplayText(htmlDecode(value)); }
+
+  std::string resolveSectionTitle(const std::string& rawTitle) const {
+    const std::string normalized = normalizeText(rawTitle);
+    if (normalized.empty()) {
+      return volumeTitle_;
+    }
+
+    const std::string lower = toLowerAscii(StringUtils::toDisplaySafeAscii(normalized));
+    if (lower.find("danh sach chuong") != std::string::npos && !volumeTitle_.empty()) {
+      return volumeTitle_;
+    }
+    return normalized;
+  }
+
+  bool hasAncestorClass(const char* token) const {
+    for (auto it = stack_.rbegin(); it != stack_.rend(); ++it) {
+      if (classHasToken(it->classAttr, token)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void finalizeInfoItem() {
+    if (!infoItemActive_) {
+      return;
+    }
+
+    const std::string label = toLowerAscii(normalizeText(infoNameText_));
+    const std::string value = normalizeText(infoValueText_);
+    if (label.find("tac gia") != std::string::npos) {
+      detail_.author = value;
+    } else if (label.find("tinh trang") != std::string::npos) {
+      const std::string status = toLowerAscii(value);
+      detail_.ongoing = status.find("dang tien hanh") != std::string::npos;
+    }
+
+    infoItemActive_ = false;
+    infoNameCapture_ = false;
+    infoValueCapture_ = false;
+    infoNameText_.clear();
+    infoValueText_.clear();
+  }
+
+  bool onStartTag(const HtmlLiteStartTag& tag) {
+    std::string classAttr;
+    if (const auto* classValue = findAttrValue(tag, "class")) {
+      classAttr = *classValue;
+    }
+
+    stack_.push_back(HtmlNodeContext{tag.name, classAttr});
+    const size_t depth = stack_.size();
+
+    if (classHasToken(classAttr, "series-name")) {
+      titleCapture_ = true;
+      titleDepth_ = depth;
+      titleText_.clear();
+    }
+
+    if (classHasToken(classAttr, "volume-name")) {
+      volumeTitleCapture_ = true;
+      volumeTitleDepth_ = depth;
+      volumeTitleText_.clear();
+    }
+
+    if (classHasToken(classAttr, "img-in-ratio") && detail_.coverUrl.empty() && hasAncestorClass("series-cover")) {
+      if (const auto* style = findAttrValue(tag, "style")) {
+        detail_.coverUrl = extractStyleUrl(*style);
+      } else if (const auto* dataBg = findAttrValue(tag, "data-bg")) {
+        detail_.coverUrl = htmlDecode(*dataBg);
+      }
+    }
+
+    if (tag.name == "a" && classHasToken(classAttr, "series-gerne-item")) {
+      genreCapture_ = true;
+      genreDepth_ = depth;
+      genreText_.clear();
+    }
+
+    if (classHasToken(classAttr, "summary-content")) {
+      summaryCapture_ = true;
+      summaryDepth_ = depth;
+      summaryText_.clear();
+    }
+
+    if (classHasToken(classAttr, "info-item")) {
+      finalizeInfoItem();
+      infoItemActive_ = true;
+      infoItemDepth_ = depth;
+      infoNameText_.clear();
+      infoValueText_.clear();
+    }
+
+    if (infoItemActive_ && classHasToken(classAttr, "info-name")) {
+      infoNameCapture_ = true;
+      infoNameDepth_ = depth;
+      infoNameText_.clear();
+    }
+
+    if (infoItemActive_ && classHasToken(classAttr, "info-value")) {
+      infoValueCapture_ = true;
+      infoValueDepth_ = depth;
+      infoValueText_.clear();
+    }
+
+    if (classHasToken(classAttr, "volume-list") || classHasToken(classAttr, "ln_chapters-volume")) {
+      if (currentSectionTitle_.empty() && !volumeTitle_.empty()) {
+        currentSectionTitle_ = volumeTitle_;
+      }
+      chapterIndex_ = chapterIndex_ == 0 ? 1 : chapterIndex_;
+      volumeActive_ = true;
+      volumeDepth_ = depth;
+    }
+
+    if (volumeActive_ && classHasToken(classAttr, "sect-title")) {
+      sectionTitleCapture_ = true;
+      sectionTitleDepth_ = depth;
+      sectionTitleText_.clear();
+    }
+
+    if (volumeActive_ && classHasToken(classAttr, "chapter-name")) {
+      chapterCapture_ = true;
+      chapterDepth_ = depth;
+      chapterText_.clear();
+      currentChapterUrl_.clear();
+      if (const auto* href = findAttrValue(tag, "href")) {
+        currentChapterUrl_ = makeAbsoluteUrl(*href);
+      }
+    }
+
+    if (volumeActive_ && tag.name == "a" && hasAncestorClass("chapter-name")) {
+      chapterAnchorCapture_ = true;
+      chapterAnchorDepth_ = depth;
+      chapterText_.clear();
+      if (const auto* href = findAttrValue(tag, "href")) {
+        currentChapterUrl_ = makeAbsoluteUrl(*href);
+      }
+    }
+
+    return true;
+  }
+
+  bool onEndTag(const std::string&) {
+    if (stack_.empty()) {
+      return true;
+    }
+
+    const HtmlNodeContext node = stack_.back();
+    const size_t depth = stack_.size();
+
+    if (titleCapture_ && depth == titleDepth_ && classHasToken(node.classAttr, "series-name")) {
+      detail_.title = normalizeText(titleText_);
+      titleCapture_ = false;
+      titleText_.clear();
+    }
+
+    if (volumeTitleCapture_ && depth == volumeTitleDepth_ && classHasToken(node.classAttr, "volume-name")) {
+      volumeTitle_ = normalizeText(volumeTitleText_);
+      if (currentSectionTitle_.empty()) {
+        currentSectionTitle_ = volumeTitle_;
+      }
+      volumeTitleCapture_ = false;
+      volumeTitleText_.clear();
+    }
+
+    if (genreCapture_ && depth == genreDepth_ && node.tagName == "a") {
+      const std::string genre = normalizeText(genreText_);
+      if (!genre.empty()) {
+        detail_.genres.push_back(genre);
+      }
+      genreCapture_ = false;
+      genreText_.clear();
+    }
+
+    if (summaryCapture_ && depth == summaryDepth_ && classHasToken(node.classAttr, "summary-content")) {
+      const std::string summary = normalizeText(summaryText_);
+      detail_.descriptionHtml = summary.empty() ? std::string{} : ("<p>" + summary + "</p>");
+      capRetainedHtml(detail_.descriptionHtml, DETAIL_DESCRIPTION_CAP_BYTES);
+      summaryCapture_ = false;
+      summaryText_.clear();
+    }
+
+    if (infoNameCapture_ && depth == infoNameDepth_ && classHasToken(node.classAttr, "info-name")) {
+      infoNameCapture_ = false;
+    }
+
+    if (infoValueCapture_ && depth == infoValueDepth_ && classHasToken(node.classAttr, "info-value")) {
+      infoValueCapture_ = false;
+    }
+
+    if (infoItemActive_ && depth == infoItemDepth_ && classHasToken(node.classAttr, "info-item")) {
+      finalizeInfoItem();
+    }
+
+    if (sectionTitleCapture_ && depth == sectionTitleDepth_ && classHasToken(node.classAttr, "sect-title")) {
+      currentSectionTitle_ = resolveSectionTitle(sectionTitleText_);
+      sectionTitleCapture_ = false;
+      sectionTitleText_.clear();
+    }
+
+    if (chapterAnchorCapture_ && depth == chapterAnchorDepth_ && node.tagName == "a") {
+      chapterAnchorCapture_ = false;
+    }
+
+    if (chapterCapture_ && depth == chapterDepth_ && classHasToken(node.classAttr, "chapter-name")) {
+      HakoChapterRef ref;
+      ref.title = normalizeText(chapterText_);
+      ref.sectionTitle = currentSectionTitle_;
+      ref.url = currentChapterUrl_;
+      ref.index = chapterIndex_++;
+      if (!ref.title.empty() && !ref.url.empty()) {
+        toc_.push_back(std::move(ref));
+      }
+      chapterCapture_ = false;
+      chapterText_.clear();
+      currentChapterUrl_.clear();
+    }
+
+    if (volumeActive_ && depth == volumeDepth_ &&
+        (classHasToken(node.classAttr, "volume-list") || classHasToken(node.classAttr, "ln_chapters-volume"))) {
+      volumeActive_ = false;
+      currentSectionTitle_.clear();
+    }
+
+    stack_.pop_back();
+    return true;
+  }
+
+  bool onText(const std::string& text) {
+    if (titleCapture_) {
+      titleText_ += text;
+    }
+    if (volumeTitleCapture_) {
+      volumeTitleText_ += text;
+    }
+    if (genreCapture_) {
+      genreText_ += text;
+    }
+    if (summaryCapture_) {
+      summaryText_ += text;
+    }
+    if (infoNameCapture_) {
+      infoNameText_ += text;
+    }
+    if (infoValueCapture_) {
+      infoValueText_ += text;
+    }
+    if (sectionTitleCapture_) {
+      sectionTitleText_ += text;
+    }
+    if (chapterCapture_ && chapterAnchorCapture_) {
+      chapterText_ += text;
+    }
+    return true;
+  }
+
+  HtmlLiteTokenizer tokenizer_;
+  std::vector<HtmlNodeContext> stack_;
+  HakoBookDetail detail_;
+  std::vector<HakoChapterRef> toc_;
+  std::string snippet_;
+  bool titleCapture_ = false;
+  size_t titleDepth_ = 0;
+  std::string titleText_;
+  bool volumeTitleCapture_ = false;
+  size_t volumeTitleDepth_ = 0;
+  std::string volumeTitleText_;
+  std::string volumeTitle_;
+  bool genreCapture_ = false;
+  size_t genreDepth_ = 0;
+  std::string genreText_;
+  bool summaryCapture_ = false;
+  size_t summaryDepth_ = 0;
+  std::string summaryText_;
+  bool infoItemActive_ = false;
+  size_t infoItemDepth_ = 0;
+  bool infoNameCapture_ = false;
+  size_t infoNameDepth_ = 0;
+  std::string infoNameText_;
+  bool infoValueCapture_ = false;
+  size_t infoValueDepth_ = 0;
+  std::string infoValueText_;
+  bool volumeActive_ = false;
+  size_t volumeDepth_ = 0;
+  bool sectionTitleCapture_ = false;
+  size_t sectionTitleDepth_ = 0;
+  std::string sectionTitleText_;
+  std::string currentSectionTitle_;
+  bool chapterCapture_ = false;
+  size_t chapterDepth_ = 0;
+  bool chapterAnchorCapture_ = false;
+  size_t chapterAnchorDepth_ = 0;
+  std::string chapterText_;
+  std::string currentChapterUrl_;
+  uint32_t chapterIndex_ = 1;
+};
+
+bool fetchSeriesPageStreamed(const std::string& resolvedUrl, HakoSeriesPageStreamParser& parser) {
+  return HttpDownloader::fetchUrlFromMarkerStreamed(resolvedUrl, "<title>",
+                                                    [&parser](const uint8_t* data, size_t size) { return parser.feed(data, size); }) &&
+         parser.finish();
+}
+
+bool fetchListingPageStreamed(const std::string& url, HakoHomeStreamParser& parser) {
+  return HttpDownloader::fetchUrlFromMarkerStreamed(url, "thumb-item-flow",
+                                                    [&parser](const uint8_t* data, size_t size) { return parser.feed(data, size); }) &&
+         parser.finish();
+}
+
+bool HakoPluginExecutor::search(const std::string& query, int page, std::vector<HakoSearchResult>& outResults) {
+  outResults.clear();
+  constexpr size_t SEARCH_PAGE_SIZE = 12;
+  const std::string url =
+      std::string(BASE_URL) + "/tim-kiem" + getQueryParamSeparator(std::string(BASE_URL) + "/tim-kiem") + "keywords=" + urlEncode(query) +
+      "&page=" + std::to_string(page);
+
+  HakoHomeStreamParser streamParser;
+  if (fetchListingPageStreamed(url, streamParser)) {
+    outResults = streamParser.takeResults();
+  }
+
+  std::string html;
+  if (outResults.empty() && shouldAttemptHeavyHtmlFallback() &&
+      HttpDownloader::fetchUrlFromMarkerCapped(url, html, "thumb-item-flow", SEARCH_FETCH_CAP_BYTES, true)) {
+    parseSearchResultBlocks(html, outResults);
+  }
+
+  if (outResults.empty()) {
+    const std::string reason = HttpDownloader::getLastError().empty() ? std::string("No search results parsed")
+                                                                       : HttpDownloader::getLastError();
+    OnlineDebugLog::logParserFailure("Hako", "search", url, reason, html.empty() ? streamParser.snippet() : html);
+    return false;
+  }
+
   if (outResults.size() > SEARCH_PAGE_SIZE) {
     outResults.resize(SEARCH_PAGE_SIZE);
   }
   return true;
 }
-
 bool HakoPluginExecutor::fetchHomeFeed(std::vector<HakoSearchResult>& outResults) {
   outResults.clear();
 
-  const unsigned long nowMs = millis();
-  if (g_homeFeedCache.valid && (nowMs - g_homeFeedCache.fetchedAtMs) <= HOME_FEED_CACHE_TTL_MS) {
-    outResults = g_homeFeedCache.results;
-    return !outResults.empty();
-  }
-
-  std::string html;
-  if (!HttpDownloader::fetchUrl(BASE_URL, html)) {
-    return false;
-  }
-
-  std::vector<std::string> sections;
-  extractSectionBlocks(html, "thumb-section-flow", sections);
-
-  std::vector<std::string> seenUrls;
-  for (const auto& section : sections) {
-    const std::string sectionLabel = extractSectionLabel(section);
-    const auto blocks = collectBlocks(section, "thumb-item-flow");
-    for (const auto& block : blocks) {
-      HakoSearchResult result;
-      std::string href;
-      if (!extractAttrNear(block, "series-title", "href", href)) continue;
-      result.url = makeAbsoluteUrl(href);
-      if (std::find(seenUrls.begin(), seenUrls.end(), result.url) != seenUrls.end()) {
-        continue;
-      }
-
-      std::string titleHtml;
-      if (!extractTagContent(block, "series-title", ">", "</a>", titleHtml)) continue;
-      result.title = stripTags(titleHtml);
-
-      std::string chapterHtml;
-      std::string volumeHtml;
-      if (extractTagContent(block, "chapter-title", ">", "</div>", chapterHtml)) {
-        result.homeLatestChapterTitle = stripTags(chapterHtml);
-      }
-      if (extractTagContent(block, "volume-title", ">", "</div>", volumeHtml)) {
-        result.homeVolumeTitle = stripTags(volumeHtml);
-      }
-      if (!sectionLabel.empty()) {
-        result.homeSectionLabel = sectionLabel;
-      }
-      result.homeDisplaySubtitle =
-          buildHomeDisplaySubtitle(result.homeSectionLabel, result.homeVolumeTitle, result.homeLatestChapterTitle);
-
-      if (!result.homeSectionLabel.empty()) {
-        result.description = result.homeSectionLabel;
-      }
-      if (!result.homeVolumeTitle.empty()) {
-        result.description = result.description.empty() ? result.homeVolumeTitle
-                                                        : result.description + " | " + result.homeVolumeTitle;
-      }
-      if (!result.homeLatestChapterTitle.empty()) {
-        result.description = result.description.empty() ? result.homeLatestChapterTitle
-                                                        : result.description + " | " + result.homeLatestChapterTitle;
-      }
-      extractAttrNear(block, "img-in-ratio", "data-bg", result.coverUrl);
-
-      seenUrls.push_back(result.url);
-      outResults.push_back(std::move(result));
+  HakoHomeStreamParser streamParser;
+  if (fetchListingPageStreamed(HOME_FEED_URL, streamParser)) {
+    outResults = streamParser.takeResults();
+    if (!outResults.empty()) {
+      return true;
     }
   }
 
-  g_homeFeedCache.results = outResults;
-  g_homeFeedCache.fetchedAtMs = nowMs;
-  g_homeFeedCache.valid = !outResults.empty();
-  return !outResults.empty();
+  std::string html;
+  if (outResults.empty() && shouldAttemptHeavyHtmlFallback() &&
+      HttpDownloader::fetchUrlFromMarkerCapped(HOME_FEED_URL, html, "thumb-item-flow", HOME_FETCH_CAP_BYTES, true)) {
+    if (parseHomeFeedBlocks(html, outResults)) {
+      return true;
+    }
+  }
+
+  const std::string reason = HttpDownloader::getLastError().empty() ? std::string("No home feed entries parsed")
+                                                                     : HttpDownloader::getLastError();
+  OnlineDebugLog::logParserFailure("Hako", "home", HOME_FEED_URL, reason, html.empty() ? streamParser.snippet() : html);
+  return false;
 }
-
 bool HakoPluginExecutor::fetchDetail(const std::string& url, HakoBookDetail& outDetail) {
+  const std::string resolvedUrl = makeAbsoluteUrl(url);
+  HakoSeriesPageStreamParser streamParser;
+  if (fetchSeriesPageStreamed(resolvedUrl, streamParser)) {
+    outDetail = streamParser.detail();
+    outDetail.url = resolvedUrl;
+    if (!outDetail.title.empty()) {
+      return true;
+    }
+  }
+
   std::string html;
-  if (!HttpDownloader::fetchUrl(makeAbsoluteUrl(url), html)) {
-    return false;
-  }
-  outDetail = {};
-  outDetail.url = makeAbsoluteUrl(url);
-  std::string titleHtml;
-  if (extractTagContent(html, "series-name", ">", "</div>", titleHtml)) {
-    outDetail.title = stripTags(titleHtml);
-  }
-  std::string style;
-  if (extractAttrNear(html, "series-cover", "style", style)) {
-    outDetail.coverUrl = extractStyleUrl(style);
-  }
-  std::string summaryHtml;
-  if (extractTagContent(html, "summary-content", ">", "</div>", summaryHtml)) {
-    outDetail.descriptionHtml = summaryHtml;
+  if (shouldAttemptHeavyHtmlFallback() &&
+      HttpDownloader::fetchUrlFromMarkerCapped(resolvedUrl, html, "series-cover", DETAIL_FETCH_CAP_BYTES, true) &&
+      parseDetailFromHtml(html, resolvedUrl, outDetail)) {
+    return true;
   }
 
-  auto infoBlocks = collectBlocks(html, "info-item");
-  for (const auto& block : infoBlocks) {
-    std::string labelHtml;
-    std::string valueHtml;
-    if (!extractTagContent(block, "info-name", ">", "</div>", labelHtml)) continue;
-    if (!extractTagContent(block, "info-value", ">", "</div>", valueHtml)) continue;
-    const std::string label = stripTags(labelHtml);
-    const std::string value = stripTags(valueHtml);
-    if (label.find("Tác giả") != std::string::npos || label.find("Tc gi") != std::string::npos) {
-      outDetail.author = value;
-    }
-    if (label.find("Tình trạng") != std::string::npos || label.find("Tnh trng") != std::string::npos) {
-      const std::string lower = value;
-      outDetail.ongoing = lower.find("đang tiến hành") != std::string::npos || lower.find("dang tien hanh") != std::string::npos;
-    }
-  }
-
-  size_t pos = 0;
-  while ((pos = html.find("series-gerne-item", pos)) != std::string::npos) {
-    std::string genreHtml;
-    if (extractTagContent(html.substr(pos), "series-gerne-item", ">", "</a>", genreHtml)) {
-      outDetail.genres.push_back(stripTags(genreHtml));
-    }
-    pos += 16;
-  }
-  return !outDetail.title.empty();
+  outDetail.url = resolvedUrl;
+  OnlineDebugLog::logParserFailure("Hako", "detail", outDetail.url,
+                                   HttpDownloader::getLastError().empty() ? std::string("Title not parsed")
+                                                                          : HttpDownloader::getLastError(),
+                                   html.empty() ? streamParser.snippet() : html);
+  return false;
 }
 
 bool HakoPluginExecutor::fetchToc(const std::string& url, std::vector<HakoChapterRef>& outToc) {
   outToc.clear();
-  std::string html;
-  if (!HttpDownloader::fetchUrl(makeAbsoluteUrl(url), html)) {
-    return false;
+  const std::string resolvedUrl = makeAbsoluteUrl(url);
+  HakoSeriesPageStreamParser streamParser;
+  if (fetchSeriesPageStreamed(resolvedUrl, streamParser)) {
+    outToc = streamParser.toc();
+    if (!outToc.empty()) {
+      renumberToc(outToc);
+      return true;
+    }
   }
 
-  size_t pos = 0;
-  uint32_t index = 1;
-  while ((pos = html.find("volume-list", pos)) != std::string::npos) {
-    const std::string block = html.substr(pos, html.find("volume-list", pos + 10) == std::string::npos
-                                                   ? std::string::npos
-                                                   : html.find("volume-list", pos + 10) - pos);
-    std::string sectionName;
-    std::string sectionHtml;
-    if (extractTagContent(block, "sect-title", ">", "</div>", sectionHtml)) {
-      sectionName = stripTags(sectionHtml);
-    }
-    size_t chapPos = 0;
-    while ((chapPos = block.find("chapter-name", chapPos)) != std::string::npos) {
-      std::string href;
-      if (!extractAttrNear(block.substr(chapPos), "chapter-name", "href", href)) {
-        chapPos += 12;
-        continue;
-      }
-      std::string titleHtml;
-      if (!extractTagContent(block.substr(chapPos), "chapter-name", ">", "</a>", titleHtml)) {
-        chapPos += 12;
-        continue;
-      }
-      HakoChapterRef ref;
-      ref.title = stripTags(titleHtml);
-      ref.sectionTitle = sectionName;
-      ref.url = makeAbsoluteUrl(href);
-      ref.index = index++;
-      outToc.push_back(std::move(ref));
-      chapPos += 12;
-    }
-    pos += 10;
-  }
-  normalizeTocOrder(outToc);
-  return !outToc.empty();
+  OnlineDebugLog::logParserFailure("Hako", "toc", resolvedUrl,
+                                   HttpDownloader::getLastError().empty() ? std::string("No chapters parsed")
+                                                                          : HttpDownloader::getLastError(),
+                                   streamParser.snippet());
+  return false;
 }
 
-bool HakoPluginExecutor::fetchChapter(const HakoChapterRef& ref, HakoChapterContent& outContent) {
+bool HakoPluginExecutor::fetchChapter(const HakoChapterRef& ref, HakoChapterContent& outContent, bool includePlainText) {
   const std::string url = makeAbsoluteUrl(ref.url);
   for (size_t attemptIndex = 0; attemptIndex <= sizeof(CHAPTER_FETCH_RETRY_DELAYS_MS) / sizeof(CHAPTER_FETCH_RETRY_DELAYS_MS[0]);
        ++attemptIndex) {
     std::string html;
-    const bool fetchOk = HttpDownloader::fetchUrl(url, html);
-    if (fetchOk) {
-      const std::string chapterHtml = extractChapterContainerHtml(html);
-      if (!chapterHtml.empty()) {
-        outContent = {};
-        outContent.ref = ref;
-        outContent.html = decodeProtectedContent(chapterHtml);
-        cleanupChapterHtml(outContent.html);
+    std::string chapterHtml = streamChapterContainerHtml(url, "<div id=\"chapter-content\"");
+    if (chapterHtml.empty()) {
+      chapterHtml = streamChapterContainerHtml(url, "<div id=\"chapter-c-protected\"");
+    }
+    bool fetchOk = !chapterHtml.empty();
+    if (!fetchOk && shouldAttemptHeavyHtmlFallback()) {
+      fetchOk = HttpDownloader::fetchUrlCapped(url, html, CHAPTER_FETCH_CAP_BYTES, false);
+      if (fetchOk) {
+        chapterHtml = extractChapterContainerHtml(html);
+      }
+    }
+
+    if (!chapterHtml.empty()) {
+      std::string().swap(html);
+      outContent = {};
+      outContent.ref = ref;
+      outContent.html = decodeProtectedContent(chapterHtml);
+      std::string().swap(chapterHtml);
+      cleanupChapterHtml(outContent.html);
+      if (includePlainText) {
         outContent.text = stripTags(outContent.html);
-        if (!outContent.html.empty() || !outContent.text.empty()) {
-          return true;
-        }
+      } else {
+        outContent.text.clear();
+      }
+      if (!outContent.html.empty() || !outContent.text.empty()) {
+        return true;
       }
     }
 
     logChapterAttemptFailure(ref, attemptIndex, html, fetchOk);
+    OnlineDebugLog::logParserFailure("Hako", "chapter", url,
+                                     fetchOk ? "Chapter container missing or empty" : HttpDownloader::getLastError(), html);
     if (attemptIndex >= sizeof(CHAPTER_FETCH_RETRY_DELAYS_MS) / sizeof(CHAPTER_FETCH_RETRY_DELAYS_MS[0])) {
       break;
     }
@@ -812,3 +1790,5 @@ bool HakoPluginExecutor::fetchChapter(const HakoChapterRef& ref, HakoChapterCont
   }
   return false;
 }
+
+void HakoPluginExecutor::clearMemoryCaches() {}

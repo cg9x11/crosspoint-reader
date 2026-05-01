@@ -12,6 +12,8 @@
 #include <HalStorage.h>
 #include <I18n.h>
 
+#include <algorithm>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
@@ -41,6 +43,7 @@ void XtcReaderActivity::onEnter() {
   APP_STATE.openEpubPath = xtc->getPath();
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(xtc->getPath(), xtc->getTitle(), xtc->getAuthor(), xtc->getThumbBmpPath());
+  RECENT_BOOKS.startReadingSession(xtc->getPath());
 
   // Trigger first update
   requestUpdate();
@@ -51,6 +54,7 @@ void XtcReaderActivity::onExit() {
 
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
+  RECENT_BOOKS.finishReadingSession(xtc->getPath());
   xtc.reset();
 }
 
@@ -143,6 +147,9 @@ void XtcReaderActivity::render(RenderLock&&) {
   }
 
   renderPage();
+  const int progressPercent =
+      (xtc->getPageCount() > 0) ? std::min(100UL, ((currentPage + 1) * 100UL) / xtc->getPageCount()) : 0;
+  RECENT_BOOKS.updateReadingProgress(xtc->getPath(), static_cast<uint8_t>(progressPercent));
   saveProgress();
 }
 

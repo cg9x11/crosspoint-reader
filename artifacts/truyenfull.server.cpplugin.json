@@ -1,0 +1,25 @@
+{
+  "plugin": {
+    "id": "truyenfull-server",
+    "name": "Truyen Full Server",
+    "version": 1,
+    "deviceSupport": [
+      "x3",
+      "x4"
+    ]
+  },
+  "runtime": {
+    "mode": "adapter",
+    "adapter": {
+      "origin": "server",
+      "profile": "truyenfull"
+    }
+  },
+  "source": {
+    "baseUrl": "https://online-library.noe.asia",
+    "locale": "vi-VN",
+    "contentType": "webnovel",
+    "supportsSearch": true,
+    "supportsTrackedUpdates": false
+  }
+}

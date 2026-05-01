@@ -6,6 +6,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 
+#include <array>
 #include <string>
 
 #include "Bitmap.h"  // Required for BmpHeader struct definition
@@ -34,6 +35,52 @@ void ScreenshotUtil::takeScreenshot(GfxRenderer& renderer) {
   }
 }
 
+size_t ScreenshotUtil::getFramebufferBmpSize(const int width, const int height) {
+  const int phyWidth = height;
+  const int phyHeight = width;
+  const uint32_t rowSizePadded = (phyWidth + 31) / 32 * 4;
+  return sizeof(BmpHeader) + rowSizePadded * phyHeight;
+}
+
+bool ScreenshotUtil::streamFramebufferAsBmp(const uint8_t* framebuffer, const int width, const int height,
+                                            const BmpWriter& writer) {
+  if (!framebuffer || !writer) {
+    return false;
+  }
+
+  const int phyWidth = height;
+  const int phyHeight = width;
+  const uint32_t rowSizePadded = (phyWidth + 31) / 32 * 4;
+  constexpr size_t kMaxRowSize = 128;
+  if (rowSizePadded > kMaxRowSize) {
+    LOG_ERR("SCR", "Row size %u exceeds buffer capacity", rowSizePadded);
+    return false;
+  }
+
+  BmpHeader header;
+  createBmpHeader(&header, phyWidth, phyHeight, BmpRowOrder::BottomUp);
+  if (!writer(reinterpret_cast<const uint8_t*>(&header), sizeof(header))) {
+    return false;
+  }
+
+  std::array<uint8_t, kMaxRowSize> rowBuffer = {};
+  for (int outY = 0; outY < phyHeight; outY++) {
+    for (int outX = 0; outX < phyWidth; outX++) {
+      const int srcX = width - 1 - outY;
+      const int srcY = phyWidth - 1 - outX;
+      const int fbIndex = srcY * (width / 8) + (srcX / 8);
+      const uint8_t pixel = (framebuffer[fbIndex] >> (7 - (srcX % 8))) & 0x01;
+      rowBuffer[outX / 8] |= pixel << (7 - (outX % 8));
+    }
+    if (!writer(rowBuffer.data(), rowSizePadded)) {
+      return false;
+    }
+    memset(rowBuffer.data(), 0, rowSizePadded);
+  }
+
+  return true;
+}
+
 bool ScreenshotUtil::saveFramebufferAsBmp(const char* filename, const uint8_t* framebuffer, int width, int height) {
   if (!framebuffer) {
     return false;
@@ -60,58 +107,15 @@ bool ScreenshotUtil::saveFramebufferAsBmp(const char* filename, const uint8_t* f
     return false;
   }
 
-  BmpHeader header;
-
-  createBmpHeader(&header, phyWidth, phyHeight, BmpRowOrder::BottomUp);
-
-  bool write_error = false;
-  if (file.write(reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header)) {
-    write_error = true;
-  }
-
-  if (write_error) {
-    // Explicitly close() file before calling Storage.remove()
-    file.close();
-    Storage.remove(filename);
-    return false;
-  }
-
-  const uint32_t rowSizePadded = (phyWidth + 31) / 32 * 4;
-  // Max row size for 528px height (X3) after rotation = 68 bytes; use fixed buffer to avoid VLA
-  constexpr size_t kMaxRowSize = 68;
-  if (rowSizePadded > kMaxRowSize) {
-    LOG_ERR("SCR", "Row size %u exceeds buffer capacity", rowSizePadded);
-    // Explicitly close() file before calling Storage.remove()
-    file.close();
-    Storage.remove(filename);
-    return false;
-  }
-
-  // rotate the image 90d counter-clockwise on-the-fly while writing to save memory
-  uint8_t rowBuffer[kMaxRowSize];
-  memset(rowBuffer, 0, rowSizePadded);
-
-  for (int outY = 0; outY < phyHeight; outY++) {
-    for (int outX = 0; outX < phyWidth; outX++) {
-      // 90d counter-clockwise: source (srcX, srcY)
-      // BMP rows are bottom-to-top, so outY=0 is the bottom of the displayed image
-      int srcX = width - 1 - outY;     // phyHeight == width
-      int srcY = phyWidth - 1 - outX;  // phyWidth == height
-      int fbIndex = srcY * (width / 8) + (srcX / 8);
-      uint8_t pixel = (framebuffer[fbIndex] >> (7 - (srcX % 8))) & 0x01;
-      rowBuffer[outX / 8] |= pixel << (7 - (outX % 8));
-    }
-    if (file.write(rowBuffer, rowSizePadded) != rowSizePadded) {
-      write_error = true;
-      break;
-    }
-    memset(rowBuffer, 0, rowSizePadded);  // Clear the buffer for the next row
-  }
+  const bool writeError = !streamFramebufferAsBmp(
+      framebuffer, width, height, [&file](const uint8_t* data, const size_t length) {
+        return file.write(data, length) == length;
+      });
 
   // Explicitly close() file before calling Storage.remove()
   file.close();
 
-  if (write_error) {
+  if (writeError) {
     Storage.remove(filename);
     return false;
   }

@@ -26,7 +26,16 @@
         "page.js",
         "search.js",
         "toc.js"
-      ]
+      ],
+      "entrypoints": {
+        "home": "home.js",
+        "genre": "genre.js",
+        "detail": "detail.js",
+        "search": "search.js",
+        "page": "page.js",
+        "toc": "toc.js",
+        "chap": "chap.js"
+      }
     }
   },
   "source": {

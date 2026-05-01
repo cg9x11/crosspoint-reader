@@ -2,17 +2,23 @@
 
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <HalGPIO.h>
 #include <Logging.h>
 #include <WiFi.h>
 
 #include <algorithm>
-#include <map>
 
 #include "MappedInputManager.h"
 #include "WifiCredentialStore.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+
+namespace {
+constexpr int32_t MAX_24_GHZ_WIFI_CHANNEL = 14;
+constexpr const char* WIFI_5_GHZ_DISABLED_HINT = "5G shown, X3/X4 use 2.4G";
+constexpr const char* WIFI_24_GHZ_ONLY_ERROR = "2.4 GHz only";
+}
 
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
@@ -48,26 +54,6 @@ void WifiSelectionActivity::onEnter() {
   // Trigger first update to show scanning message
   requestUpdate();
 
-  // Attempt to auto-connect to the last network
-  if (allowAutoConnect) {
-    const std::string lastSsid = WIFI_STORE.getLastConnectedSsid();
-    if (!lastSsid.empty()) {
-      const auto* cred = WIFI_STORE.findCredential(lastSsid);
-      if (cred) {
-        LOG_DBG("WIFI", "Attempting to auto-connect to %s", lastSsid.c_str());
-        selectedSSID = cred->ssid;
-        enteredPassword = cred->password;
-        selectedRequiresPassword = !cred->password.empty();
-        usedSavedPassword = true;
-        autoConnecting = true;
-        attemptConnection();
-        requestUpdate();
-        return;
-      }
-    }
-  }
-
-  // Fallback to scanning
   startWifiScan();
 }
 
@@ -117,38 +103,40 @@ void WifiSelectionActivity::processWifiScanResults() {
     return;
   }
 
-  // Scan complete, process results
-  // Use a map to deduplicate networks by SSID, keeping the strongest signal
-  std::map<std::string, WifiNetworkInfo> uniqueNetworks;
+  // Scan complete, collect then deduplicate in-place to avoid std::map heap churn.
+  networks.clear();
+  networks.reserve(scanResult > 0 ? static_cast<size_t>(scanResult) : 0);
 
   for (int i = 0; i < scanResult; i++) {
     std::string ssid = WiFi.SSID(i).c_str();
-    const int32_t rssi = WiFi.RSSI(i);
 
     // Skip hidden networks (empty SSID)
     if (ssid.empty()) {
       continue;
     }
 
-    // Check if we've already seen this SSID
-    auto it = uniqueNetworks.find(ssid);
-    if (it == uniqueNetworks.end() || rssi > it->second.rssi) {
-      // New network or stronger signal than existing entry
-      WifiNetworkInfo network;
-      network.ssid = ssid;
-      network.rssi = rssi;
-      network.isEncrypted = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
-      network.hasSavedPassword = WIFI_STORE.hasSavedCredential(network.ssid);
-      uniqueNetworks[ssid] = network;
-    }
+    WifiNetworkInfo network;
+    network.ssid = std::move(ssid);
+    network.rssi = WiFi.RSSI(i);
+    network.channel = WiFi.channel(i);
+    network.isEncrypted = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+    network.is24Ghz = network.channel > 0 && network.channel <= MAX_24_GHZ_WIFI_CHANNEL;
+    network.isBandBlocked = shouldRestrict5GhzForDevice() && !network.is24Ghz;
+    network.hasSavedPassword = WIFI_STORE.hasSavedCredential(network.ssid);
+    networks.push_back(std::move(network));
   }
 
-  // Convert map to vector
-  networks.clear();
-  for (const auto& pair : uniqueNetworks) {
-    // cppcheck-suppress useStlAlgorithm
-    networks.push_back(pair.second);
-  }
+  std::sort(networks.begin(), networks.end(), [](const WifiNetworkInfo& a, const WifiNetworkInfo& b) {
+    if (a.ssid != b.ssid) {
+      return a.ssid < b.ssid;
+    }
+    return a.rssi > b.rssi;
+  });
+
+  auto dedupeEnd = std::unique(networks.begin(), networks.end(), [](const WifiNetworkInfo& a, const WifiNetworkInfo& b) {
+    return a.ssid == b.ssid;
+  });
+  networks.erase(dedupeEnd, networks.end());
 
   // Sort: saved-password networks first, then by signal strength (strongest first)
   std::sort(networks.begin(), networks.end(), [](const WifiNetworkInfo& a, const WifiNetworkInfo& b) {
@@ -161,7 +149,56 @@ void WifiSelectionActivity::processWifiScanResults() {
   WiFi.scanDelete();
   state = WifiSelectionState::NETWORK_LIST;
   selectedNetworkIndex = 0;
+
+  if (allowAutoConnect) {
+    const std::string lastSsid = WIFI_STORE.getLastConnectedSsid();
+    const auto* cred = lastSsid.empty() ? nullptr : WIFI_STORE.findCredential(lastSsid);
+    WifiNetworkInfo network;
+    if (cred && findSavedNetworkCandidate(lastSsid, network) && isSupportedBand(network)) {
+      LOG_DBG("WIFI", "Attempting to auto-connect to %s on channel %ld", lastSsid.c_str(), static_cast<long>(network.channel));
+      selectedSSID = cred->ssid;
+      selectedRequiresPassword = network.isEncrypted;
+      enteredPassword = cred->password;
+      usedSavedPassword = true;
+      autoConnecting = true;
+      attemptConnection();
+      requestUpdate();
+      return;
+    }
+  }
+
   requestUpdate();
+}
+
+bool WifiSelectionActivity::findSavedNetworkCandidate(const std::string& ssid, WifiNetworkInfo& outNetwork) const {
+  const auto it = std::find_if(networks.begin(), networks.end(),
+                               [&ssid](const WifiNetworkInfo& network) { return network.ssid == ssid; });
+  if (it == networks.end()) {
+    return false;
+  }
+  outNetwork = *it;
+  return true;
+}
+
+bool WifiSelectionActivity::shouldRestrict5GhzForDevice() const { return gpio.deviceIsX3() || gpio.deviceIsX4(); }
+
+bool WifiSelectionActivity::isSupportedBand(const WifiNetworkInfo& network) const { return !network.isBandBlocked; }
+
+bool WifiSelectionActivity::canConnectSelectedNetwork() const {
+  if (networks.empty() || selectedNetworkIndex >= networks.size()) {
+    return false;
+  }
+  return isSupportedBand(networks[selectedNetworkIndex]);
+}
+
+bool WifiSelectionActivity::hasBlocked5GhzNetworks() const {
+  return std::any_of(networks.begin(), networks.end(),
+                     [](const WifiNetworkInfo& network) { return network.isBandBlocked; });
+}
+
+void WifiSelectionActivity::showUnsupportedBandPopup() {
+  RenderLock lock(*this);
+  GUI.drawPopup(renderer, WIFI_24_GHZ_ONLY_ERROR);
 }
 
 void WifiSelectionActivity::selectNetwork(const int index) {
@@ -170,6 +207,12 @@ void WifiSelectionActivity::selectNetwork(const int index) {
   }
 
   const auto& network = networks[index];
+  if (!isSupportedBand(network)) {
+    selectedSSID = network.ssid;
+    showUnsupportedBandPopup();
+    return;
+  }
+
   selectedSSID = network.ssid;
   selectedRequiresPassword = network.isEncrypted;
   usedSavedPassword = false;
@@ -210,6 +253,16 @@ void WifiSelectionActivity::selectNetwork(const int index) {
 }
 
 void WifiSelectionActivity::attemptConnection() {
+  const auto selectedNetwork = std::find_if(networks.begin(), networks.end(),
+                                            [this](const WifiNetworkInfo& network) { return network.ssid == selectedSSID; });
+  if (selectedNetwork != networks.end() && !isSupportedBand(*selectedNetwork)) {
+    connectionError = WIFI_24_GHZ_ONLY_ERROR;
+    autoConnecting = false;
+    state = WifiSelectionState::CONNECTION_FAILED;
+    requestUpdate();
+    return;
+  }
+
   state = autoConnecting ? WifiSelectionState::AUTO_CONNECTING : WifiSelectionState::CONNECTING;
   connectionStartTime = millis();
   connectedIP.clear();
@@ -534,19 +587,25 @@ void WifiSelectionActivity::renderNetworkList() const {
         selectedNetworkIndex, [this](int index) { return networks[index].ssid; }, nullptr, nullptr,
         [this](int index) {
           auto network = networks[index];
-          return std::string(network.hasSavedPassword ? "+ " : "") + (network.isEncrypted ? "* " : "") +
-                 getSignalStrengthIndicator(network.rssi);
+          std::string prefix = std::string(network.hasSavedPassword ? "+ " : "") + (network.isEncrypted ? "* " : "");
+          if (network.isBandBlocked) {
+            prefix += "5G ";
+          }
+          return prefix + getSignalStrengthIndicator(network.rssi);
         });
   }
 
+  const std::string helpText =
+      hasBlocked5GhzNetworks() ? std::string(tr(STR_NETWORK_LEGEND)) + " | " + WIFI_5_GHZ_DISABLED_HINT
+                               : std::string(tr(STR_NETWORK_LEGEND));
   GUI.drawHelpText(renderer,
                    Rect{0, pageHeight - metrics.buttonHintsHeight - metrics.contentSidePadding - 15, pageWidth, 20},
-                   tr(STR_NETWORK_LEGEND));
+                   helpText.c_str());
 
   const bool hasSavedPassword = !networks.empty() && networks[selectedNetworkIndex].hasSavedPassword;
   const char* forgetLabel = hasSavedPassword ? tr(STR_FORGET_BUTTON) : "";
-
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_CONNECT), forgetLabel, tr(STR_RETRY));
+  const char* connectLabel = (!networks.empty() && canConnectSelectedNetwork()) ? tr(STR_CONNECT) : "";
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), connectLabel, forgetLabel, tr(STR_RETRY));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 

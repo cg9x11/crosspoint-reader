@@ -1,0 +1,25 @@
+{
+  "plugin": {
+    "id": "hako-server",
+    "name": "Hako Server",
+    "version": 1,
+    "deviceSupport": [
+      "x3",
+      "x4"
+    ]
+  },
+  "runtime": {
+    "mode": "adapter",
+    "adapter": {
+      "origin": "server",
+      "profile": "hako"
+    }
+  },
+  "source": {
+    "baseUrl": "https://online-library.noe.asia",
+    "locale": "vi-VN",
+    "contentType": "webnovel",
+    "supportsSearch": true,
+    "supportsTrackedUpdates": true
+  }
+}

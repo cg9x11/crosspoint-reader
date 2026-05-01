@@ -22,6 +22,7 @@
 namespace {
 constexpr unsigned long MODE_SWITCH_MS = 700;
 constexpr int MAX_SUMMARY_WRAP_LINES = 96;
+constexpr int PREVIEW_COVER_TARGET_HEIGHT = 92;
 TrackedSeriesActivity::FilterMode g_lastFilterMode = TrackedSeriesActivity::FilterMode::All;
 TrackedSeriesActivity::SortMode g_lastSortMode = TrackedSeriesActivity::SortMode::Status;
 std::string g_lastTrackedSeriesId;
@@ -61,6 +62,13 @@ const char* coverDebugStatus(bool hasCover, bool failed) {
   if (hasCover) return "Cover ready";
   if (failed) return "Cover unavailable";
   return "Cover pending";
+}
+
+int computePreviewHeight(int availableBodyHeight) {
+  const int target = (availableBodyHeight * 45) / 100;
+  const int minHeight = 220;
+  const int maxHeight = std::max(minHeight, availableBodyHeight - 120);
+  return std::max(minHeight, std::min(target, maxHeight));
 }
 
 }
@@ -159,6 +167,7 @@ void TrackedSeriesActivity::syncAllTracked() {
   }
 
   int queuedCount = 0;
+  std::string blockedMessage;
   for (const auto& item : items) {
     const CpPluginInfo plugin = resolvePluginForTrackedItem(item);
     if (!OnlineSourceBridge::supportsTrackedUpdates(plugin)) {
@@ -167,10 +176,13 @@ void TrackedSeriesActivity::syncAllTracked() {
     std::string ignoredMessage;
     if (BACKGROUND_DOWNLOAD_MANAGER.enqueueTrackedSync(item, &ignoredMessage)) {
       queuedCount++;
+    } else if (blockedMessage.empty() && !ignoredMessage.empty()) {
+      blockedMessage = ignoredMessage;
     }
   }
 
-  popupMessage = queuedCount > 0 ? ("Queued " + std::to_string(queuedCount) + " update job(s)") : "No new jobs queued";
+  popupMessage = queuedCount > 0 ? ("Queued " + std::to_string(queuedCount) + " update job(s)")
+                                 : (blockedMessage.empty() ? "No new jobs queued" : blockedMessage);
   popupUntilMs = millis() + 1800;
   requestUpdate();
 }
@@ -416,7 +428,7 @@ void TrackedSeriesActivity::maybeLoadSelectedPreview() {
     cached->failed = true;
   } else {
     const std::string previewText =
-        OnlineTextUtils::limitPreviewText(OnlineTextUtils::stripHtml(detail.descriptionHtml), 720);
+        OnlineTextUtils::limitPreviewText(OnlineTextUtils::stripHtml(detail.descriptionHtml), 420);
     cached->text = previewText;
     cached->resolvedCoverUrl = detail.coverUrl;
     cached->detailLoaded = true;
@@ -443,7 +455,8 @@ void TrackedSeriesActivity::maybeLoadSelectedCover() {
 
   const std::string coverUrl = selectedResolvedCoverUrl();
   std::string coverPath;
-  const bool ok = !coverUrl.empty() && OnlineCoverStore::tryGetCachedThumb(coverUrl, 72, coverPath);
+  const bool ok =
+      !coverUrl.empty() && OnlineCoverStore::getOrCreateThumb(coverUrl, PREVIEW_COVER_TARGET_HEIGHT, coverPath);
   coverCache.push_back(CoverCacheEntry{selected->seriesUrl, ok ? coverPath : "", !ok});
   pruneCoverCache(selected->seriesUrl);
   requestUpdate();
@@ -455,7 +468,8 @@ std::string TrackedSeriesActivity::selectedResolvedCoverUrl() const {
     return "";
   }
   if (!selected->coverUrl.empty()) {
-    return selected->coverUrl;
+    const CpPluginInfo plugin = resolvePluginForTrackedItem(*selected);
+    return OnlineSourceBridge::buildAssetProxyUrl(plugin, selected->coverUrl);
   }
   const auto* cached = findPreviewEntry(selected->seriesUrl);
   return cached == nullptr ? std::string() : cached->resolvedCoverUrl;
@@ -476,7 +490,8 @@ std::string TrackedSeriesActivity::selectedCoverPath() const {
 
   std::string coverPath;
   const std::string coverUrl = selectedResolvedCoverUrl();
-  if (!coverUrl.empty() && OnlineCoverStore::tryGetCachedThumb(coverUrl, 72, coverPath)) {
+  if (!coverUrl.empty() &&
+      OnlineCoverStore::tryGetCachedThumb(coverUrl, PREVIEW_COVER_TARGET_HEIGHT, coverPath)) {
     return coverPath;
   }
   return "";
@@ -497,7 +512,8 @@ bool TrackedSeriesActivity::selectedCoverFailed() const {
 
   std::string ignoredCoverPath;
   const std::string coverUrl = selectedResolvedCoverUrl();
-  return coverUrl.empty() || !OnlineCoverStore::tryGetCachedThumb(coverUrl, 72, ignoredCoverPath);
+  return coverUrl.empty() ||
+         !OnlineCoverStore::tryGetCachedThumb(coverUrl, PREVIEW_COVER_TARGET_HEIGHT, ignoredCoverPath);
 }
 
 std::string TrackedSeriesActivity::selectedPreviewText() const {
@@ -602,15 +618,15 @@ bool TrackedSeriesActivity::selectedPreviewOverflows() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageHeight = renderer.getScreenHeight();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int previewHeight = 188;
-  const int contentHeight =
-      pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2 - previewHeight;
+  const int availableBodyHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  const int previewHeight = computePreviewHeight(availableBodyHeight);
+  const int contentHeight = availableBodyHeight - previewHeight;
   const int previewTop = contentTop + contentHeight + metrics.verticalSpacing;
   const int previewBoxHeight = previewHeight - metrics.verticalSpacing;
   const int infoY = previewTop + 8 + 92 + 6 + renderer.getLineHeight(UI_10_FONT_ID) + 3;
   const int infoLineHeight = renderer.getLineHeight(UI_10_FONT_ID) + 2;
   const int previewBottomPadding = 8;
-  const int hintReserve = 0;
+  const int hintReserve = renderer.getLineHeight(SMALL_FONT_ID) + 6;
   const int availableInfoHeight = std::max(0, previewTop + previewBoxHeight - previewBottomPadding - infoY - hintReserve);
   const int visibleLines = std::max(1, availableInfoHeight / std::max(1, infoLineHeight));
   const int previewWidth = renderer.getScreenWidth() - metrics.contentSidePadding * 2;
@@ -777,9 +793,9 @@ void TrackedSeriesActivity::render(RenderLock&&) {
   const int pageHeight = renderer.getScreenHeight();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const bool showPreviewPanel = !items.empty() && !visibleIndices.empty();
-  const int previewHeight = showPreviewPanel ? 188 : 0;
-  const int contentHeight =
-      pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2 - previewHeight;
+  const int availableBodyHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  const int previewHeight = showPreviewPanel ? computePreviewHeight(availableBodyHeight) : 0;
+  const int contentHeight = availableBodyHeight - previewHeight;
 
   const int pageItems = std::max(1, contentHeight / std::max(1, metrics.listWithSubtitleRowHeight));
   const std::string subtitle = headerSubtitle(pageItems);
@@ -865,7 +881,7 @@ void TrackedSeriesActivity::render(RenderLock&&) {
     const int infoLineHeight = renderer.getLineHeight(UI_10_FONT_ID) + 2;
     const int previewBottomPadding = 8;
     const bool showPreviewHint = selectedPreviewOverflows();
-    const int hintReserve = showPreviewHint ? (infoLineHeight + 2) : 0;
+    const int hintReserve = showPreviewHint ? (renderer.getLineHeight(SMALL_FONT_ID) + 6) : 0;
     const int availableInfoHeight = std::max(0, previewTop + previewBoxHeight - previewBottomPadding - infoY - hintReserve);
     const int maxInfoLines = std::max(1, availableInfoHeight / infoLineHeight);
     const auto infoLines =
@@ -883,11 +899,12 @@ void TrackedSeriesActivity::render(RenderLock&&) {
     }
 
     if (showPreviewHint) {
-      const std::string hintText = "Select: open detail for full summary";
-      const std::string safeHint = renderer.truncatedText(UI_10_FONT_ID, hintText.c_str(), previewWidth - 16);
-      renderer.drawText(UI_10_FONT_ID, previewX + 8,
-                        previewTop + previewBoxHeight - previewBottomPadding - renderer.getLineHeight(UI_10_FONT_ID),
-                        safeHint.c_str(), true, EpdFontFamily::BOLD);
+      const std::string hintText = "Select: open detail";
+      const std::string safeHint = renderer.truncatedText(SMALL_FONT_ID, hintText.c_str(), previewWidth - 16);
+      const int hintY =
+          previewTop + previewBoxHeight - previewBottomPadding - renderer.getLineHeight(SMALL_FONT_ID);
+      renderer.drawLine(previewX + 8, hintY - 3, previewX + previewWidth - 8, hintY - 3);
+      renderer.drawText(SMALL_FONT_ID, previewX + 8, hintY, safeHint.c_str(), true, EpdFontFamily::REGULAR);
     }
     SCREEN_DEBUG.setBodyText("Summary", StringUtils::toDisplaySafeAscii(infoText).c_str(),
                              coverDebugStatus(!coverPath.empty(), coverFailed));

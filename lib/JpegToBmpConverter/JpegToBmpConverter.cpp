@@ -1,5 +1,6 @@
 #include "JpegToBmpConverter.h"
 
+#include <Arduino.h>
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <JPEGDEC.h>
@@ -159,6 +160,7 @@ static void writeBmpHeader2bit(Print& bmpOut, const int width, const int height)
 }
 
 namespace {
+constexpr int ROW_YIELD_INTERVAL = 8;
 
 // Max MCU height supported by any JPEG (4:2:0 chroma = 16 rows, 4:4:4 = 8 rows)
 constexpr int MAX_MCU_HEIGHT = 16;
@@ -265,6 +267,9 @@ static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) 
 
   ctx->bmpOut->write(ctx->bmpRow, ctx->bytesPerRow);
   ctx->outputRowsWritten++;
+  if ((ctx->outputRowsWritten % ROW_YIELD_INTERVAL) == 0) {
+    yield();
+  }
 }
 
 // Flush one scaled output row from Y-axis accumulators and advance currentOutY
@@ -306,6 +311,9 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
   ctx->bmpOut->write(ctx->bmpRow, ctx->bytesPerRow);
   ctx->currentOutY++;
   ctx->outputRowsWritten++;
+  if ((ctx->outputRowsWritten % ROW_YIELD_INTERVAL) == 0) {
+    yield();
+  }
 }
 
 // JPEGDEC draw callback — receives one MCU-width × MCU-height block at a time,

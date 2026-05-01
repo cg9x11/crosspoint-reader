@@ -1,5 +1,6 @@
 #include "RecentBooksStore.h"
 
+#include <Arduino.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -10,52 +11,130 @@
 
 #include <algorithm>
 
+#include "PluginStore.h"
+
 namespace {
 constexpr uint8_t RECENT_BOOKS_FILE_VERSION = 3;
 constexpr char RECENT_BOOKS_FILE_BIN[] = "/.crosspoint/recent.bin";
 constexpr char RECENT_BOOKS_FILE_JSON[] = "/.crosspoint/recent.json";
 constexpr char RECENT_BOOKS_FILE_BAK[] = "/.crosspoint/recent.bin.bak";
 constexpr int MAX_RECENT_BOOKS = 10;
+
+uint8_t progressPercentFromPageState(const uint32_t lastReadPage, const uint32_t lastReadPageCount) {
+  if (lastReadPageCount == 0) {
+    return 0;
+  }
+
+  const uint32_t clampedPage = std::min(lastReadPage + 1, lastReadPageCount);
+  return static_cast<uint8_t>(std::min<uint32_t>(100, (clampedPage * 100U) / lastReadPageCount));
+}
 }  // namespace
 
 RecentBooksStore RecentBooksStore::instance;
 
-void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
-                               const std::string& coverBmpPath) {
-  // Remove existing entry if present
+RecentBook* RecentBooksStore::findBook(const std::string& path) {
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
-  if (it != recentBooks.end()) {
-    recentBooks.erase(it);
-  }
+  return it != recentBooks.end() ? &(*it) : nullptr;
+}
 
-  // Add to front
-  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath});
-
-  // Trim to max size
-  if (recentBooks.size() > MAX_RECENT_BOOKS) {
-    recentBooks.resize(MAX_RECENT_BOOKS);
-  }
-
-  saveToFile();
+void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
+                               const std::string& coverBmpPath) {
+  RecentBook book;
+  book.path = path;
+  book.title = title;
+  book.author = author;
+  book.coverBmpPath = coverBmpPath;
+  book.kind = RecentBookKind::LocalFile;
+  upsertBook(std::move(book), true, true);
 }
 
 void RecentBooksStore::updateBook(const std::string& path, const std::string& title, const std::string& author,
                                   const std::string& coverBmpPath) {
-  auto it =
-      std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
-  if (it != recentBooks.end()) {
-    RecentBook& book = *it;
-    book.title = title;
-    book.author = author;
-    book.coverBmpPath = coverBmpPath;
+  if (RecentBook* book = findBook(path)) {
+    book->title = title;
+    book->author = author;
+    book->coverBmpPath = coverBmpPath;
     saveToFile();
+  }
+}
+
+void RecentBooksStore::addOrUpdateOnlineBook(const std::string& pluginId, const std::string& runtimeProfile,
+                                             const std::string& seriesUrl, const std::string& title,
+                                             const std::string& author, const std::string& coverUrl,
+                                             const std::string& chapterUrl, const std::string& chapterTitle,
+                                             const uint32_t lastReadPage, const uint32_t lastReadPageCount,
+                                             const bool moveToFront, const bool persist) {
+  if (pluginId.empty() || seriesUrl.empty()) {
+    return;
+  }
+
+  RecentBook book;
+  book.path = buildOnlinePath(pluginId, seriesUrl, runtimeProfile);
+  book.title = title;
+  book.author = author;
+  book.kind = RecentBookKind::OnlineSource;
+  book.pluginId = pluginId;
+  book.runtimeProfile = runtimeProfile;
+  book.seriesUrl = seriesUrl;
+  book.coverUrl = coverUrl;
+  book.chapterUrl = chapterUrl;
+  book.chapterTitle = chapterTitle;
+  book.lastReadPage = lastReadPage;
+  book.lastReadPageCount = lastReadPageCount;
+  book.progressPercent = progressPercentFromPageState(lastReadPage, lastReadPageCount);
+  upsertBook(std::move(book), moveToFront, persist);
+}
+
+void RecentBooksStore::startReadingSession(const std::string& path) {
+  if (activeSessionOpen) {
+    finishReadingSession(activeSessionPath);
+  }
+
+  activeSessionPath = path;
+  activeSessionStartMs = millis();
+  activeSessionOpen = true;
+}
+
+void RecentBooksStore::finishReadingSession(const std::string& path) {
+  if (!activeSessionOpen || activeSessionPath != path) {
+    return;
+  }
+
+  if (RecentBook* book = findBook(path)) {
+    const uint32_t elapsedMs = millis() - activeSessionStartMs;
+    if (elapsedMs > 0) {
+      const uint32_t elapsedSeconds = std::max<uint32_t>(1, elapsedMs / 1000);
+      book->readingTimeSeconds += elapsedSeconds;
+    }
+    saveToFile();
+  }
+
+  activeSessionPath.clear();
+  activeSessionStartMs = 0;
+  activeSessionOpen = false;
+}
+
+void RecentBooksStore::updateReadingProgress(const std::string& path, uint8_t progressPercent, bool persist) {
+  if (RecentBook* book = findBook(path)) {
+    if (progressPercent > 100) {
+      progressPercent = 100;
+    }
+    book->progressPercent = progressPercent;
+    if (persist) {
+      saveToFile();
+    }
   }
 }
 
 bool RecentBooksStore::saveToFile() const {
   Storage.mkdir("/.crosspoint");
   return JsonSettingsIO::saveRecentBooks(*this, RECENT_BOOKS_FILE_JSON);
+}
+
+std::string RecentBooksStore::buildOnlinePath(const std::string& pluginId, const std::string& seriesUrl,
+                                              const std::string& runtimeProfile) {
+  return std::string("online://") + PluginStore::canonicalizeRuntimeProfile(pluginId, runtimeProfile) + "|" + seriesUrl;
 }
 
 RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
@@ -84,6 +163,52 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
     return RecentBook{path, lastBookFileName, "", ""};
   }
   return RecentBook{path, "", "", ""};
+}
+
+void RecentBooksStore::upsertBook(RecentBook book, const bool moveToFront, const bool persist) {
+  auto it =
+      std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& existing) { return existing.path == book.path; });
+
+  if (it != recentBooks.end()) {
+    const bool hasNewPageState = book.lastReadPageCount > 0;
+    if (book.title.empty()) book.title = it->title;
+    if (book.author.empty()) book.author = it->author;
+    if (book.coverBmpPath.empty()) book.coverBmpPath = it->coverBmpPath;
+    if (book.coverUrl.empty()) book.coverUrl = it->coverUrl;
+    if (book.chapterUrl.empty()) book.chapterUrl = it->chapterUrl;
+    if (book.chapterTitle.empty()) book.chapterTitle = it->chapterTitle;
+    if (book.runtimeProfile.empty()) book.runtimeProfile = it->runtimeProfile;
+    if (book.pluginId.empty()) book.pluginId = it->pluginId;
+    if (book.seriesUrl.empty()) book.seriesUrl = it->seriesUrl;
+    if (!hasNewPageState) {
+      book.lastReadPageCount = it->lastReadPageCount;
+      book.lastReadPage = it->lastReadPage;
+    }
+    if (book.progressPercent == 0 && it->progressPercent > 0) book.progressPercent = it->progressPercent;
+    if (book.kind == RecentBookKind::LocalFile && it->kind == RecentBookKind::OnlineSource) {
+      book.kind = it->kind;
+    }
+    book.readingTimeSeconds = it->readingTimeSeconds;
+
+    if (!moveToFront) {
+      *it = std::move(book);
+      if (persist) {
+        saveToFile();
+      }
+      return;
+    }
+
+    recentBooks.erase(it);
+  }
+
+  recentBooks.insert(recentBooks.begin(), std::move(book));
+  if (recentBooks.size() > MAX_RECENT_BOOKS) {
+    recentBooks.resize(MAX_RECENT_BOOKS);
+  }
+
+  if (persist) {
+    saveToFile();
+  }
 }
 
 bool RecentBooksStore::loadFromFile() {

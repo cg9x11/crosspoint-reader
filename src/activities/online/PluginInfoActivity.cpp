@@ -9,9 +9,7 @@
 
 namespace {
 std::string boolText(bool value) { return value ? "Yes" : "No"; }
-bool isBundledPlugin(const std::string& pluginId) {
-  return pluginId == "hako" || pluginId == "truyenfull" || pluginId == "webtruyen";
-}
+bool isBundledPlugin(const std::string&) { return false; }
 }
 
 void PluginInfoActivity::onEnter() {

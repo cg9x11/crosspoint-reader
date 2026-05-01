@@ -1,6 +1,7 @@
 #include "BackgroundDownloadManager.h"
 
 #include <Arduino.h>
+#include <HalGPIO.h>
 #include <Logging.h>
 
 #include <algorithm>
@@ -9,7 +10,6 @@
 
 #include "OnlineLibrarySettingsStore.h"
 #include "plugins/HakoEpubService.h"
-#include "plugins/HakoPluginExecutor.h"
 #include "plugins/OnlineSourceBridge.h"
 
 BackgroundDownloadManager BackgroundDownloadManager::instance;
@@ -17,8 +17,20 @@ BackgroundDownloadManager BackgroundDownloadManager::instance;
 namespace {
 constexpr char MODULE[] = "BGDL";
 constexpr unsigned WORKER_IDLE_DELAY_MS = 250;
+constexpr uint32_t WORKER_TASK_STACK_WORDS = 7168;
 bool isActiveStatus(DownloadJobStatus status) {
   return status == DownloadJobStatus::Queued || status == DownloadJobStatus::Running || status == DownloadJobStatus::RetryWait;
+}
+
+bool isForegroundOnlyEpubJob(DownloadJobKind kind) {
+  return kind == DownloadJobKind::HakoDownload || kind == DownloadJobKind::HakoSync;
+}
+
+bool deviceRequiresForegroundOnlyDownloads() { return gpio.deviceIsX3() || gpio.deviceIsX4(); }
+
+const char* foregroundOnlyJobBlockedMessage(DownloadJobKind kind) {
+  return kind == DownloadJobKind::HakoDownload ? "Open story detail to download"
+                                               : "Open story detail to update";
 }
 
 OnlineLibrarySettings loadOnlineLibrarySettings() {
@@ -51,13 +63,24 @@ HakoDownloadOptions makeDownloadOptions() {
   return options;
 }
 
-CpPluginInfo makeMinimalPluginInfo(const std::string& pluginId) {
-  return OnlineSourceBridge::makeFallbackPluginInfo(pluginId);
-}
-
 CpPluginInfo resolvePluginInfo(const std::string& pluginId, const std::string& runtimeProfile) {
   const auto* plugin = PLUGIN_STORE.getPlugin(pluginId);
   return plugin ? *plugin : OnlineSourceBridge::makeFallbackPluginInfo(pluginId, runtimeProfile);
+}
+
+std::string compactBackgroundError(const std::string& message, const char* fallback) {
+  std::string text = message;
+  if (text.empty()) {
+    text = fallback;
+  }
+  if (text.size() > 72) {
+    text.resize(72);
+    while (!text.empty() && text.back() == ' ') {
+      text.pop_back();
+    }
+    text += "...";
+  }
+  return text;
 }
 }  // namespace
 
@@ -72,10 +95,26 @@ void BackgroundDownloadManager::begin() {
 
   xSemaphoreTake(mutex, portMAX_DELAY);
   DownloadJobStore::loadFromDisk(jobs);
+  bool migratedLegacyEpubJobs = false;
+  if (gpio.deviceIsX3() || gpio.deviceIsX4()) {
+    for (auto& job : jobs) {
+      if (!isForegroundOnlyEpubJob(job.kind) || !isActiveStatus(job.status)) {
+        continue;
+      }
+      job.status = DownloadJobStatus::Cancelled;
+      job.statusMessage = "Foreground download required";
+      job.nextRetryAtMs = 0;
+      job.updatedAtMs = millis();
+      migratedLegacyEpubJobs = true;
+    }
+  }
+  if (migratedLegacyEpubJobs) {
+    saveJobsLocked();
+  }
   xSemaphoreGive(mutex);
 
   if (!workerTaskHandle) {
-    xTaskCreate(&workerTaskTrampoline, "BackgroundDownload", 12288, this, 1, &workerTaskHandle);
+    xTaskCreate(&workerTaskTrampoline, "BackgroundDownload", WORKER_TASK_STACK_WORDS, this, 1, &workerTaskHandle);
     if (!workerTaskHandle) {
       LOG_ERR(MODULE, "Failed to create worker task");
     }
@@ -183,6 +222,10 @@ std::optional<DownloadJobInfo> BackgroundDownloadManager::getLatestJobForSeries(
 bool BackgroundDownloadManager::enqueueHakoDownload(const CpPluginInfo& pluginInfo, const TrackedSeriesInfo& trackedItem,
                                                     std::string* outMessage) {
   if (!mutex) begin();
+  if (deviceRequiresForegroundOnlyDownloads()) {
+    if (outMessage) *outMessage = foregroundOnlyJobBlockedMessage(DownloadJobKind::HakoDownload);
+    return false;
+  }
   xSemaphoreTake(mutex, portMAX_DELAY);
   if (findActiveJobForSeriesLocked(pluginInfo.id, trackedItem.seriesUrl).has_value()) {
     xSemaphoreGive(mutex);
@@ -204,16 +247,23 @@ bool BackgroundDownloadManager::enqueueHakoDownload(const CpPluginInfo& pluginIn
   job.createdAtMs = millis();
   job.updatedAtMs = job.createdAtMs;
   job.statusMessage = "Waiting in queue";
-  TRACKED_SERIES_STORE.ensureLoaded();
-  std::string trackedError;
-  if (!TRACKED_SERIES_STORE.upsert(trackedItem, &trackedError)) {
-    xSemaphoreGive(mutex);
-    if (outMessage) *outMessage = trackedError;
-    return false;
-  }
   jobs.push_back(job);
   std::string error;
-  const bool ok = saveJobsLocked(&error);
+  bool ok = saveJobsLocked(&error);
+  if (ok) {
+    TRACKED_SERIES_STORE.ensureLoaded();
+    std::string trackedError;
+    ok = TRACKED_SERIES_STORE.upsert(trackedItem, &trackedError);
+    if (!ok) {
+      jobs.pop_back();
+      std::string rollbackError;
+      if (!saveJobsLocked(&rollbackError) && !rollbackError.empty()) {
+        error = trackedError + " (rollback: " + rollbackError + ")";
+      } else {
+        error = trackedError;
+      }
+    }
+  }
   xSemaphoreGive(mutex);
   if (outMessage) *outMessage = ok ? "Added to downloads and updates" : error;
   if (ok) requestUiRefresh();
@@ -222,19 +272,25 @@ bool BackgroundDownloadManager::enqueueHakoDownload(const CpPluginInfo& pluginIn
 
 bool BackgroundDownloadManager::enqueueTrackedSync(const TrackedSeriesInfo& trackedItem, std::string* outMessage) {
   if (!mutex) begin();
+  const CpPluginInfo pluginInfo = resolvePluginInfo(trackedItem.pluginId, trackedItem.runtimeProfile);
+  const DownloadJobKind jobKind =
+      OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo) ? DownloadJobKind::HakoSync : DownloadJobKind::TrackedSync;
+  if (deviceRequiresForegroundOnlyDownloads() && isForegroundOnlyEpubJob(jobKind)) {
+    if (outMessage) *outMessage = foregroundOnlyJobBlockedMessage(jobKind);
+    return false;
+  }
   xSemaphoreTake(mutex, portMAX_DELAY);
-  if (findActiveJobForSeriesLocked(trackedItem.pluginId, trackedItem.seriesUrl).has_value()) {
+  if (findActiveJobForSeriesLocked(pluginInfo.id, trackedItem.seriesUrl).has_value()) {
     xSemaphoreGive(mutex);
     if (outMessage) *outMessage = "Already queued";
     return false;
   }
 
   DownloadJobInfo job;
-  const CpPluginInfo pluginInfo = resolvePluginInfo(trackedItem.pluginId, trackedItem.runtimeProfile);
-  job.id = makeJobIdLocked(trackedItem.pluginId, trackedItem.seriesUrl);
-  job.kind = OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo) ? DownloadJobKind::HakoSync : DownloadJobKind::TrackedSync;
+  job.id = makeJobIdLocked(pluginInfo.id, trackedItem.seriesUrl);
+  job.kind = jobKind;
   job.status = DownloadJobStatus::Queued;
-  job.pluginId = trackedItem.pluginId;
+  job.pluginId = pluginInfo.id;
   job.runtimeProfile = OnlineSourceBridge::runtimeProfileFor(pluginInfo);
   job.title = trackedItem.title;
   job.author = trackedItem.author;
@@ -246,7 +302,10 @@ bool BackgroundDownloadManager::enqueueTrackedSync(const TrackedSeriesInfo& trac
   job.statusMessage = "Waiting in queue";
   jobs.push_back(job);
   std::string error;
-  const bool ok = saveJobsLocked(&error);
+  bool ok = saveJobsLocked(&error);
+  if (!ok) {
+    jobs.pop_back();
+  }
   xSemaphoreGive(mutex);
   if (outMessage) *outMessage = ok ? "Update check queued" : error;
   if (ok) requestUiRefresh();
@@ -263,13 +322,22 @@ bool BackgroundDownloadManager::retryJob(const std::string& jobId, std::string* 
     return false;
   }
   auto& job = jobs[*index];
+  if (deviceRequiresForegroundOnlyDownloads() && isForegroundOnlyEpubJob(job.kind)) {
+    xSemaphoreGive(mutex);
+    if (outMessage) *outMessage = foregroundOnlyJobBlockedMessage(job.kind);
+    return false;
+  }
   job.status = DownloadJobStatus::Queued;
   job.statusMessage = "Waiting in queue";
   job.currentChapterTitle.clear();
+  job.retryCount = 0;
+  job.totalChapters = 0;
+  job.completedChapters = 0;
   job.nextRetryAtMs = 0;
   job.updatedAtMs = millis();
   std::string error;
-  const bool ok = saveJobsLocked(&error);
+  bool ok = saveJobsLocked(&error);
+
   xSemaphoreGive(mutex);
   if (outMessage) *outMessage = ok ? "Retry queued" : error;
   if (ok) requestUiRefresh();
@@ -297,7 +365,8 @@ bool BackgroundDownloadManager::cancelJob(const std::string& jobId, std::string*
   job.nextRetryAtMs = 0;
   job.updatedAtMs = millis();
   std::string error;
-  const bool ok = saveJobsLocked(&error);
+  bool ok = saveJobsLocked(&error);
+
   xSemaphoreGive(mutex);
   if (outMessage) *outMessage = ok ? "Cancelled" : error;
   if (ok) requestUiRefresh();
@@ -315,7 +384,8 @@ bool BackgroundDownloadManager::clearFinished(std::string* outMessage) {
                             }),
              jobs.end());
   std::string error;
-  const bool ok = saveJobsLocked(&error);
+  bool ok = saveJobsLocked(&error);
+
   const bool changed = oldSize != jobs.size();
   xSemaphoreGive(mutex);
   if (outMessage) *outMessage = ok ? (changed ? "Cleared finished jobs" : "Nothing to clear") : error;
@@ -373,7 +443,9 @@ bool BackgroundDownloadManager::runJob(const DownloadJobInfo& job) {
 
     HakoBookDetail detail;
     std::vector<HakoChapterRef> toc;
-    if (!HakoPluginExecutor::fetchDetail(job.seriesUrl, detail) || !HakoPluginExecutor::fetchToc(job.seriesUrl, toc)) {
+    if (!OnlineSourceBridge::fetchDetail(pluginInfo, job.seriesUrl, detail) ||
+        !OnlineSourceBridge::fetchToc(pluginInfo, job.seriesUrl, toc)) {
+      const std::string loadError = compactBackgroundError(OnlineSourceBridge::getLastError(), "Failed to load series");
       xSemaphoreTake(mutex, portMAX_DELAY);
       if (const auto index = findJobIndexByIdLocked(job.id)) {
         auto& current = jobs[*index];
@@ -381,10 +453,10 @@ bool BackgroundDownloadManager::runJob(const DownloadJobInfo& job) {
         if (current.retryCount <= onlineSettings.maxJobRetries) {
           current.status = DownloadJobStatus::RetryWait;
           current.nextRetryAtMs = millis() + nextRetryDelayMs(current.retryCount - 1, onlineSettings);
-          current.statusMessage = "Network issue, will retry";
+          current.statusMessage = loadError;
         } else {
           current.status = DownloadJobStatus::Failed;
-          current.statusMessage = "Failed to load series";
+          current.statusMessage = loadError;
         }
         current.updatedAtMs = millis();
         saveJobsLocked();
@@ -395,7 +467,7 @@ bool BackgroundDownloadManager::runJob(const DownloadJobInfo& job) {
     }
 
     std::string error;
-    const bool ok = HakoEpubService::downloadEpub(detail, toc, job.epubPath, &error, &options, progress);
+    const bool ok = HakoEpubService::downloadEpub(pluginInfo, detail, toc, job.epubPath, &error, &options, progress);
     xSemaphoreTake(mutex, portMAX_DELAY);
     if (const auto index = findJobIndexByIdLocked(job.id)) {
       auto& current = jobs[*index];
@@ -506,7 +578,8 @@ bool BackgroundDownloadManager::runJob(const DownloadJobInfo& job) {
   }
 
   HakoTrackedSyncResult result;
-  const bool ok = HakoEpubService::syncTrackedSeries(*trackedItem, result, &options, progress);
+  const CpPluginInfo pluginInfo = resolvePluginInfo(job.pluginId, job.runtimeProfile);
+  const bool ok = HakoEpubService::syncTrackedSeries(pluginInfo, *trackedItem, result, &options, progress);
   xSemaphoreTake(mutex, portMAX_DELAY);
   if (const auto index = findJobIndexByIdLocked(job.id)) {
     auto& current = jobs[*index];

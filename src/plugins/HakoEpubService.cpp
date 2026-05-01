@@ -11,9 +11,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #include "../util/StringUtils.h"
+#include "OnlineSourceBridge.h"
 #include "network/HttpDownloader.h"
 
 namespace {
@@ -35,6 +37,8 @@ struct ZipEntryMeta {
 struct StagedZipEntry {
   std::string path;
   std::string sourcePath;
+  std::string inlineContent;
+  bool hasInlineContent = false;
   bool compress = true;
 };
 
@@ -161,13 +165,24 @@ std::string extensionFromUrl(const std::string& url) {
   return mediaTypeForExtension(ext).empty() ? "jpg" : ext;
 }
 
+std::string extractUrlOrigin(const std::string& url) {
+  const size_t schemePos = url.find("://");
+  if (schemePos == std::string::npos) {
+    return "";
+  }
+  const size_t hostStart = schemePos + 3;
+  const size_t hostEnd = url.find('/', hostStart);
+  return hostEnd == std::string::npos ? url : url.substr(0, hostEnd);
+}
+
 std::string makeAbsoluteAssetUrl(const std::string& url, const std::string& baseUrl) {
   if (url.empty()) return "";
   if (url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0) return url;
   if (url.rfind("//", 0) == 0) return "https:" + url;
-  if (url.front() == '/') return std::string(HakoPluginExecutor::BASE_URL) + url;
+  const std::string origin = extractUrlOrigin(baseUrl);
+  if (url.front() == '/') return origin.empty() ? url : origin + url;
   const size_t slash = baseUrl.find_last_of('/');
-  if (slash == std::string::npos) return std::string(HakoPluginExecutor::BASE_URL) + "/" + url;
+  if (slash == std::string::npos) return origin.empty() ? url : origin + "/" + url;
   return baseUrl.substr(0, slash + 1) + url;
 }
 
@@ -178,26 +193,38 @@ std::string buildStyles() {
          "img{max-width:100%;height:auto;}";
 }
 
-std::string buildChapterDocument(const std::string& title, const std::string& html) {
-  return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-         "<html xmlns=\"http://www.w3.org/1999/xhtml\">\n"
-         "<head>\n"
-         "  <title>" +
-         xmlEscape(title) +
-         "</title>\n"
-         "  <link rel=\"stylesheet\" type=\"text/css\" href=\"../styles.css\"/>\n"
-         "</head>\n"
-         "<body>\n"
-         "  <section class=\"chapter\">\n"
-         "    <h1>" +
-         xmlEscape(title) +
-         "</h1>\n"
-         "    <div class=\"chapter-body\">" +
-         html +
-         "</div>\n"
-         "  </section>\n"
-         "</body>\n"
-         "</html>\n";
+bool writeChapterDocumentToFile(const std::string& path, const std::string& title, const std::string& html) {
+  FsFile file;
+  if (!Storage.openFileForWrite(MODULE, path, file) || !file) {
+    return false;
+  }
+
+  const std::string escapedTitle = xmlEscape(title);
+  const char* prefix1 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                        "<html xmlns=\"http://www.w3.org/1999/xhtml\">\n"
+                        "<head>\n"
+                        "  <title>";
+  const char* prefix2 = "</title>\n"
+                        "  <link rel=\"stylesheet\" type=\"text/css\" href=\"../styles.css\"/>\n"
+                        "</head>\n"
+                        "<body>\n"
+                        "  <section class=\"chapter\">\n"
+                        "    <h1>";
+  const char* prefix3 = "</h1>\n"
+                        "    <div class=\"chapter-body\">";
+  const char* suffix = "</div>\n"
+                       "  </section>\n"
+                       "</body>\n"
+                       "</html>\n";
+
+  const bool ok =
+      file.print(prefix1) == std::strlen(prefix1) && file.write(escapedTitle.data(), escapedTitle.size()) == escapedTitle.size() &&
+      file.print(prefix2) == std::strlen(prefix2) && file.write(escapedTitle.data(), escapedTitle.size()) == escapedTitle.size() &&
+      file.print(prefix3) == std::strlen(prefix3) &&
+      (html.empty() || file.write(html.data(), html.size()) == html.size()) && file.print(suffix) == std::strlen(suffix);
+  file.flush();
+  file.close();
+  return ok;
 }
 
 std::string buildNav(const HakoBookDetail& detail, const std::vector<HakoChapterRef>& toc) {
@@ -323,25 +350,18 @@ bool computeFileCrcAndSize(const std::string& path, uint32_t& outCrc32, uint32_t
   return true;
 }
 
-bool loadFileToMemory(const std::string& path, std::vector<uint8_t>& outData, uint32_t& outCrc32) {
-  FsFile file = Storage.open(path.c_str(), O_RDONLY);
-  if (!file) return false;
-
-  outData.clear();
+void computeStringCrcAndSize(const std::string& content, uint32_t& outCrc32, uint32_t& outSize) {
+  outSize = static_cast<uint32_t>(content.size());
   outCrc32 = 0xFFFFFFFFu;
-  std::array<uint8_t, 1024> buffer{};
-  while (true) {
-    const int bytesRead = file.read(buffer.data(), buffer.size());
-    if (bytesRead <= 0) break;
-    outData.insert(outData.end(), buffer.begin(), buffer.begin() + bytesRead);
-    outCrc32 = crc32Update(outCrc32, buffer.data(), static_cast<size_t>(bytesRead));
+  if (!content.empty()) {
+    outCrc32 = crc32Update(outCrc32, reinterpret_cast<const uint8_t*>(content.data()), content.size());
   }
-  file.close();
   outCrc32 ^= 0xFFFFFFFFu;
-  return true;
 }
 
-bool deflateStoredData(const std::vector<uint8_t>&, std::vector<uint8_t>&) { return false; }
+bool appendStringContents(FsFile& dest, const std::string& content) {
+  return content.empty() || dest.write(content.data(), content.size()) == content.size();
+}
 
 bool appendFileContents(FsFile& dest, const std::string& sourcePath) {
   FsFile src = Storage.open(sourcePath.c_str(), O_RDONLY);
@@ -375,52 +395,31 @@ bool writeZip(const std::string& path, const std::vector<StagedZipEntry>& entrie
     meta.path = entry.path;
     meta.offset = static_cast<uint32_t>(file.position());
 
-    std::vector<uint8_t> storedData;
-    uint16_t compressionMethod = 0;
-    uint32_t compressedSize = 0;
-    if (entry.compress) {
-      if (!loadFileToMemory(entry.sourcePath, storedData, meta.crc32)) {
-        file.close();
-        if (outError) *outError = "Failed to read staged EPUB entry";
-        return false;
-      }
-      meta.size = static_cast<uint32_t>(storedData.size());
-      std::vector<uint8_t> compressedData;
-      if (deflateStoredData(storedData, compressedData) && compressedData.size() < storedData.size()) {
-        storedData.swap(compressedData);
-        compressionMethod = 8;
-      }
-      compressedSize = static_cast<uint32_t>(storedData.size());
+    if (entry.hasInlineContent) {
+      computeStringCrcAndSize(entry.inlineContent, meta.crc32, meta.size);
     } else if (!computeFileCrcAndSize(entry.sourcePath, meta.crc32, meta.size)) {
       file.close();
       if (outError) *outError = "Failed to read staged EPUB entry";
       return false;
     }
-    if (!entry.compress) {
-      compressedSize = meta.size;
-    }
-    meta.compressedSize = compressedSize;
-    meta.compressionMethod = compressionMethod;
+    meta.compressedSize = meta.size;
+    meta.compressionMethod = 0;
 
     writeLe32(file, ZIP_LOCAL_HEADER_SIG);
     writeLe16(file, 20);
     writeLe16(file, 0);
-    writeLe16(file, compressionMethod);
+    writeLe16(file, meta.compressionMethod);
     writeLe16(file, toDosTime());
     writeLe16(file, toDosDate());
     writeLe32(file, meta.crc32);
-    writeLe32(file, compressedSize);
+    writeLe32(file, meta.compressedSize);
     writeLe32(file, meta.size);
     writeLe16(file, static_cast<uint16_t>(meta.path.size()));
     writeLe16(file, 0);
     file.write(meta.path.data(), meta.path.size());
-    if (entry.compress) {
-      if (!storedData.empty() && file.write(storedData.data(), storedData.size()) != storedData.size()) {
-        file.close();
-        if (outError) *outError = "Failed to write compressed EPUB entry";
-        return false;
-      }
-    } else if (!appendFileContents(file, entry.sourcePath)) {
+    const bool writeOk = entry.hasInlineContent ? appendStringContents(file, entry.inlineContent)
+                                                : appendFileContents(file, entry.sourcePath);
+    if (!writeOk) {
       file.close();
       if (outError) *outError = "Failed to write staged EPUB entry";
       return false;
@@ -472,19 +471,37 @@ bool stageEntry(const std::string& workDir, const std::string& zipPath, const st
     if (outError) *outError = "Failed to stage EPUB entry";
     return false;
   }
-  outEntries.push_back({zipPath, sourcePath, zipPath != "mimetype"});
+  StagedZipEntry entry;
+  entry.path = zipPath;
+  entry.sourcePath = sourcePath;
+  entry.compress = zipPath != "mimetype";
+  outEntries.push_back(std::move(entry));
   stagedPaths.push_back(sourcePath);
+  return true;
+}
+
+bool stageInlineEntry(const std::string& zipPath, const std::string& content, std::vector<StagedZipEntry>& outEntries) {
+  StagedZipEntry entry;
+  entry.path = zipPath;
+  entry.inlineContent = content;
+  entry.hasInlineContent = true;
+  entry.compress = zipPath != "mimetype";
+  outEntries.push_back(std::move(entry));
   return true;
 }
 
 bool stageExistingFileEntry(const std::string& zipPath, const std::string& sourcePath, const std::string& mediaType,
                             std::vector<StagedZipEntry>& outEntries, std::vector<StagedAssetEntry>& outAssets) {
-  outEntries.push_back({zipPath, sourcePath, true});
+  StagedZipEntry entry;
+  entry.path = zipPath;
+  entry.sourcePath = sourcePath;
+  entry.compress = true;
+  outEntries.push_back(std::move(entry));
   outAssets.push_back({zipPath, sourcePath, mediaType});
   return true;
 }
 
-bool localizeChapterImages(const std::string& workDir, const HakoChapterRef& ref, std::string& html,
+bool localizeChapterImages(const CpPluginInfo& pluginInfo, const std::string& workDir, const HakoChapterRef& ref, std::string& html,
                            std::vector<StagedZipEntry>& outEntries, std::vector<StagedAssetEntry>& outAssets,
                            std::vector<std::string>& stagedPaths) {
   size_t searchPos = 0;
@@ -512,6 +529,7 @@ bool localizeChapterImages(const std::string& workDir, const HakoChapterRef& ref
 
     const std::string originalUrl = html.substr(valueStart, valueEnd - valueStart);
     const std::string absoluteUrl = makeAbsoluteAssetUrl(originalUrl, ref.url);
+    const std::string downloadUrl = OnlineSourceBridge::buildAssetProxyUrl(pluginInfo, absoluteUrl);
     const std::string extension = extensionFromUrl(absoluteUrl);
     const std::string mediaType = mediaTypeForExtension(extension);
     if (mediaType.empty()) {
@@ -522,7 +540,7 @@ bool localizeChapterImages(const std::string& workDir, const HakoChapterRef& ref
     const std::string href = makeImageHref(ref.index, imageIndex++, extension);
     const std::string zipPath = std::string("OEBPS/") + href;
     const std::string sourcePath = makeTempSourcePath(workDir, zipPath);
-    if (HttpDownloader::downloadToFile(absoluteUrl, sourcePath) != HttpDownloader::OK) {
+    if (HttpDownloader::downloadToFile(downloadUrl, sourcePath) != HttpDownloader::OK) {
       searchPos = tagEnd + 1;
       continue;
     }
@@ -547,18 +565,21 @@ bool stageBaseEntries(const std::string& workDir, const HakoBookDetail& detail, 
                       const std::vector<StagedAssetEntry>& imageAssets, std::vector<StagedZipEntry>& outEntries,
                       std::vector<std::string>& stagedPaths,
                       std::string* outError) {
+  static_cast<void>(workDir);
+  static_cast<void>(stagedPaths);
+  static_cast<void>(outError);
   const std::string identifier = buildIdentifier(detail);
-  return stageEntry(workDir, "mimetype", "application/epub+zip", outEntries, stagedPaths, outError) &&
-         stageEntry(workDir, "META-INF/container.xml",
-                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-                    "<container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">"
-                    "<rootfiles><rootfile full-path=\"OEBPS/content.opf\" "
-                    "media-type=\"application/oebps-package+xml\"/></rootfiles></container>",
-                    outEntries, stagedPaths, outError) &&
-         stageEntry(workDir, "OEBPS/styles.css", buildStyles(), outEntries, stagedPaths, outError) &&
-         stageEntry(workDir, "OEBPS/nav.xhtml", buildNav(detail, toc), outEntries, stagedPaths, outError) &&
-         stageEntry(workDir, "OEBPS/toc.ncx", buildNcx(detail, toc, identifier), outEntries, stagedPaths, outError) &&
-         stageEntry(workDir, "OEBPS/content.opf", buildOpf(detail, toc, imageAssets, identifier), outEntries, stagedPaths, outError);
+  return stageInlineEntry("mimetype", "application/epub+zip", outEntries) &&
+         stageInlineEntry("META-INF/container.xml",
+                          "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                          "<container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">"
+                          "<rootfiles><rootfile full-path=\"OEBPS/content.opf\" "
+                          "media-type=\"application/oebps-package+xml\"/></rootfiles></container>",
+                          outEntries) &&
+         stageInlineEntry("OEBPS/styles.css", buildStyles(), outEntries) &&
+         stageInlineEntry("OEBPS/nav.xhtml", buildNav(detail, toc), outEntries) &&
+         stageInlineEntry("OEBPS/toc.ncx", buildNcx(detail, toc, identifier), outEntries) &&
+         stageInlineEntry("OEBPS/content.opf", buildOpf(detail, toc, imageAssets, identifier), outEntries);
 }
 
 uint32_t randomBetween(uint32_t minValue, uint32_t maxValue) {
@@ -625,9 +646,10 @@ bool throttleAfterChapter(uint32_t completedCount, uint32_t totalCount, const Ha
   return waitWithProgress(waitMs, completedCount, totalCount, chapterTitle, "Cooling down", progress, outError);
 }
 
-bool stageFetchedChapters(const std::string& workDir, const std::vector<HakoChapterRef>& refs, std::vector<StagedZipEntry>& outEntries,
-                          std::vector<StagedAssetEntry>& outAssets, std::vector<std::string>& stagedPaths, std::string* outError,
-                          const HakoDownloadOptions* options, const HakoProgressCallback& progress) {
+bool stageFetchedChapters(const CpPluginInfo& pluginInfo, const std::string& workDir, const std::vector<HakoChapterRef>& refs,
+                          std::vector<StagedZipEntry>& outEntries, std::vector<StagedAssetEntry>& outAssets,
+                          std::vector<std::string>& stagedPaths, std::string* outError, const HakoDownloadOptions* options,
+                          const HakoProgressCallback& progress) {
   const uint32_t total = static_cast<uint32_t>(refs.size());
   uint32_t completed = 0;
   for (const auto& ref : refs) {
@@ -640,7 +662,7 @@ bool stageFetchedChapters(const std::string& workDir, const std::vector<HakoChap
         if (outError) *outError = "Cancelled";
         return false;
       }
-      if (HakoPluginExecutor::fetchChapter(ref, content)) {
+      if (OnlineSourceBridge::fetchChapter(pluginInfo, ref, content, false)) {
         fetched = true;
         break;
       }
@@ -657,16 +679,28 @@ bool stageFetchedChapters(const std::string& workDir, const std::vector<HakoChap
       }
     }
 
-    if (!fetched) {
-      if (outError) *outError = "Failed to fetch chapter: " + ref.title;
-      return false;
-    }
-    localizeChapterImages(workDir, ref, content.html, outEntries, outAssets, stagedPaths);
-    if (!stageEntry(workDir, makeChapterFullPath(ref.index), buildChapterDocument(ref.title, content.html), outEntries, stagedPaths,
-                    outError)) {
-      return false;
-    }
-    completed++;
+      if (!fetched) {
+        if (outError) *outError = "Failed to fetch chapter: " + ref.title;
+        return false;
+      }
+      content.text.clear();
+      content.text.shrink_to_fit();
+      localizeChapterImages(pluginInfo, workDir, ref, content.html, outEntries, outAssets, stagedPaths);
+      const std::string zipPath = makeChapterFullPath(ref.index);
+      const std::string sourcePath = makeTempSourcePath(workDir, zipPath);
+      if (!writeChapterDocumentToFile(sourcePath, ref.title, content.html)) {
+        if (outError) *outError = "Failed to stage chapter";
+        return false;
+      }
+      StagedZipEntry entry;
+      entry.path = zipPath;
+      entry.sourcePath = sourcePath;
+      entry.compress = true;
+      outEntries.push_back(std::move(entry));
+      stagedPaths.push_back(sourcePath);
+      content.html.clear();
+      content.html.shrink_to_fit();
+      completed++;
     if (!emitProgress(progress, completed, total, ref.title, "Chapter saved")) {
       if (outError) *outError = "Cancelled";
       return false;
@@ -678,30 +712,55 @@ bool stageFetchedChapters(const std::string& workDir, const std::vector<HakoChap
   return true;
 }
 
+class FileWritePrint final : public Print {
+ public:
+  explicit FileWritePrint(FsFile& file) : file(file) {}
+
+  size_t write(uint8_t ch) override { return file.write(&ch, 1); }
+
+  size_t write(const uint8_t* buffer, size_t size) override { return file.write(buffer, size); }
+
+ private:
+  FsFile& file;
+};
+
 bool stageExistingGeneratedChapters(const std::string& workDir, const std::string& epubPath, const std::vector<HakoChapterRef>& refs,
                                     std::vector<StagedZipEntry>& outEntries, std::vector<std::string>& stagedPaths,
                                     std::string* outError) {
   ZipFile zip(epubPath);
+  constexpr size_t ZIP_STREAM_CHUNK_SIZE = 768;
   for (const auto& ref : refs) {
-    size_t size = 0;
     const std::string zipPath = makeChapterFullPath(ref.index);
-    uint8_t* raw = zip.readFileToMemory(zipPath.c_str(), &size, true);
-    if (!raw) {
+    const std::string sourcePath = makeTempSourcePath(workDir, zipPath);
+    FsFile stagedFile;
+    if (!Storage.openFileForWrite(MODULE, sourcePath, stagedFile) || !stagedFile) {
+      if (outError) *outError = "Failed to stage existing chapter";
+      return false;
+    }
+    FileWritePrint stream(stagedFile);
+    const bool ok = zip.readFileToStream(zipPath.c_str(), stream, ZIP_STREAM_CHUNK_SIZE);
+    stagedFile.flush();
+    stagedFile.close();
+    if (!ok) {
+      Storage.remove(sourcePath.c_str());
       if (outError) *outError = "Missing stored chapter in existing EPUB";
       return false;
     }
-    const std::string content(reinterpret_cast<const char*>(raw), size);
-    free(raw);
-    if (!stageEntry(workDir, zipPath, content, outEntries, stagedPaths, outError)) {
-      return false;
-    }
+
+    StagedZipEntry entry;
+    entry.path = zipPath;
+    entry.sourcePath = sourcePath;
+    entry.compress = true;
+    outEntries.push_back(std::move(entry));
+    stagedPaths.push_back(sourcePath);
   }
   return true;
 }
 
-bool buildEpub(const HakoBookDetail& detail, const std::vector<HakoChapterRef>& toc, const std::vector<HakoChapterRef>& existingRefs,
-               const std::vector<HakoChapterRef>& newRefs, const std::string& existingEpubPath, const std::string& epubPath,
-               std::string* outError, const HakoDownloadOptions* options, const HakoProgressCallback& progress) {
+bool buildEpub(const CpPluginInfo& pluginInfo, const HakoBookDetail& detail, const std::vector<HakoChapterRef>& toc,
+               const std::vector<HakoChapterRef>& existingRefs, const std::vector<HakoChapterRef>& newRefs,
+               const std::string& existingEpubPath, const std::string& epubPath, std::string* outError,
+               const HakoDownloadOptions* options, const HakoProgressCallback& progress) {
   if (toc.empty()) {
     if (outError) *outError = "No chapters available";
     return false;
@@ -733,7 +792,8 @@ bool buildEpub(const HakoBookDetail& detail, const std::vector<HakoChapterRef>& 
   if ((!existingRefs.empty() &&
        !stageExistingGeneratedChapters(workDir, existingEpubPath, existingRefs, chapterEntries, stagedPaths, outError)) ||
       (!newRefs.empty() &&
-       !stageFetchedChapters(workDir, newRefs, chapterEntries, imageAssets, stagedPaths, outError, options, progress)) ||
+       !stageFetchedChapters(pluginInfo, workDir, newRefs, chapterEntries, imageAssets, stagedPaths, outError, options,
+                             progress)) ||
       !stageBaseEntries(workDir, detail, toc, imageAssets, entries, stagedPaths, outError)) {
     cleanupStagedFiles(stagedPaths);
     return false;
@@ -830,7 +890,7 @@ TrackedSeriesInfo HakoEpubService::makeTrackedInfo(const CpPluginInfo& pluginInf
   item.title = detail.title;
   item.author = detail.author;
   item.seriesUrl = detail.url;
-  item.coverUrl = detail.coverUrl;
+  item.coverUrl = OnlineSourceBridge::buildAssetProxyUrl(pluginInfo, detail.coverUrl, detail.url);
   item.epubPath = item.epubPath.empty() ? buildDefaultEpubPath(detail) : item.epubPath;
   item.chapterCount = static_cast<uint32_t>(toc.size());
   if (!toc.empty()) {
@@ -840,13 +900,15 @@ TrackedSeriesInfo HakoEpubService::makeTrackedInfo(const CpPluginInfo& pluginInf
   return item;
 }
 
-bool HakoEpubService::downloadEpub(const HakoBookDetail& detail, const std::vector<HakoChapterRef>& toc,
+bool HakoEpubService::downloadEpub(const CpPluginInfo& pluginInfo, const HakoBookDetail& detail,
+                                   const std::vector<HakoChapterRef>& toc,
                                    const std::string& epubPath, std::string* outError, const HakoDownloadOptions* options,
                                    const HakoProgressCallback& progress) {
-  return buildEpub(detail, toc, {}, toc, "", epubPath, outError, options, progress);
+  return buildEpub(pluginInfo, detail, toc, {}, toc, "", epubPath, outError, options, progress);
 }
 
-bool HakoEpubService::syncTrackedSeries(const TrackedSeriesInfo& current, HakoTrackedSyncResult& outResult,
+bool HakoEpubService::syncTrackedSeries(const CpPluginInfo& pluginInfo, const TrackedSeriesInfo& current,
+                                        HakoTrackedSyncResult& outResult,
                                         const HakoDownloadOptions* options, const HakoProgressCallback& progress) {
   outResult = {};
   outResult.epubPath = current.epubPath;
@@ -857,13 +919,13 @@ bool HakoEpubService::syncTrackedSeries(const TrackedSeriesInfo& current, HakoTr
   }
 
   HakoBookDetail remoteDetail;
-  if (!HakoPluginExecutor::fetchDetail(current.seriesUrl, remoteDetail)) {
+  if (!OnlineSourceBridge::fetchDetail(pluginInfo, current.seriesUrl, remoteDetail)) {
     outResult.message = "Failed to load series detail";
     return false;
   }
 
   std::vector<HakoChapterRef> toc;
-  if (!HakoPluginExecutor::fetchToc(current.seriesUrl, toc)) {
+  if (!OnlineSourceBridge::fetchToc(pluginInfo, current.seriesUrl, toc)) {
     outResult.message = "Failed to load chapter list";
     return false;
   }
@@ -885,7 +947,9 @@ bool HakoEpubService::syncTrackedSeries(const TrackedSeriesInfo& current, HakoTr
   TrackedSeriesInfo updated = current;
   updated.title = remoteDetail.title.empty() ? current.title : remoteDetail.title;
   updated.author = remoteDetail.author.empty() ? current.author : remoteDetail.author;
-  updated.coverUrl = remoteDetail.coverUrl.empty() ? current.coverUrl : remoteDetail.coverUrl;
+  updated.coverUrl =
+      remoteDetail.coverUrl.empty() ? current.coverUrl
+                                    : OnlineSourceBridge::buildAssetProxyUrl(pluginInfo, remoteDetail.coverUrl, remoteDetail.url);
   updated.chapterCount = static_cast<uint32_t>(toc.size());
   updated.lastChapterUrl = toc.back().url;
   updated.lastChapterTitle = toc.back().title;
@@ -897,7 +961,7 @@ bool HakoEpubService::syncTrackedSeries(const TrackedSeriesInfo& current, HakoTr
 
   std::string error;
   if (!Storage.exists(updated.epubPath.c_str()) || lastKnownIndex < 0) {
-    if (!buildEpub(remoteDetail, toc, {}, toc, "", updated.epubPath, &error, options, progress)) {
+    if (!buildEpub(pluginInfo, remoteDetail, toc, {}, toc, "", updated.epubPath, &error, options, progress)) {
       outResult.message = error;
       return false;
     }
@@ -923,10 +987,10 @@ bool HakoEpubService::syncTrackedSeries(const TrackedSeriesInfo& current, HakoTr
   }
 
   const std::vector<HakoChapterRef> existingRefs(toc.begin(), toc.begin() + lastKnownIndex + 1);
-  if (!buildEpub(remoteDetail, toc, existingRefs, outResult.newChapters, updated.epubPath, updated.epubPath, &error, options,
-                 progress)) {
+  if (!buildEpub(pluginInfo, remoteDetail, toc, existingRefs, outResult.newChapters, updated.epubPath, updated.epubPath,
+                 &error, options, progress)) {
     LOG_ERR(MODULE, "Incremental EPUB rebuild failed, retrying full rebuild: %s", error.c_str());
-    if (!buildEpub(remoteDetail, toc, {}, toc, "", updated.epubPath, &error, options, progress)) {
+    if (!buildEpub(pluginInfo, remoteDetail, toc, {}, toc, "", updated.epubPath, &error, options, progress)) {
       outResult.message = error;
       return false;
     }

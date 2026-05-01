@@ -39,6 +39,7 @@ void TxtReaderActivity::onEnter() {
   APP_STATE.openEpubPath = filePath;
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(filePath, fileName, "", "");
+  RECENT_BOOKS.startReadingSession(filePath);
 
   // Trigger first update
   requestUpdate();
@@ -54,6 +55,7 @@ void TxtReaderActivity::onExit() {
   currentPageLines.clear();
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
+  RECENT_BOOKS.finishReadingSession(txt->getPath());
   txt.reset();
 }
 
@@ -325,6 +327,8 @@ void TxtReaderActivity::render(RenderLock&&) {
 
   renderer.clearScreen();
   renderPage();
+  const int progressPercent = (totalPages > 0) ? std::min(100, ((currentPage + 1) * 100) / totalPages) : 0;
+  RECENT_BOOKS.updateReadingProgress(txt->getPath(), static_cast<uint8_t>(progressPercent));
 
   // Save progress
   saveProgress();
@@ -381,7 +385,7 @@ void TxtReaderActivity::renderPage() {
 
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
-  if (SETTINGS.textAntiAliasing) {
+  if (ReaderUtils::shouldUseTextAntiAliasing()) {
     ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
   }
   // scope destructor clears font cache via FontCacheManager

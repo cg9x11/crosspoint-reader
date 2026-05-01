@@ -126,14 +126,43 @@ std::string buildChapterRowSubtitle(const HakoChapterRef& chapter, const std::st
                                     uint32_t lastReadPageCount) {
   std::string subtitle = makeSectionTag(chapter.sectionTitle);
   if (!lastReadChapterUrl.empty() && lastReadChapterUrl == chapter.url) {
-    subtitle += subtitle.empty() ? "Continue" : " | Continue";
-    if (lastReadPageCount > 0) {
+    const bool completed = lastReadPageCount > 0 && (lastReadPage + 1) >= lastReadPageCount;
+    subtitle += subtitle.empty() ? (completed ? "Read" : "Continue") : (completed ? " | Read" : " | Continue");
+    if (lastReadPageCount > 0 && !completed) {
       subtitle += " | Page " + std::to_string(lastReadPage + 1) + "/" + std::to_string(lastReadPageCount);
     }
   }
   return StringUtils::toDisplaySafeAscii(subtitle);
 }
 }  // namespace
+
+void HakoChapterListActivity::applyPreferredSelection() {
+  if (chapters.empty()) {
+    selectedIndex = 0;
+    return;
+  }
+
+  if (!preferredChapterUrl.empty()) {
+    for (size_t i = 0; i < chapters.size(); ++i) {
+      if (chapters[i].url == preferredChapterUrl) {
+        selectedIndex = static_cast<int>(i);
+        return;
+      }
+    }
+  }
+
+  if (!trackedSeriesId.empty()) {
+    TRACKED_SERIES_STORE.ensureLoaded();
+    if (const auto* item = TRACKED_SERIES_STORE.getById(trackedSeriesId)) {
+      for (size_t i = 0; i < chapters.size(); ++i) {
+        if (chapters[i].url == item->lastReadChapterUrl) {
+          selectedIndex = static_cast<int>(i);
+          return;
+        }
+      }
+    }
+  }
+}
 
 bool HakoChapterListActivity::loadPage(int page) {
   if (!pagedMode || seriesUrl.empty()) {
@@ -148,7 +177,8 @@ bool HakoChapterListActivity::loadPage(int page) {
   }
 
   if (!OnlineSourceBridge::fetchTocPage(pluginInfo, seriesUrl, page, result)) {
-    pageMessage = "Failed to load chapter page";
+    pageMessage = OnlineSourceBridge::getLastError().empty() ? "Failed to load chapter page"
+                                                             : OnlineSourceBridge::getLastError();
     pageMessageUntilMs = millis() + 1800;
     requestUpdate();
     return false;
@@ -174,17 +204,7 @@ bool HakoChapterListActivity::loadPage(int page) {
     }
   }
 
-  if (!trackedSeriesId.empty()) {
-    TRACKED_SERIES_STORE.ensureLoaded();
-    if (const auto* item = TRACKED_SERIES_STORE.getById(trackedSeriesId)) {
-      for (size_t i = 0; i < chapters.size(); ++i) {
-        if (chapters[i].url == item->lastReadChapterUrl) {
-          selectedIndex = static_cast<int>(i);
-          break;
-        }
-      }
-    }
-  }
+  applyPreferredSelection();
 
   requestUpdate();
   return !chapters.empty();
@@ -200,17 +220,7 @@ void HakoChapterListActivity::onEnter() {
     return;
   }
 
-  if (!trackedSeriesId.empty()) {
-    TRACKED_SERIES_STORE.ensureLoaded();
-    if (const auto* item = TRACKED_SERIES_STORE.getById(trackedSeriesId)) {
-      for (size_t i = 0; i < chapters.size(); ++i) {
-        if (chapters[i].url == item->lastReadChapterUrl) {
-          selectedIndex = static_cast<int>(i);
-          break;
-        }
-      }
-    }
-  }
+  applyPreferredSelection();
   requestUpdate();
 }
 
@@ -221,29 +231,12 @@ void HakoChapterListActivity::loop() {
   }
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    if (selectionOnly) {
+      ActivityResult result;
+      result.isCancelled = true;
+      setResult(std::move(result));
+    }
     finish();
-    return;
-  }
-
-  if (chapters.empty()) {
-    return;
-  }
-
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-    HakoChapterContent chapter;
-    {
-      RenderLock lock(*this);
-      GUI.drawPopup(renderer, "Loading chapter...");
-      renderer.displayBuffer();
-    }
-    if (!OnlineSourceBridge::fetchChapter(pluginInfo, chapters[selectedIndex], chapter)) {
-      RenderLock lock(*this);
-      GUI.drawPopup(renderer, "Failed to load chapter");
-      requestUpdate();
-      return;
-    }
-    activityManager.pushActivity(
-        std::make_unique<HakoChapterReaderActivity>(renderer, mappedInput, std::move(chapter), trackedSeriesId));
     return;
   }
 
@@ -260,12 +253,44 @@ void HakoChapterListActivity::loop() {
     }
   }
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
+  if (chapters.empty()) {
+    return;
+  }
+
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    if (selectionOnly) {
+      const int resultIndex = pagedMode && !chapters.empty() ? static_cast<int>(chapters[selectedIndex].index) - 1 : selectedIndex;
+      setResult(OnlineChapterResult{resultIndex});
+      finish();
+      return;
+    }
+
+    HakoChapterContent chapter;
+    {
+      RenderLock lock(*this);
+      GUI.drawPopup(renderer, "Loading chapter...");
+      renderer.displayBuffer();
+    }
+    if (!OnlineSourceBridge::fetchChapter(pluginInfo, chapters[selectedIndex], chapter)) {
+      RenderLock lock(*this);
+      const std::string message =
+          OnlineSourceBridge::getLastError().empty() ? "Failed to load chapter" : OnlineSourceBridge::getLastError();
+      GUI.drawPopup(renderer, message.c_str());
+      requestUpdate();
+      return;
+    }
+    activityManager.pushActivity(std::make_unique<HakoChapterReaderActivity>(
+        renderer, mappedInput, pluginInfo, std::move(chapter), chapters, selectedIndex, trackedSeriesId, bookTitle, bookAuthor,
+        seriesUrl, pagedMode, HakoChapterReaderActivity::InitialPageMode::RestoreTracked, currentPage, totalPages));
+    return;
+  }
+
+  buttonNavigator.onNext([this] {
     selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(chapters.size()));
     requestUpdate();
   });
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
+  buttonNavigator.onPrevious([this] {
     selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(chapters.size()));
     requestUpdate();
   });
@@ -312,9 +337,12 @@ void HakoChapterListActivity::render(RenderLock&&) {
     GUI.drawPopup(renderer, pageMessage.c_str());
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), chapters.empty() ? "" : tr(STR_OPEN),
-                                            pagedMode ? "Prev Pg" : tr(STR_DIR_UP),
-                                            pagedMode ? "Next Pg" : tr(STR_DIR_DOWN));
+  const char* confirmLabel = "";
+  if (!chapters.empty()) {
+    confirmLabel = selectionOnly ? tr(STR_SELECT) : tr(STR_OPEN);
+  }
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, pagedMode ? "Prev Pg" : "Prev",
+                                            pagedMode ? "Next Pg" : "Next");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }

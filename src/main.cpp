@@ -11,6 +11,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <SPI.h>
+#include <WiFi.h>
 #include <builtinFonts/all.h>
 
 #include <cstring>
@@ -26,8 +27,11 @@
 #include "TrackedSeriesStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/network/CrossPointWebServerActivity.h"
+#include "bluetooth/BluetoothManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/BackgroundWebServerRuntime.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
 
@@ -36,6 +40,13 @@ GfxRenderer renderer(display);
 ActivityManager activityManager(renderer, mappedInputManager);
 FontDecompressor fontDecompressor;
 FontCacheManager fontCacheManager(renderer.getFontMap());
+
+#ifdef CROSSPOINT_EMULATED
+void emulatorWakeFromSleep() {
+  activityManager.goHome();
+  activityManager.requestUpdate(true);
+}
+#endif
 
 // Fonts
 EpdFont notoserif14RegularFont(&notoserif_14_regular);
@@ -88,6 +99,19 @@ EpdFont notosans18ItalicFont(&notosans_18_italic);
 EpdFont notosans18BoldItalicFont(&notosans_18_bolditalic);
 EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont,
                                    &notosans18BoldItalicFont);
+
+EpdFont bokerlam14RegularFont(&bokerlam_14_regular);
+EpdFontFamily bokerlam14FontFamily(&bokerlam14RegularFont);
+// Keep a single embedded asset for each optional decorative font to contain flash growth.
+EpdFontFamily bokerlam12FontFamily(&bokerlam14RegularFont);
+EpdFontFamily bokerlam16FontFamily(&bokerlam14RegularFont);
+EpdFontFamily bokerlam18FontFamily(&bokerlam14RegularFont);
+
+EpdFont kicomictaxy14RegularFont(&kicomictaxy_14_regular);
+EpdFontFamily kicomictaxy14FontFamily(&kicomictaxy14RegularFont);
+EpdFontFamily kicomictaxy12FontFamily(&kicomictaxy14RegularFont);
+EpdFontFamily kicomictaxy16FontFamily(&kicomictaxy14RegularFont);
+EpdFontFamily kicomictaxy18FontFamily(&kicomictaxy14RegularFont);
 
 EpdFont opendyslexic8RegularFont(&opendyslexic_8_regular);
 EpdFont opendyslexic8BoldFont(&opendyslexic_8_bold);
@@ -149,7 +173,7 @@ void verifyPowerButtonDuration() {
   const uint16_t calibratedPressDuration =
       (calibration < SETTINGS.getPowerButtonDuration()) ? SETTINGS.getPowerButtonDuration() - calibration : 1;
 
-  gpio.update();
+  mappedInputManager.update();
   // Needed because inputManager.isPressed() may take up to ~500ms to return the correct state
   while (!gpio.isPressed(HalGPIO::BTN_POWER) && millis() - start < 1000) {
     delay(10);  // only wait 10ms each iteration to not delay too much in case of short configured duration.
@@ -186,11 +210,35 @@ void enterDeepSleep() {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
   APP_STATE.saveToFile();
+  BLUETOOTH_MANAGER.shutdown();
+  BACKGROUND_WEB_SERVER_RUNTIME.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.disconnect(false);
+  WiFi.mode(WIFI_OFF);
 
   activityManager.goToSleep();
 
   display.deepSleep();
   LOG_DBG("MAIN", "Entering deep sleep");
+
+#ifdef CROSSPOINT_EMULATED
+  // Emulator behavior: treat sleep as a blocking suspended state.
+  // Wake on the next power-button press, then return to Home.
+  waitForPowerRelease();
+  while (true) {
+    gpio.update();
+    if (gpio.wasPressed(HalGPIO::BTN_POWER) || gpio.isPressed(HalGPIO::BTN_POWER)) {
+      break;
+    }
+    delay(10);
+  }
+  waitForPowerRelease();
+  LOG_DBG("SIM", "Waking emulator from sleep");
+  activityManager.goHome();
+  activityManager.requestUpdate(true);
+  activityManager.loop();
+  return;
+#endif
 
   powerManager.startDeepSleep(gpio);
 }
@@ -217,6 +265,14 @@ void setupDisplayAndFonts() {
   renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
+  renderer.insertFont(BOKERLAM_12_FONT_ID, bokerlam12FontFamily);
+  renderer.insertFont(BOKERLAM_14_FONT_ID, bokerlam14FontFamily);
+  renderer.insertFont(BOKERLAM_16_FONT_ID, bokerlam16FontFamily);
+  renderer.insertFont(BOKERLAM_18_FONT_ID, bokerlam18FontFamily);
+  renderer.insertFont(KICOMICTAXY_12_FONT_ID, kicomictaxy12FontFamily);
+  renderer.insertFont(KICOMICTAXY_14_FONT_ID, kicomictaxy14FontFamily);
+  renderer.insertFont(KICOMICTAXY_16_FONT_ID, kicomictaxy16FontFamily);
+  renderer.insertFont(KICOMICTAXY_18_FONT_ID, kicomictaxy18FontFamily);
   renderer.insertFont(OPENDYSLEXIC_8_FONT_ID, opendyslexic8FontFamily);
   renderer.insertFont(OPENDYSLEXIC_10_FONT_ID, opendyslexic10FontFamily);
   renderer.insertFont(OPENDYSLEXIC_12_FONT_ID, opendyslexic12FontFamily);
@@ -352,8 +408,8 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || activityManager.preventAutoSleep() ||
-      BACKGROUND_DOWNLOAD_MANAGER.hasActiveWork()) {
+  if (mappedInputManager.wasAnyPressed() || mappedInputManager.wasAnyReleased() || activityManager.preventAutoSleep() ||
+      BACKGROUND_WEB_SERVER_RUNTIME.isRunning() || BACKGROUND_DOWNLOAD_MANAGER.hasActiveWork()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
@@ -361,6 +417,8 @@ void loop() {
   if (BACKGROUND_DOWNLOAD_MANAGER.consumeUiRefreshRequested()) {
     activityManager.requestUpdate();
   }
+
+  BLUETOOTH_MANAGER.loop();
 
   static bool screenshotButtonsReleased = true;
   if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN)) {
@@ -407,6 +465,9 @@ void loop() {
   if (gpio.wasUsbStateChanged()) {
     activityManager.requestUpdate();
   }
+
+  tickBackgroundWebServerNetworkServices();
+  BACKGROUND_WEB_SERVER_RUNTIME.loop();
 
   const unsigned long activityStartTime = millis();
   activityManager.loop();

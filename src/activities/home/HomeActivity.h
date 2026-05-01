@@ -16,11 +16,14 @@ class HomeActivity final : public Activity {
   bool recentsLoaded = false;
   bool firstRenderDone = false;
   bool hasOpdsServers = false;
+  size_t recentCoverWarmIndex = 0;
   bool coverRendered = false;      // Track if cover has been rendered once
   bool coverBufferStored = false;  // Track if cover buffer is stored
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
   std::vector<RecentBook> recentBooks;
-  void onSelectBook(const std::string& path);
+  void onSelectBook(const RecentBook& book);
+  void openOnlineRecentBook(const RecentBook& book);
+  void resetRecentState();
   void onFileBrowserOpen();
   void onRecentsOpen();
   void onSettingsOpen();

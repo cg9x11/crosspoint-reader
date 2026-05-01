@@ -6,19 +6,26 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 #include <esp_task_wdt.h>
 
 #include <algorithm>
+#include <new>
 
 #include "CrossPointSettings.h"
+#include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "PluginStore.h"
 #include "SettingsList.h"
 #include "TrackedSeriesStore.h"
-#include "plugins/HakoPluginExecutor.h"
+#include "activities/ActivityManager.h"
+#include "activities/RenderLock.h"
+#include "plugins/OnlineSourceBridge.h"
+#include "util/ScreenshotUtil.h"
 #include "WebDAVHandler.h"
 #include "html/FilesPageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
+#include "html/RemotePageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 
@@ -106,13 +113,45 @@ void appendHakoChapterRef(JsonArray chapters, const HakoChapterRef& chapter) {
   obj["title"] = chapter.title;
   obj["url"] = chapter.url;
 }
+
+bool parseRemoteButtonName(const String& rawName, MappedInputManager::Button* outButton) {
+  if (!outButton) {
+    return false;
+  }
+
+  String name = rawName;
+  name.toLowerCase();
+
+  if (name == "back") {
+    *outButton = MappedInputManager::Button::Back;
+  } else if (name == "confirm" || name == "ok" || name == "select") {
+    *outButton = MappedInputManager::Button::Confirm;
+  } else if (name == "left") {
+    *outButton = MappedInputManager::Button::Left;
+  } else if (name == "right") {
+    *outButton = MappedInputManager::Button::Right;
+  } else if (name == "up") {
+    *outButton = MappedInputManager::Button::Up;
+  } else if (name == "down") {
+    *outButton = MappedInputManager::Button::Down;
+  } else if (name == "pageback" || name == "page-back" || name == "pageprev" || name == "page-prev") {
+    *outButton = MappedInputManager::Button::PageBack;
+  } else if (name == "pageforward" || name == "page-forward" || name == "pagenext" || name == "page-next") {
+    *outButton = MappedInputManager::Button::PageForward;
+  } else {
+    return false;
+  }
+
+  return true;
+}
 }  // namespace
 
 // File listing page template - now using generated headers:
 // - HomePageHtml (from html/HomePage.html)
 // - FilesPageHeaderHtml (from html/FilesPageHeader.html)
 // - FilesPageFooterHtml (from html/FilesPageFooter.html)
-CrossPointWebServer::CrossPointWebServer() {}
+CrossPointWebServer::CrossPointWebServer(GfxRenderer& renderer, MappedInputManager& mappedInput)
+    : renderer(renderer), mappedInput(mappedInput) {}
 
 CrossPointWebServer::~CrossPointWebServer() { stop(); }
 
@@ -135,11 +174,17 @@ void CrossPointWebServer::begin() {
   // Store AP mode flag for later use (e.g., in handleStatus)
   apMode = isInApMode;
 
-  LOG_DBG("WEB", "[MEM] Free heap before begin: %d bytes", ESP.getFreeHeap());
+  LOG_DBG("WEB", "[MEM] Free heap before begin: %d bytes, largest block: %u", ESP.getFreeHeap(),
+          heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
   LOG_DBG("WEB", "Network mode: %s", apMode ? "AP" : "STA");
 
   LOG_DBG("WEB", "Creating web server on port %d...", port);
-  server.reset(new WebServer(port));
+  server.reset(new (std::nothrow) WebServer(port));
+
+  if (!server) {
+    LOG_ERR("WEB", "Failed to create WebServer");
+    return;
+  }
 
   // Disable WiFi sleep to improve responsiveness and prevent 'unreachable' errors.
   // This is critical for reliable web server operation on ESP32.
@@ -148,20 +193,21 @@ void CrossPointWebServer::begin() {
   // Note: WebServer class doesn't have setNoDelay() in the standard ESP32 library.
   // We rely on disabling WiFi sleep for responsiveness.
 
-  LOG_DBG("WEB", "[MEM] Free heap after WebServer allocation: %d bytes", ESP.getFreeHeap());
-
-  if (!server) {
-    LOG_ERR("WEB", "Failed to create WebServer!");
-    return;
-  }
+  LOG_DBG("WEB", "[MEM] Free heap after WebServer allocation: %d bytes, largest block: %u", ESP.getFreeHeap(),
+          heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
   // Setup routes
   LOG_DBG("WEB", "Setting up routes...");
   server->on("/", HTTP_GET, [this] { handleRoot(); });
+  server->on("/remote", HTTP_GET, [this] { handleRemotePage(); });
   server->on("/files", HTTP_GET, [this] { handleFileList(); });
   server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
 
   server->on("/api/status", HTTP_GET, [this] { handleStatus(); });
+  server->on("/api/remote/status", HTTP_GET, [this] { handleGetRemoteStatus(); });
+  server->on("/api/remote/text", HTTP_POST, [this] { handlePostRemoteText(); });
+  server->on("/api/remote/button", HTTP_POST, [this] { handlePostRemoteButton(); });
+  server->on("/api/remote/screen.bmp", HTTP_GET, [this] { handleRemoteScreenBmp(); });
   server->on("/api/files", HTTP_GET, [this] { handleFileListData(); });
   server->on("/download", HTTP_GET, [this] { handleDownload(); });
 
@@ -371,6 +417,11 @@ void CrossPointWebServer::handleRoot() const {
   LOG_DBG("WEB", "Served root page");
 }
 
+void CrossPointWebServer::handleRemotePage() const {
+  sendHtmlContent(server.get(), RemotePageHtml, sizeof(RemotePageHtml));
+  LOG_DBG("WEB", "Served remote page");
+}
+
 void CrossPointWebServer::handleJszip() const {
   server->sendHeader("Content-Encoding", "gzip");
   server->send_P(200, "application/javascript", jszip_minJs, jszip_minJsCompressedSize);
@@ -399,6 +450,112 @@ void CrossPointWebServer::handleStatus() const {
   String json;
   serializeJson(doc, json);
   server->send(200, "application/json", json);
+}
+
+void CrossPointWebServer::handleGetRemoteStatus() const {
+  JsonDocument doc;
+  doc["version"] = CROSSPOINT_VERSION;
+  doc["mode"] = apMode ? "AP" : "STA";
+  doc["ip"] = apMode ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
+  doc["freeHeap"] = ESP.getFreeHeap();
+  doc["uptime"] = millis() / 1000;
+  doc["currentActivity"] = activityManager.getCurrentActivityName();
+  doc["pendingAction"] = activityManager.getPendingActionName();
+  doc["canAcceptText"] = activityManager.currentActivitySupportsAutomationTextInput();
+  doc["snapshotWidth"] = renderer.getDisplayHeight();
+  doc["snapshotHeight"] = renderer.getDisplayWidth();
+  sendJsonResponse(server.get(), doc);
+}
+
+void CrossPointWebServer::handlePostRemoteText() {
+  if (!server->hasArg("plain")) {
+    server->send(400, "text/plain", "Missing JSON body");
+    return;
+  }
+
+  JsonDocument doc;
+  const String body = server->arg("plain");
+  const DeserializationError err = deserializeJson(doc, body.c_str());
+  if (err) {
+    server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
+    return;
+  }
+
+  const std::string text = doc["text"] | std::string("");
+  const bool accepted = activityManager.injectAutomationText(text);
+
+  JsonDocument response;
+  response["accepted"] = accepted;
+  response["currentActivity"] = activityManager.getCurrentActivityName();
+  response["canAcceptText"] = activityManager.currentActivitySupportsAutomationTextInput();
+  sendJsonResponse(server.get(), response);
+}
+
+void CrossPointWebServer::handlePostRemoteButton() {
+  if (!server->hasArg("plain")) {
+    server->send(400, "text/plain", "Missing JSON body");
+    return;
+  }
+
+  JsonDocument doc;
+  const String body = server->arg("plain");
+  const DeserializationError err = deserializeJson(doc, body.c_str());
+  if (err) {
+    server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
+    return;
+  }
+
+  MappedInputManager::Button button;
+  const std::string name = doc["button"] | std::string("");
+  if (!parseRemoteButtonName(String(name.c_str()), &button)) {
+    server->send(400, "text/plain", "Unsupported remote button");
+    return;
+  }
+
+  const unsigned long durationMs = doc["durationMs"] | static_cast<unsigned long>(80);
+  mappedInput.injectTap(button, durationMs);
+
+  JsonDocument response;
+  response["accepted"] = true;
+  response["button"] = name;
+  sendJsonResponse(server.get(), response);
+}
+
+void CrossPointWebServer::handleRemoteScreenBmp() const {
+  activityManager.requestUpdateAndWait();
+  RenderLock lock;
+  const uint8_t* framebuffer = renderer.getFrameBuffer();
+  const int width = renderer.getDisplayWidth();
+  const int height = renderer.getDisplayHeight();
+  if (!framebuffer || width <= 0 || height <= 0) {
+    server->send(503, "text/plain", "Framebuffer unavailable");
+    return;
+  }
+
+  server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server->sendHeader("Pragma", "no-cache");
+  server->setContentLength(ScreenshotUtil::getFramebufferBmpSize(width, height));
+  server->send(200, "image/bmp", "");
+
+  NetworkClient client = server->client();
+  const bool ok =
+      ScreenshotUtil::streamFramebufferAsBmp(framebuffer, width, height,
+                                             [&client](const uint8_t* data, const size_t length) {
+                                               size_t written = 0;
+                                               while (written < length) {
+                                                 esp_task_wdt_reset();
+                                                 const size_t chunk = client.write(data + written, length - written);
+                                                 if (chunk == 0) {
+                                                   return false;
+                                                 }
+                                                 written += chunk;
+                                               }
+                                               return true;
+                                             });
+  if (!ok) {
+    LOG_ERR("WEB", "Failed to stream remote BMP");
+  }
+  client.clear();
 }
 
 void CrossPointWebServer::scanFiles(const char* path, const std::function<void(FileInfo)>& callback) const {
@@ -648,6 +805,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     state.bufferPos = 0;
     totalWriteTime = 0;
     writeCount = 0;
+    state.releaseBuffer();
 
     // Get upload path from query parameter (defaults to root if not specified)
     // Note: We use query parameter instead of form data because multipart form
@@ -687,6 +845,13 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     if (!Storage.openFileForWrite("WEB", filePath, state.file)) {
       state.error = "Failed to create file on SD card";
       LOG_DBG("WEB", "[UPLOAD] FAILED to create file: %s", filePath.c_str());
+      return;
+    }
+    if (!state.ensureBuffer()) {
+      state.error = "Not enough memory for upload buffer";
+      state.file.close();
+      Storage.remove(filePath.c_str());
+      LOG_DBG("WEB", "[UPLOAD] FAILED to allocate upload buffer");
       return;
     }
     esp_task_wdt_reset();
@@ -753,9 +918,10 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         filePath += state.fileName;
         clearEpubCacheIfNeeded(filePath);
       }
+      state.releaseBuffer();
     }
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
-    state.bufferPos = 0;  // Discard buffered data
+    state.releaseBuffer();
     if (state.file) {
       state.file.close();
       // Try to delete the incomplete file
@@ -1579,10 +1745,11 @@ void CrossPointWebServer::handleHakoPluginSearch() const {
 
   const String query = server->arg("query");
   const int page = parsePositivePageArg(server->arg("page"));
+  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeFallbackPluginInfo("hako", "hako");
 
   std::vector<HakoSearchResult> results;
-  if (!HakoPluginExecutor::search(query.c_str(), page, results)) {
-    server->send(502, "text/plain", "Failed to fetch Hako search results");
+  if (!OnlineSourceBridge::search(pluginInfo, query.c_str(), page, results)) {
+    server->send(502, "text/plain", OnlineSourceBridge::getLastError().c_str());
     return;
   }
 
@@ -1607,9 +1774,10 @@ void CrossPointWebServer::handleHakoPluginDetail() const {
     return;
   }
 
+  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeFallbackPluginInfo("hako", "hako");
   HakoBookDetail detail;
-  if (!HakoPluginExecutor::fetchDetail(server->arg("url").c_str(), detail)) {
-    server->send(502, "text/plain", "Failed to fetch Hako detail");
+  if (!OnlineSourceBridge::fetchDetail(pluginInfo, server->arg("url").c_str(), detail)) {
+    server->send(502, "text/plain", OnlineSourceBridge::getLastError().c_str());
     return;
   }
 
@@ -1634,9 +1802,10 @@ void CrossPointWebServer::handleHakoPluginToc() const {
     return;
   }
 
+  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeFallbackPluginInfo("hako", "hako");
   std::vector<HakoChapterRef> chapters;
-  if (!HakoPluginExecutor::fetchToc(server->arg("url").c_str(), chapters)) {
-    server->send(502, "text/plain", "Failed to fetch Hako table of contents");
+  if (!OnlineSourceBridge::fetchToc(pluginInfo, server->arg("url").c_str(), chapters)) {
+    server->send(502, "text/plain", OnlineSourceBridge::getLastError().c_str());
     return;
   }
 
@@ -1661,9 +1830,10 @@ void CrossPointWebServer::handleHakoPluginChapter() const {
   ref.title = server->hasArg("title") ? server->arg("title").c_str() : "";
   ref.index = server->hasArg("index") ? static_cast<uint32_t>(std::max<long>(0, server->arg("index").toInt())) : 0;
 
+  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeFallbackPluginInfo("hako", "hako");
   HakoChapterContent chapter;
-  if (!HakoPluginExecutor::fetchChapter(ref, chapter)) {
-    server->send(502, "text/plain", "Failed to fetch Hako chapter");
+  if (!OnlineSourceBridge::fetchChapter(pluginInfo, ref, chapter)) {
+    server->send(502, "text/plain", OnlineSourceBridge::getLastError().c_str());
     return;
   }
 
@@ -1685,11 +1855,12 @@ void CrossPointWebServer::handleHakoPluginUpdates() const {
 
   const std::string url = server->arg("url").c_str();
   const std::string lastChapterUrl = server->hasArg("lastChapterUrl") ? server->arg("lastChapterUrl").c_str() : "";
+  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeFallbackPluginInfo("hako", "hako");
 
   HakoBookDetail detail;
   std::vector<HakoChapterRef> chapters;
-  if (!HakoPluginExecutor::fetchDetail(url, detail) || !HakoPluginExecutor::fetchToc(url, chapters)) {
-    server->send(502, "text/plain", "Failed to fetch Hako update metadata");
+  if (!OnlineSourceBridge::fetchDetail(pluginInfo, url, detail) || !OnlineSourceBridge::fetchToc(pluginInfo, url, chapters)) {
+    server->send(502, "text/plain", OnlineSourceBridge::getLastError().c_str());
     return;
   }
 

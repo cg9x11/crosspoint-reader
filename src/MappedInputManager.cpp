@@ -17,6 +17,35 @@ constexpr SideLayoutMap kSideLayouts[] = {
 };
 }  // namespace
 
+size_t MappedInputManager::buttonToIndex(const Button button) { return static_cast<size_t>(button); }
+
+void MappedInputManager::update() const {
+  gpio.update();
+  updateGeneration++;
+  updateInjectedButtons();
+}
+
+void MappedInputManager::updateInjectedButtons() const {
+  const unsigned long now = millis();
+  for (auto& state : injectedButtons) {
+    state.pressedEdge = false;
+    state.releasedEdge = false;
+    if (state.activateOnGeneration != 0 && state.activateOnGeneration <= updateGeneration) {
+      state.pressed = true;
+      state.pressedEdge = true;
+      state.pressedAtMs = now;
+      state.releaseAtMs = now + state.pendingHoldMs;
+      state.activateOnGeneration = 0;
+      state.pendingHoldMs = 0;
+    }
+    if (state.pressed && state.releaseAtMs > 0 && now >= state.releaseAtMs) {
+      state.pressed = false;
+      state.releaseAtMs = 0;
+      state.releasedEdge = true;
+    }
+  }
+}
+
 bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {
   const auto sideLayout = static_cast<CrossPointSettings::SIDE_BUTTON_LAYOUT>(SETTINGS.sideButtonLayout);
   const auto& side = kSideLayouts[sideLayout];
@@ -54,17 +83,56 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
   return false;
 }
 
-bool MappedInputManager::wasPressed(const Button button) const { return mapButton(button, &HalGPIO::wasPressed); }
+bool MappedInputManager::wasPressed(const Button button) const {
+  return mapButton(button, &HalGPIO::wasPressed) || injectedButtons[buttonToIndex(button)].pressedEdge;
+}
 
-bool MappedInputManager::wasReleased(const Button button) const { return mapButton(button, &HalGPIO::wasReleased); }
+bool MappedInputManager::wasReleased(const Button button) const {
+  return mapButton(button, &HalGPIO::wasReleased) || injectedButtons[buttonToIndex(button)].releasedEdge;
+}
 
-bool MappedInputManager::isPressed(const Button button) const { return mapButton(button, &HalGPIO::isPressed); }
+bool MappedInputManager::isPressed(const Button button) const {
+  return mapButton(button, &HalGPIO::isPressed) || injectedButtons[buttonToIndex(button)].pressed;
+}
 
-bool MappedInputManager::wasAnyPressed() const { return gpio.wasAnyPressed(); }
+bool MappedInputManager::wasAnyPressed() const {
+  if (gpio.wasAnyPressed()) {
+    return true;
+  }
+  for (const auto& state : injectedButtons) {
+    if (state.pressedEdge) {
+      return true;
+    }
+  }
+  return false;
+}
 
-bool MappedInputManager::wasAnyReleased() const { return gpio.wasAnyReleased(); }
+bool MappedInputManager::wasAnyReleased() const {
+  if (gpio.wasAnyReleased()) {
+    return true;
+  }
+  for (const auto& state : injectedButtons) {
+    if (state.releasedEdge) {
+      return true;
+    }
+  }
+  return false;
+}
 
-unsigned long MappedInputManager::getHeldTime() const { return gpio.getHeldTime(); }
+unsigned long MappedInputManager::getHeldTime() const {
+  unsigned long injectedHeldTime = 0;
+  const unsigned long now = millis();
+  for (const auto& state : injectedButtons) {
+    if (state.pressed) {
+      const unsigned long heldTime = now - state.pressedAtMs;
+      if (heldTime > injectedHeldTime) {
+        injectedHeldTime = heldTime;
+      }
+    }
+  }
+  const unsigned long hardwareHeldTime = gpio.getHeldTime();
+  return hardwareHeldTime > injectedHeldTime ? hardwareHeldTime : injectedHeldTime;
+}
 
 MappedInputManager::Labels MappedInputManager::mapLabels(const char* back, const char* confirm, const char* previous,
                                                          const char* next) const {
@@ -106,4 +174,15 @@ int MappedInputManager::getPressedFrontButton() const {
     return HalGPIO::BTN_RIGHT;
   }
   return -1;
+}
+
+bool MappedInputManager::injectTap(const Button button, const unsigned long holdMs) const {
+  InjectedButtonState& state = injectedButtons[buttonToIndex(button)];
+  state.pressed = false;
+  state.releaseAtMs = 0;
+  state.releasedEdge = false;
+  state.pressedEdge = false;
+  state.activateOnGeneration = updateGeneration + 1;
+  state.pendingHoldMs = (holdMs == 0 ? 1 : holdMs);
+  return true;
 }

@@ -1,5 +1,6 @@
 #include "PngToBmpConverter.h"
 
+#include <Arduino.h>
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <InflateReader.h>
@@ -17,6 +18,7 @@ constexpr bool USE_8BIT_OUTPUT = false;
 constexpr bool USE_ATKINSON = true;
 constexpr bool USE_FLOYD_STEINBERG = false;
 constexpr bool USE_PRESCALE = true;
+constexpr int ROW_YIELD_INTERVAL = 8;
 // ============================================================================
 
 // BMP writing helpers (same as JpegToBmpConverter)
@@ -714,6 +716,9 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOu
           fsDitherer->nextRow();
       }
       bmpOut.write(rowBuffer, bytesPerRow);
+      if (((y + 1) % ROW_YIELD_INTERVAL) == 0) {
+        yield();
+      }
     } else {
       // Area-averaging scaling (same as JpegToBmpConverter)
       for (int outX = 0; outX < outWidth; outX++) {
@@ -782,6 +787,9 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOu
 
         bmpOut.write(rowBuffer, bytesPerRow);
         currentOutY++;
+        if ((currentOutY % ROW_YIELD_INTERVAL) == 0) {
+          yield();
+        }
 
         nextOutY_srcStart = static_cast<uint32_t>(currentOutY + 1) * scaleY_fp;
 
@@ -801,6 +809,9 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOu
     uint8_t* temp = ctx.previousRow;
     ctx.previousRow = ctx.currentRow;
     ctx.currentRow = temp;
+    if (((y + 1) % ROW_YIELD_INTERVAL) == 0) {
+      yield();
+    }
   }
 
   // Clean up

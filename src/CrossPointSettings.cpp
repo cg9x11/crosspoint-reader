@@ -256,6 +256,26 @@ float CrossPointSettings::getReaderLineCompression() const {
         case WIDE:
           return 1.0f;
       }
+    case BOKERLAM:
+      switch (lineSpacing) {
+        case TIGHT:
+          return 0.95f;
+        case NORMAL:
+        default:
+          return 1.0f;
+        case WIDE:
+          return 1.1f;
+      }
+    case KICOMICTAXY:
+      switch (lineSpacing) {
+        case TIGHT:
+          return 0.95f;
+        case NORMAL:
+        default:
+          return 1.0f;
+        case WIDE:
+          return 1.1f;
+      }
   }
 }
 
@@ -329,6 +349,30 @@ int CrossPointSettings::getReaderFontId() const {
           return OPENDYSLEXIC_12_FONT_ID;
         case EXTRA_LARGE:
           return OPENDYSLEXIC_14_FONT_ID;
+      }
+    case BOKERLAM:
+      switch (fontSize) {
+        case SMALL:
+          return BOKERLAM_12_FONT_ID;
+        case MEDIUM:
+        default:
+          return BOKERLAM_14_FONT_ID;
+        case LARGE:
+          return BOKERLAM_16_FONT_ID;
+        case EXTRA_LARGE:
+          return BOKERLAM_18_FONT_ID;
+      }
+    case KICOMICTAXY:
+      switch (fontSize) {
+        case SMALL:
+          return KICOMICTAXY_12_FONT_ID;
+        case MEDIUM:
+        default:
+          return KICOMICTAXY_14_FONT_ID;
+        case LARGE:
+          return KICOMICTAXY_16_FONT_ID;
+        case EXTRA_LARGE:
+          return KICOMICTAXY_18_FONT_ID;
       }
   }
 }
