@@ -24,7 +24,7 @@ Confirm that button timing, e-ink refresh behavior, network handling, and backgr
 
 1. Open `Online Library`.
 2. Enter `Sources`.
-3. Open `Hako`, `Truyen Full`, and `Web Truyen` one by one.
+3. Open `Hako` and `Truyen Full` one by one.
 4. Confirm list movement and `Select` response feel immediate and consistent.
 5. Confirm `Back` always returns to the previous screen without accidental double navigation.
 

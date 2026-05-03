@@ -66,8 +66,8 @@ class TrackedSeriesActivity final : public Activity {
   void noteSelectionChanged();
   void prunePreviewCache(const std::string& keepUrl);
   void pruneCoverCache(const std::string& keepUrl);
-  static constexpr size_t MAX_PREVIEW_CACHE_ENTRIES = 6;
-  static constexpr size_t MAX_COVER_CACHE_ENTRIES = 6;
+  static constexpr size_t MAX_PREVIEW_CACHE_ENTRIES = 4;
+  static constexpr size_t MAX_COVER_CACHE_ENTRIES = 4;
   static constexpr unsigned long PREVIEW_FETCH_DELAY_MS = 900;
   static constexpr unsigned long COVER_FETCH_DELAY_MS = 1500;
 

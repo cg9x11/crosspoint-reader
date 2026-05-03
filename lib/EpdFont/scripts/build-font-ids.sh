@@ -116,6 +116,54 @@ ruby -rdigest -e 'puts [
 ].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
 ))"
 
+echo "#define BOKERLAM_12_FONT_ID ($(
+ruby -rdigest -e 'puts [
+  "./bokerlam_12_regular.h",
+].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
+))"
+
+echo "#define BOKERLAM_14_FONT_ID ($(
+ruby -rdigest -e 'puts [
+  "./bokerlam_14_regular.h",
+].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
+))"
+
+echo "#define BOKERLAM_16_FONT_ID ($(
+ruby -rdigest -e 'puts [
+  "./bokerlam_16_regular.h",
+].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
+))"
+
+echo "#define BOKERLAM_18_FONT_ID ($(
+ruby -rdigest -e 'puts [
+  "./bokerlam_18_regular.h",
+].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
+))"
+
+echo "#define KICOMICTAXY_12_FONT_ID ($(
+ruby -rdigest -e 'puts [
+  "./kicomictaxy_12_regular.h",
+].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
+))"
+
+echo "#define KICOMICTAXY_14_FONT_ID ($(
+ruby -rdigest -e 'puts [
+  "./kicomictaxy_14_regular.h",
+].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
+))"
+
+echo "#define KICOMICTAXY_16_FONT_ID ($(
+ruby -rdigest -e 'puts [
+  "./kicomictaxy_16_regular.h",
+].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
+))"
+
+echo "#define KICOMICTAXY_18_FONT_ID ($(
+ruby -rdigest -e 'puts [
+  "./kicomictaxy_18_regular.h",
+].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
+))"
+
 echo "#define UI_10_FONT_ID ($(
 ruby -rdigest -e 'puts [
   "./ubuntu_10_regular.h",

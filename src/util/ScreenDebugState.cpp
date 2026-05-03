@@ -7,6 +7,7 @@ ScreenDebugState SCREEN_DEBUG;
 void ScreenDebugState::beginFrame(const std::string& activityName) {
   std::lock_guard<std::mutex> lock(mutex_);
   workingSnapshot_ = ScreenDebugSnapshot{};
+  workingSnapshot_.frameId = nextFrameId_;
   workingSnapshot_.activityName = activityName;
   const auto metrics = RuntimeDebugMetrics::capture();
   workingSnapshot_.diagnostics.trackedSeriesLoaded = metrics.trackedSeriesLoaded;
@@ -21,12 +22,18 @@ void ScreenDebugState::presentFrame() {
   std::lock_guard<std::mutex> lock(mutex_);
   presentedSnapshot_ = workingSnapshot_;
   hasPresentedSnapshot_ = true;
+  ++nextFrameId_;
 }
 
 void ScreenDebugState::setHeader(const char* title, const char* subtitle) {
   std::lock_guard<std::mutex> lock(mutex_);
   workingSnapshot_.headerTitle = safeText(title);
   workingSnapshot_.headerSubtitle = safeText(subtitle);
+}
+
+void ScreenDebugState::setDiagnostics(const ScreenDebugDiagnostics& diagnostics) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  workingSnapshot_.diagnostics = diagnostics;
 }
 
 void ScreenDebugState::setSubHeader(const char* label, const char* rightLabel) {

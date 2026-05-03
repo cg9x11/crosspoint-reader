@@ -112,13 +112,15 @@ void ActivityManager::loop() {
       // Current activity has requested a new activity to be launched
       RenderLock lock;
 
-      if (pendingAction == PendingAction::Replace) {
+      if (pendingAction == PendingAction::Replace || pendingAction == PendingAction::ReplacePreserveStack) {
         // Destroy the current activity
         exitActivity(lock);
-        // Clear the stack
-        while (!stackActivities.empty()) {
-          stackActivities.back()->onExit();
-          stackActivities.pop_back();
+        if (pendingAction == PendingAction::Replace) {
+          // Clear the stack for full-screen transitions like goHome()/goToReader()
+          while (!stackActivities.empty()) {
+            stackActivities.back()->onExit();
+            stackActivities.pop_back();
+          }
         }
       } else if (pendingAction == PendingAction::Push) {
         // Move current activity to stack
@@ -168,7 +170,21 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   }
 }
 
+void ActivityManager::replaceCurrentActivity(std::unique_ptr<Activity>&& newActivity) {
+  if (currentActivity) {
+    pendingActivity = std::move(newActivity);
+    pendingAction = PendingAction::ReplacePreserveStack;
+  } else {
+    currentActivity = std::move(newActivity);
+    currentActivity->onEnter();
+  }
+}
+
 void ActivityManager::goToFileTransfer() {
+  if (currentActivity) {
+    pushActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
+    return;
+  }
   replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
 }
 
@@ -259,6 +275,7 @@ const char* ActivityManager::getPendingActionName() const {
     case PendingAction::Push: return "push";
     case PendingAction::Pop: return "pop";
     case PendingAction::Replace: return "replace";
+    case PendingAction::ReplacePreserveStack: return "replace_preserve_stack";
   }
   return "unknown";
 }
@@ -268,6 +285,20 @@ bool ActivityManager::injectAutomationText(const std::string& text) {
     return false;
   }
   return currentActivity->handleAutomationTextInput(text);
+}
+
+bool ActivityManager::currentActivitySupportsAutomationTextInput() const {
+  if (!currentActivity) {
+    return false;
+  }
+  return currentActivity->supportsAutomationTextInput();
+}
+
+bool ActivityManager::injectExternalKeyboardEvent(const ExternalKeyboardEvent& event) {
+  if (!currentActivity) {
+    return false;
+  }
+  return currentActivity->handleExternalKeyboardEvent(event);
 }
 
 void ActivityManager::requestUpdate(bool immediate) {

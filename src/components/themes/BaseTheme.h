@@ -168,4 +168,6 @@ class BaseTheme {
   static constexpr int batteryPercentSpacing = 4;
   static void drawBatteryOutline(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight);
   static void drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX, int boltY);
+  static std::string formatRecentProgress(const RecentBook& book);
+  static std::string formatRecentReadingTime(const RecentBook& book);
 };

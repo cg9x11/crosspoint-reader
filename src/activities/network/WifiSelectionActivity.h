@@ -13,7 +13,10 @@
 struct WifiNetworkInfo {
   std::string ssid;
   int32_t rssi;
+  int32_t channel;
   bool isEncrypted;
+  bool is24Ghz;
+  bool isBandBlocked;
   bool hasSavedPassword;  // Whether we have saved credentials for this network
   std::string ipAddress;  // Populated after connection for display
 };
@@ -90,6 +93,12 @@ class WifiSelectionActivity final : public Activity {
 
   void startWifiScan();
   void processWifiScanResults();
+  bool findSavedNetworkCandidate(const std::string& ssid, WifiNetworkInfo& outNetwork) const;
+  bool shouldRestrict5GhzForDevice() const;
+  bool isSupportedBand(const WifiNetworkInfo& network) const;
+  bool canConnectSelectedNetwork() const;
+  bool hasBlocked5GhzNetworks() const;
+  void showUnsupportedBandPopup();
   void selectNetwork(int index);
   void attemptConnection();
   void checkConnectionStatus();

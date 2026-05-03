@@ -8,12 +8,33 @@
 #include <cctype>
 #include <sstream>
 
+#include "PluginStore.h"
+
 TrackedSeriesStore TrackedSeriesStore::instance;
 
 namespace {
 constexpr char TRACKED_SERIES_FILE[] = "/.crosspoint/data/tracked_series.json";
+constexpr char TRACKED_SERIES_TMP_FILE[] = "/.crosspoint/data/tracked_series.tmp";
 constexpr char LEGACY_TRACKED_SERIES_FILE[] = "/.crosspoint/plugins/tracked_series.json";
 constexpr uint32_t STORE_VERSION = 2;
+
+void skipUtf8Bom(FsFile& file) {
+  const int first = file.read();
+  if (first < 0) {
+    return;
+  }
+  if (first != 0xEF) {
+    file.seek(0);
+    return;
+  }
+
+  const int second = file.read();
+  const int third = file.read();
+  if (second == 0xBB && third == 0xBF) {
+    return;
+  }
+  file.seek(0);
+}
 
 template <typename TObject>
 std::string readStringField(TObject obj, const char* shortKey, const char* legacyKey) {
@@ -50,6 +71,18 @@ std::string buildTrackedSeriesId(const std::string& pluginId, const std::string&
   out << pluginId << "-" << std::hex << hash;
   return out.str();
 }
+
+bool normalizeTrackedSeriesIdentity(TrackedSeriesInfo& item) {
+  const std::string canonicalPluginId = PluginStore::canonicalizePluginId(item.pluginId, item.runtimeProfile);
+  const std::string canonicalRuntimeProfile =
+      PluginStore::canonicalizeRuntimeProfile(canonicalPluginId.empty() ? item.pluginId : canonicalPluginId, item.runtimeProfile);
+  const bool changed = canonicalPluginId != item.pluginId || canonicalRuntimeProfile != item.runtimeProfile;
+  if (!canonicalPluginId.empty()) {
+    item.pluginId = canonicalPluginId;
+  }
+  item.runtimeProfile = canonicalRuntimeProfile;
+  return changed;
+}
 }  // namespace
 
 bool TrackedSeriesStore::loadFromDisk() {
@@ -68,14 +101,20 @@ bool TrackedSeriesStore::loadFromDisk() {
     return true;
   }
 
-  const String json = Storage.readFile(sourcePath);
-  if (json.isEmpty()) {
+  FsFile file;
+  if (!Storage.openFileForRead("TRK", sourcePath, file)) {
+    return false;
+  }
+  if (!file || file.size() == 0) {
+    file.close();
     loaded = true;
     return true;
   }
 
+  skipUtf8Bom(file);
   JsonDocument doc;
-  const auto error = deserializeJson(doc, json.c_str());
+  const auto error = deserializeJson(doc, file);
+  file.close();
   if (error) {
     LOG_ERR("TRK", "Failed to parse tracked series store: %s", error.c_str());
     return false;
@@ -83,6 +122,7 @@ bool TrackedSeriesStore::loadFromDisk() {
 
   JsonArray tracked = doc["i"].is<JsonArray>() ? doc["i"].as<JsonArray>() : doc["items"].as<JsonArray>();
   items.reserve(tracked.size());
+  bool migrated = sourcePath != TRACKED_SERIES_FILE;
   for (JsonObject obj : tracked) {
     TrackedSeriesInfo item;
     item.pluginId = readStringField(obj, "p", "pluginId");
@@ -100,6 +140,7 @@ bool TrackedSeriesStore::loadFromDisk() {
     item.lastReadPageCount = readUIntField(obj, "pc", "lastReadPageCount");
     item.chapterCount = readUIntField(obj, "cc", "chapterCount");
     item.id = readStringField(obj, "id", "id");
+    migrated = normalizeTrackedSeriesIdentity(item) || migrated;
     if (item.id.empty()) {
       item.id = buildTrackedSeriesId(item.pluginId, item.seriesUrl);
     }
@@ -114,6 +155,9 @@ bool TrackedSeriesStore::loadFromDisk() {
   std::sort(items.begin(), items.end(),
             [](const TrackedSeriesInfo& a, const TrackedSeriesInfo& b) { return a.title < b.title; });
   loaded = true;
+  if (migrated) {
+    saveToDisk(nullptr);
+  }
   return true;
 }
 
@@ -150,10 +194,26 @@ bool TrackedSeriesStore::saveToDisk(std::string* outError) const {
     if (item.chapterCount != 0) obj["cc"] = item.chapterCount;
   }
 
-  String json;
-  serializeJson(doc, json);
-  if (!Storage.writeFile(TRACKED_SERIES_FILE, json)) {
+  FsFile file;
+  if (!Storage.openFileForWrite("TRK", TRACKED_SERIES_TMP_FILE, file)) {
     if (outError) *outError = "Failed to write tracked series store";
+    return false;
+  }
+  const size_t expectedBytes = measureJson(doc);
+  const size_t written = serializeJson(doc, file);
+  file.flush();
+  file.close();
+  if (written != expectedBytes) {
+    Storage.remove(TRACKED_SERIES_TMP_FILE);
+    if (outError) *outError = "Failed to write tracked series store";
+    return false;
+  }
+  if (Storage.exists(TRACKED_SERIES_FILE)) {
+    Storage.remove(TRACKED_SERIES_FILE);
+  }
+  if (!Storage.rename(TRACKED_SERIES_TMP_FILE, TRACKED_SERIES_FILE)) {
+    Storage.remove(TRACKED_SERIES_TMP_FILE);
+    if (outError) *outError = "Failed to finalize tracked series store";
     return false;
   }
   if (Storage.exists(LEGACY_TRACKED_SERIES_FILE)) {
@@ -169,6 +229,7 @@ bool TrackedSeriesStore::upsert(const TrackedSeriesInfo& input, std::string* out
   }
 
   TrackedSeriesInfo item = input;
+  normalizeTrackedSeriesIdentity(item);
   if (item.pluginId.empty()) {
     if (outError) *outError = "Missing plugin id";
     return false;
@@ -186,10 +247,19 @@ bool TrackedSeriesStore::upsert(const TrackedSeriesInfo& input, std::string* out
   }
 
   auto it = std::find_if(items.begin(), items.end(),
-                         [&item](const TrackedSeriesInfo& existing) { return existing.id == item.id; });
+                         [&item](const TrackedSeriesInfo& existing) {
+                           if (existing.id == item.id) {
+                             return true;
+                           }
+                           return existing.seriesUrl == item.seriesUrl &&
+                                  PluginStore::canonicalizePluginId(existing.pluginId, existing.runtimeProfile) == item.pluginId;
+                         });
   if (it == items.end()) {
     items.push_back(std::move(item));
   } else {
+    if (!it->id.empty()) {
+      item.id = it->id;
+    }
     *it = std::move(item);
   }
 

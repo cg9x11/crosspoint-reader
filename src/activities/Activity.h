@@ -12,6 +12,23 @@
 #include "MappedInputManager.h"
 #include "RenderLock.h"
 
+enum class ExternalKeyboardKey {
+  Character,
+  Backspace,
+  Submit,
+  Left,
+  Right,
+  Up,
+  Down,
+  Escape,
+  Tab,
+};
+
+struct ExternalKeyboardEvent {
+  ExternalKeyboardKey key = ExternalKeyboardKey::Character;
+  char character = '\0';
+};
+
 class Activity {
   friend class ActivityManager;
 
@@ -35,6 +52,12 @@ class Activity {
 
   virtual bool handleAutomationTextInput(const std::string& text) {
     (void)text;
+    return false;
+  }
+  virtual bool supportsAutomationTextInput() const { return false; }
+
+  virtual bool handleExternalKeyboardEvent(const ExternalKeyboardEvent& event) {
+    (void)event;
     return false;
   }
 

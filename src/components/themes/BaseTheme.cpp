@@ -4,10 +4,12 @@
 #include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <WiFi.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "I18n.h"
 #include "RecentBooksStore.h"
@@ -20,6 +22,54 @@ namespace {
 constexpr int homeMenuMargin = 20;
 constexpr int homeMarginTop = 30;
 constexpr int subtitleY = 738;
+
+bool isWifiConnectedForUi() { return WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0); }
+
+std::vector<std::string> splitPopupLines(const char* message) {
+  std::vector<std::string> lines;
+  if (!message || !*message) {
+    lines.emplace_back("");
+    return lines;
+  }
+
+  std::string current;
+  for (const char* ch = message; *ch; ++ch) {
+    if (*ch == '\n') {
+      lines.push_back(current);
+      current.clear();
+      continue;
+    }
+    current.push_back(*ch);
+  }
+  lines.push_back(current);
+  return lines;
+}
+
+void drawWifiStatusIcon(const GfxRenderer& renderer, int x, int y) {
+  if (!isWifiConnectedForUi()) {
+    return;
+  }
+
+  renderer.drawLine(x + 5, y + 0, x + 8, y + 0);
+  renderer.drawLine(x + 3, y + 1, x + 4, y + 1);
+  renderer.drawLine(x + 9, y + 1, x + 10, y + 1);
+  renderer.drawLine(x + 2, y + 2, x + 3, y + 2);
+  renderer.drawLine(x + 10, y + 2, x + 11, y + 2);
+  renderer.drawLine(x + 1, y + 3, x + 2, y + 3);
+  renderer.drawLine(x + 11, y + 3, x + 12, y + 3);
+
+  renderer.drawLine(x + 5, y + 4, x + 8, y + 4);
+  renderer.drawPixel(x + 4, y + 5);
+  renderer.drawPixel(x + 9, y + 5);
+  renderer.drawPixel(x + 3, y + 6);
+  renderer.drawPixel(x + 10, y + 6);
+
+  renderer.drawLine(x + 6, y + 7, x + 7, y + 7);
+  renderer.drawPixel(x + 5, y + 8);
+  renderer.drawPixel(x + 8, y + 8);
+
+  renderer.fillRect(x + 6, y + 10, 2, 2);
+}
 
 // Helper: draw battery icon at given position
 void drawBatteryIcon(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight, uint16_t percentage) {
@@ -78,6 +128,25 @@ void BaseTheme::drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX,
   renderer.drawLine(boltX + 1, boltY + 5, boltX + 4, boltY + 5, false);
   renderer.drawLine(boltX + 2, boltY + 6, boltX + 3, boltY + 6, false);
   renderer.drawLine(boltX + 1, boltY + 7, boltX + 2, boltY + 7, false);
+}
+
+std::string BaseTheme::formatRecentProgress(const RecentBook& book) {
+  const int percent = std::clamp(static_cast<int>(book.progressPercent), 0, 100);
+  return std::to_string(percent) + "%";
+}
+
+std::string BaseTheme::formatRecentReadingTime(const RecentBook& book) {
+  const uint32_t totalMinutes = book.readingTimeSeconds / 60;
+  if (totalMinutes < 60) {
+    return std::to_string(totalMinutes) + "m";
+  }
+
+  const uint32_t hours = totalMinutes / 60;
+  const uint32_t minutes = totalMinutes % 60;
+  if (minutes == 0) {
+    return std::to_string(hours) + "h";
+  }
+  return std::to_string(hours) + "h " + std::to_string(minutes) + "m";
 }
 
 void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const bool showPercentage) const {
@@ -287,15 +356,23 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     // Draw name
     auto itemName = rowTitle(i);
     auto font = (rowSubtitle != nullptr) ? UI_12_FONT_ID : UI_10_FONT_ID;
-    auto item = renderer.truncatedText(font, itemName.c_str(), textWidth);
-    renderer.drawText(font, rect.x + BaseMetrics::values.contentSidePadding, itemY, item.c_str(), i != selectedIndex);
-
+    const int textX = rect.x + BaseMetrics::values.contentSidePadding;
     if (rowSubtitle != nullptr) {
-      // Draw subtitle
-      std::string subtitleText = rowSubtitle(i);
-      auto subtitle = renderer.truncatedText(UI_10_FONT_ID, subtitleText.c_str(), textWidth);
-      renderer.drawText(UI_10_FONT_ID, rect.x + BaseMetrics::values.contentSidePadding, itemY + 30, subtitle.c_str(),
-                        i != selectedIndex);
+      const auto titleLines = renderer.wrappedText(font, itemName.c_str(), textWidth, 2);
+      const int titleLineCount = std::max(1, std::min(static_cast<int>(titleLines.size()), 2));
+      for (int lineIndex = 0; lineIndex < titleLineCount; ++lineIndex) {
+        renderer.drawText(font, textX, itemY + lineIndex * renderer.getLineHeight(font), titleLines[lineIndex].c_str(),
+                          i != selectedIndex);
+      }
+
+      if (titleLineCount == 1) {
+        std::string subtitleText = rowSubtitle(i);
+        auto subtitle = renderer.truncatedText(UI_10_FONT_ID, subtitleText.c_str(), textWidth);
+        renderer.drawText(UI_10_FONT_ID, textX, itemY + 30, subtitle.c_str(), i != selectedIndex);
+      }
+    } else {
+      auto item = renderer.truncatedText(font, itemName.c_str(), textWidth);
+      renderer.drawText(font, textX, itemY, item.c_str(), i != selectedIndex);
     }
 
     if (rowValue != nullptr) {
@@ -332,17 +409,22 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle) const {
   SCREEN_DEBUG.setHeader(title, subtitle);
   // Hide last battery draw
-  constexpr int maxBatteryWidth = 80;
-  renderer.fillRect(rect.x + rect.width - maxBatteryWidth, rect.y + 5, maxBatteryWidth,
+  constexpr int maxHeaderStatusWidth = 100;
+  renderer.fillRect(rect.x + rect.width - maxHeaderStatusWidth, rect.y + 5, maxHeaderStatusWidth,
                     BaseMetrics::values.batteryHeight + 10, false);
 
   const bool showBatteryPercentage =
       SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
+  const int wifiIconWidth = isWifiConnectedForUi() ? 14 : 0;
+  const int statusGap = wifiIconWidth > 0 ? 8 : 0;
   // Position icon at right edge, drawBatteryRight will place text to the left
-  const int batteryX = rect.x + rect.width - 12 - BaseMetrics::values.batteryWidth;
+  const int batteryX = rect.x + rect.width - 12 - BaseMetrics::values.batteryWidth - wifiIconWidth - statusGap;
   drawBatteryRight(renderer,
                    Rect{batteryX, rect.y + 5, BaseMetrics::values.batteryWidth, BaseMetrics::values.batteryHeight},
                    showBatteryPercentage);
+  if (wifiIconWidth > 0) {
+    drawWifiStatusIcon(renderer, batteryX + BaseMetrics::values.batteryWidth + statusGap, rect.y + 9);
+  }
 
   if (title) {
     int padding = rect.width - batteryX + BaseMetrics::values.batteryWidth;
@@ -421,226 +503,98 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
                                     bool& bufferRestored, std::function<bool()> storeCoverBuffer) const {
   const bool hasContinueReading = !recentBooks.empty();
   const bool bookSelected = hasContinueReading && selectorIndex == 0;
+  (void)bufferRestored;
 
-  // --- Top "book" card for the current title (selectorIndex == 0) ---
-  // When there's no cover image, use fixed size (half screen)
-  // When there's cover image, adapt width to image aspect ratio, keep height fixed at 400px
-  const int baseHeight = rect.height;  // Fixed height (400px)
+  const int outerPadding = 18;
+  const int cardX = rect.x + outerPadding;
+  const int cardY = rect.y + 8;
+  const int cardWidth = rect.width - outerPadding * 2;
+  const int cardHeight = rect.height - 16;
 
-  int bookWidth, bookX;
-  bool hasCoverImage = false;
+  if (!hasContinueReading) {
+    renderer.drawRect(cardX, cardY, cardWidth, cardHeight);
+    renderer.drawCenteredText(UI_12_FONT_ID, rect.y + rect.height / 2 - renderer.getLineHeight(UI_12_FONT_ID),
+                              tr(STR_NO_OPEN_BOOK), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_10_FONT_ID, rect.y + rect.height / 2 + 10, tr(STR_START_READING), true);
+    return;
+  }
 
-  if (hasContinueReading && !recentBooks[0].coverBmpPath.empty()) {
-    // Try to get actual image dimensions from BMP header
-    const std::string coverBmpPath =
-        UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, BaseMetrics::values.homeCoverHeight);
+  const RecentBook& book = recentBooks[0];
+  const int coverHeight = cardHeight - 24;
+  int coverWidth = std::max(120, std::min(cardWidth / 3, (coverHeight * 3) / 2));
+  const int coverX = cardX + 12;
+  const int coverY = cardY + 12;
 
+  if (!book.coverBmpPath.empty()) {
+    const std::string coverBmpPath = UITheme::getCoverThumbPath(book.coverBmpPath, BaseMetrics::values.homeCoverHeight);
     FsFile file;
     if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
       Bitmap bitmap(file);
-      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-        hasCoverImage = true;
-        const int imgWidth = bitmap.getWidth();
-        const int imgHeight = bitmap.getHeight();
-
-        // Calculate width based on aspect ratio, maintaining baseHeight
-        if (imgWidth > 0 && imgHeight > 0) {
-          const float aspectRatio = static_cast<float>(imgWidth) / static_cast<float>(imgHeight);
-          bookWidth = static_cast<int>(baseHeight * aspectRatio);
-
-          // Ensure width doesn't exceed reasonable limits (max 90% of screen width)
-          const int maxWidth = static_cast<int>(rect.width * 0.9f);
-          if (bookWidth > maxWidth) {
-            bookWidth = maxWidth;
-          }
-        } else {
-          bookWidth = rect.width / 2;  // Fallback
+      if (bitmap.parseHeaders() == BmpReaderError::Ok && bitmap.getWidth() > 0 && bitmap.getHeight() > 0) {
+        coverWidth = std::max(
+            120, std::min(cardWidth / 3, static_cast<int>((coverHeight * bitmap.getWidth()) / bitmap.getHeight())));
+        if (!coverRendered) {
+          renderer.drawBitmap(bitmap, coverX, coverY, coverWidth, coverHeight);
         }
       }
+      file.close();
     }
   }
 
-  if (!hasCoverImage) {
-    // No cover: use half screen size
-    bookWidth = rect.width / 2;
+  if (!coverRendered) {
+    if (book.coverBmpPath.empty()) {
+      renderer.drawRect(coverX, coverY, coverWidth, coverHeight);
+      renderer.fillRect(coverX + 1, coverY + (coverHeight / 3), coverWidth - 2, (coverHeight * 2) / 3 - 1, true);
+      renderer.drawText(UI_12_FONT_ID, coverX + 18, coverY + 32, "No", false, EpdFontFamily::BOLD);
+      renderer.drawText(UI_10_FONT_ID, coverX + 12, coverY + 52, "Cover", false);
+    }
+    coverBufferStored = storeCoverBuffer();
+    coverRendered = coverBufferStored;
   }
 
-  bookX = rect.x + (rect.width - bookWidth) / 2;
-  const int bookY = rect.y;
-  const int bookHeight = baseHeight;
+  const int textX = coverX + coverWidth + 20;
+  const int textWidth = std::max(80, cardX + cardWidth - 14 - textX);
+  const int textPanelY = cardY + 10;
+  const int textPanelHeight = cardHeight - 20;
+  const bool textInk = !bookSelected;
 
-  // Bookmark dimensions (used in multiple places)
-  const int bookmarkWidth = bookWidth / 8;
-  const int bookmarkHeight = bookHeight / 5;
-  const int bookmarkX = bookX + bookWidth - bookmarkWidth - 10;
-  const int bookmarkY = bookY + 5;
+  renderer.drawRect(cardX, cardY, cardWidth, cardHeight);
+  renderer.drawRect(coverX, coverY, coverWidth, coverHeight);
+  renderer.fillRect(textX - 8, textPanelY, textWidth + 10, textPanelHeight, bookSelected);
+  renderer.drawRect(textX - 8, textPanelY, textWidth + 10, textPanelHeight, true);
 
-  // Draw book card regardless, fill with message based on `hasContinueReading`
-  {
-    // Draw cover image as background if available (inside the box)
-    // Only load from SD on first render, then use stored buffer
+  auto titleLines = renderer.wrappedText(UI_12_FONT_ID, book.title.c_str(), textWidth - 8, 3);
+  const std::string author =
+      book.author.empty() ? std::string{} : renderer.truncatedText(UI_10_FONT_ID, book.author.c_str(), textWidth - 8);
+  const std::string progressText = formatRecentProgress(book);
+  const std::string timeText = formatRecentReadingTime(book);
 
-    if (hasContinueReading && !recentBooks[0].coverBmpPath.empty() && !coverRendered) {
-      const std::string coverBmpPath =
-          UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, BaseMetrics::values.homeCoverHeight);
+  int textY = textPanelY + 10;
+  renderer.drawText(UI_10_FONT_ID, textX, textY, tr(STR_CONTINUE_READING), textInk);
+  textY += renderer.getLineHeight(UI_10_FONT_ID) + 8;
 
-      // First time: load cover from SD and render
-      FsFile file;
-      if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
-        Bitmap bitmap(file);
-        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-          LOG_DBG("THEME", "Rendering bmp");
-
-          // Draw the cover image (bookWidth and bookHeight already match image aspect ratio)
-          renderer.drawBitmap(bitmap, bookX, bookY, bookWidth, bookHeight);
-
-          // Draw border around the card
-          renderer.drawRect(bookX, bookY, bookWidth, bookHeight);
-
-          // No bookmark ribbon when cover is shown - it would just cover the art
-
-          // Store the buffer with cover image for fast navigation
-          coverBufferStored = storeCoverBuffer();
-          coverRendered = coverBufferStored;  // Only consider it rendered if we successfully stored the buffer
-
-          // First render: if selected, draw selection indicators now
-          if (bookSelected) {
-            LOG_DBG("THEME", "Drawing selection");
-            renderer.drawRect(bookX + 1, bookY + 1, bookWidth - 2, bookHeight - 2);
-            renderer.drawRect(bookX + 2, bookY + 2, bookWidth - 4, bookHeight - 4);
-          }
-        }
-      }
-    }
-
-    if (!bufferRestored && !coverRendered) {
-      // No cover image: draw border or fill, plus bookmark as visual flair
-      if (bookSelected) {
-        renderer.fillRect(bookX, bookY, bookWidth, bookHeight);
-      } else {
-        renderer.drawRect(bookX, bookY, bookWidth, bookHeight);
-      }
-
-      // Draw bookmark ribbon when no cover image (visual decoration)
-      if (hasContinueReading) {
-        const int notchDepth = bookmarkHeight / 3;
-        const int centerX = bookmarkX + bookmarkWidth / 2;
-
-        const int xPoints[5] = {
-            bookmarkX,                  // top-left
-            bookmarkX + bookmarkWidth,  // top-right
-            bookmarkX + bookmarkWidth,  // bottom-right
-            centerX,                    // center notch point
-            bookmarkX                   // bottom-left
-        };
-        const int yPoints[5] = {
-            bookmarkY,                                // top-left
-            bookmarkY,                                // top-right
-            bookmarkY + bookmarkHeight,               // bottom-right
-            bookmarkY + bookmarkHeight - notchDepth,  // center notch point
-            bookmarkY + bookmarkHeight                // bottom-left
-        };
-
-        // Draw bookmark ribbon (inverted if selected)
-        renderer.fillPolygon(xPoints, yPoints, 5, !bookSelected);
-      }
-    }
-
-    // If buffer was restored, draw selection indicators if needed
-    if (bufferRestored && bookSelected && coverRendered) {
-      // Draw selection border (no bookmark inversion needed since cover has no bookmark)
-      renderer.drawRect(bookX + 1, bookY + 1, bookWidth - 2, bookHeight - 2);
-      renderer.drawRect(bookX + 2, bookY + 2, bookWidth - 4, bookHeight - 4);
-    } else if (!coverRendered && !bufferRestored) {
-      // Selection border already handled above in the no-cover case
-    }
+  for (const auto& line : titleLines) {
+    renderer.drawText(UI_12_FONT_ID, textX, textY, line.c_str(), textInk, EpdFontFamily::BOLD);
+    textY += renderer.getLineHeight(UI_12_FONT_ID);
   }
 
-  if (hasContinueReading) {
-    const std::string& lastBookTitle = recentBooks[0].title;
-    const std::string& lastBookAuthor = recentBooks[0].author;
+  if (!author.empty()) {
+    textY += 6;
+    renderer.drawText(UI_10_FONT_ID, textX, textY, author.c_str(), textInk);
+  }
 
-    // Invert text colors based on selection state:
-    // - With cover: selected = white text on black box, unselected = black text on white box
-    // - Without cover: selected = white text on black card, unselected = black text on white card
+  const int statsY = textPanelY + textPanelHeight - 44;
+  renderer.drawText(UI_12_FONT_ID, textX, statsY, progressText.c_str(), textInk, EpdFontFamily::BOLD);
+  const int timeWidth = renderer.getTextWidth(UI_10_FONT_ID, timeText.c_str());
+  renderer.drawText(UI_10_FONT_ID, textX + textWidth - timeWidth, statsY + 2, timeText.c_str(), textInk);
 
-    auto lines = renderer.wrappedText(UI_12_FONT_ID, lastBookTitle.c_str(), bookWidth - 40, 3);
-
-    // Book title text
-    int totalTextHeight = renderer.getLineHeight(UI_12_FONT_ID) * static_cast<int>(lines.size());
-    if (!lastBookAuthor.empty()) {
-      totalTextHeight += renderer.getLineHeight(UI_10_FONT_ID) * 3 / 2;
-    }
-
-    // Vertically center the title block within the card
-    int titleYStart = bookY + (bookHeight - totalTextHeight) / 2;
-
-    const auto truncatedAuthor = lastBookAuthor.empty()
-                                     ? std::string{}
-                                     : renderer.truncatedText(UI_10_FONT_ID, lastBookAuthor.c_str(), bookWidth - 40);
-
-    // If cover image was rendered, draw box behind title and author
-    if (coverRendered) {
-      constexpr int boxPadding = 8;
-      // Calculate the max text width for the box
-      int maxTextWidth = 0;
-      for (const auto& line : lines) {
-        const int lineWidth = renderer.getTextWidth(UI_12_FONT_ID, line.c_str());
-        if (lineWidth > maxTextWidth) {
-          maxTextWidth = lineWidth;
-        }
-      }
-      if (!truncatedAuthor.empty()) {
-        const int authorWidth = renderer.getTextWidth(UI_10_FONT_ID, truncatedAuthor.c_str());
-        if (authorWidth > maxTextWidth) {
-          maxTextWidth = authorWidth;
-        }
-      }
-
-      const int boxWidth = maxTextWidth + boxPadding * 2;
-      const int boxHeight = totalTextHeight + boxPadding * 2;
-      const int boxX = rect.x + (rect.width - boxWidth) / 2;
-      const int boxY = titleYStart - boxPadding;
-
-      // Draw box (inverted when selected: black box instead of white)
-      renderer.fillRect(boxX, boxY, boxWidth, boxHeight, bookSelected);
-      // Draw border around the box (inverted when selected: white border instead of black)
-      renderer.drawRect(boxX, boxY, boxWidth, boxHeight, !bookSelected);
-    }
-
-    for (const auto& line : lines) {
-      renderer.drawCenteredText(UI_12_FONT_ID, titleYStart, line.c_str(), !bookSelected);
-      titleYStart += renderer.getLineHeight(UI_12_FONT_ID);
-    }
-
-    if (!truncatedAuthor.empty()) {
-      titleYStart += renderer.getLineHeight(UI_10_FONT_ID) / 2;
-      renderer.drawCenteredText(UI_10_FONT_ID, titleYStart, truncatedAuthor.c_str(), !bookSelected);
-    }
-
-    // "Continue Reading" label at the bottom
-    const int continueY = bookY + bookHeight - renderer.getLineHeight(UI_10_FONT_ID) * 3 / 2;
-    if (coverRendered) {
-      // Draw box behind "Continue Reading" text (inverted when selected: black box instead of white)
-      const char* continueText = tr(STR_CONTINUE_READING);
-      const int continueTextWidth = renderer.getTextWidth(UI_10_FONT_ID, continueText);
-      constexpr int continuePadding = 6;
-      const int continueBoxWidth = continueTextWidth + continuePadding * 2;
-      const int continueBoxHeight = renderer.getLineHeight(UI_10_FONT_ID) + continuePadding;
-      const int continueBoxX = rect.x + (rect.width - continueBoxWidth) / 2;
-      const int continueBoxY = continueY - continuePadding / 2;
-      renderer.fillRect(continueBoxX, continueBoxY, continueBoxWidth, continueBoxHeight, bookSelected);
-      renderer.drawRect(continueBoxX, continueBoxY, continueBoxWidth, continueBoxHeight, !bookSelected);
-      renderer.drawCenteredText(UI_10_FONT_ID, continueY, continueText, !bookSelected);
-    } else {
-      renderer.drawCenteredText(UI_10_FONT_ID, continueY, tr(STR_CONTINUE_READING), !bookSelected);
-    }
-  } else {
-    // No book to continue reading
-    const int y =
-        bookY + (bookHeight - renderer.getLineHeight(UI_12_FONT_ID) - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
-    renderer.drawCenteredText(UI_12_FONT_ID, y, "No open book");
-    renderer.drawCenteredText(UI_10_FONT_ID, y + renderer.getLineHeight(UI_12_FONT_ID), "Start reading below");
+  const int progressBarY = textPanelY + textPanelHeight - 18;
+  const int progressBarWidth = textWidth;
+  const int progressFillWidth =
+      (progressBarWidth - 2) * std::clamp(static_cast<int>(book.progressPercent), 0, 100) / 100;
+  renderer.drawRect(textX, progressBarY, progressBarWidth, 8, textInk);
+  if (progressFillWidth > 0) {
+    renderer.fillRect(textX + 1, progressBarY + 1, progressFillWidth, 6, textInk);
   }
 }
 
@@ -687,8 +641,12 @@ Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) cons
   constexpr int margin = 15;
   // Scale y position proportionally to screen height (7.5% from top)
   const int y = static_cast<int>(renderer.getScreenHeight() * 0.075f);
-  const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, message, EpdFontFamily::BOLD);
-  const int textHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const std::vector<std::string> lines = splitPopupLines(message);
+  int textWidth = 0;
+  for (const auto& line : lines) {
+    textWidth = std::max(textWidth, renderer.getTextWidth(UI_12_FONT_ID, line.c_str(), EpdFontFamily::BOLD));
+  }
+  const int textHeight = renderer.getLineHeight(UI_12_FONT_ID) * static_cast<int>(lines.size());
   const int w = textWidth + margin * 2;
   const int h = textHeight + margin * 2;
   const int x = (renderer.getScreenWidth() - w) / 2;
@@ -696,9 +654,13 @@ Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) cons
   renderer.fillRect(x - 2, y - 2, w + 4, h + 4, true);  // frame thickness 2
   renderer.fillRect(x, y, w, h, false);
 
-  const int textX = x + (w - textWidth) / 2;
-  const int textY = y + margin - 2;
-  renderer.drawText(UI_12_FONT_ID, textX, textY, message, true, EpdFontFamily::BOLD);
+  int textY = y + margin - 2;
+  for (const auto& line : lines) {
+    const int lineWidth = renderer.getTextWidth(UI_12_FONT_ID, line.c_str(), EpdFontFamily::BOLD);
+    const int textX = x + (w - lineWidth) / 2;
+    renderer.drawText(UI_12_FONT_ID, textX, textY, line.c_str(), true, EpdFontFamily::BOLD);
+    textY += renderer.getLineHeight(UI_12_FONT_ID);
+  }
   renderer.displayBuffer();
   return Rect{x, y, w, h};
 }

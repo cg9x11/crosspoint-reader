@@ -3,9 +3,12 @@
 #include <algorithm>
 
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Logging.h>
 
+#include "../../OnlineLibrarySettingsStore.h"
 #include "../../OnlineCoverStore.h"
 #include "../../TrackedSeriesStore.h"
 #include "../../plugins/OnlineSourceBridge.h"
@@ -19,20 +22,103 @@
 namespace {
 constexpr unsigned long SUMMARY_MODE_SWITCH_MS = 700;
 constexpr int MAX_SUMMARY_WRAP_LINES = 128;
+HakoDownloadOptions makeForegroundDownloadOptions() {
+  ONLINE_LIBRARY_SETTINGS_STORE.loadFromDisk();
+  const auto& settings = ONLINE_LIBRARY_SETTINGS_STORE.get();
 
-int findChapterIndexByUrl(const std::vector<HakoChapterRef>& chapters, const std::string& url) {
-  for (size_t i = 0; i < chapters.size(); ++i) {
-    if (chapters[i].url == url) {
-      return static_cast<int>(i);
-    }
+  HakoDownloadOptions options;
+  options.chapterDelayMinMs = 0;
+  options.chapterDelayMaxMs = 0;
+  options.batchSize = 0;
+  options.batchDelayMinMs = 0;
+  options.batchDelayMaxMs = 0;
+  options.chapterRetryCount = settings.chapterRetryCount;
+  options.chapterRetryDelayMinMs = settings.chapterRetryDelaySec * 1000UL;
+  options.chapterRetryDelayMaxMs = settings.chapterRetryDelaySec * 1000UL;
+  return options;
+}
+
+int progressPercentForForegroundDownload(const HakoProgressState& state) {
+  if (state.message == "Loading series") {
+    return 5;
   }
-  return -1;
+  if (state.message == "Preparing EPUB") {
+    return 10;
+  }
+  if (state.message == "Finalizing EPUB") {
+    return 95;
+  }
+  if (state.totalChapters > 0) {
+    const uint32_t completed = state.completedChapters > state.totalChapters ? state.totalChapters : state.completedChapters;
+    return 10 + static_cast<int>((completed * 80U) / state.totalChapters);
+  }
+  return 10;
+}
+
+std::string popupLabelForForegroundDownload(const HakoProgressState& state) {
+  std::string label = state.message.empty() ? std::string("Working...") : state.message;
+  if (!state.chapterTitle.empty()) {
+    label += ": ";
+    label += StringUtils::toDisplaySafeAscii(state.chapterTitle);
+  }
+  return label;
 }
 
 std::string lowerAscii(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   return value;
+}
+
+int findChapterIndexByUrl(const std::vector<HakoChapterRef>& chapters, const std::string& url) {
+  auto normalizeUrl = [](std::string value) {
+    const size_t queryPos = value.find_first_of("?#");
+    if (queryPos != std::string::npos) {
+      value.resize(queryPos);
+    }
+    while (value.size() > 1 && value.back() == '/') {
+      value.pop_back();
+    }
+    return lowerAscii(value);
+  };
+
+  const std::string normalizedUrl = normalizeUrl(url);
+  for (size_t i = 0; i < chapters.size(); ++i) {
+    if (chapters[i].url == url) {
+      return static_cast<int>(i);
+    }
+    if (!normalizedUrl.empty() && normalizeUrl(chapters[i].url) == normalizedUrl) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+int findChapterIndexForRef(const std::vector<HakoChapterRef>& chapters, const HakoChapterRef& ref) {
+  if (ref.index > 0) {
+    for (size_t i = 0; i < chapters.size(); ++i) {
+      if (chapters[i].index == ref.index) {
+        return static_cast<int>(i);
+      }
+    }
+  }
+
+  if (!ref.url.empty()) {
+    const int byUrl = findChapterIndexByUrl(chapters, ref.url);
+    if (byUrl >= 0) {
+      return byUrl;
+    }
+  }
+
+  if (!ref.title.empty()) {
+    const std::string safeTitle = lowerAscii(StringUtils::toDisplaySafeAscii(ref.title));
+    for (size_t i = 0; i < chapters.size(); ++i) {
+      if (lowerAscii(StringUtils::toDisplaySafeAscii(chapters[i].title)) == safeTitle) {
+        return static_cast<int>(i);
+      }
+    }
+  }
+  return -1;
 }
 
 int parseDigitsAt(const std::string& text, size_t pos) {
@@ -104,6 +190,21 @@ int inferChapterNumberForPagedBrowse(const std::string& url, const std::string& 
 }
 
 enum class DetailAction { Read = 0, Browse = 1, DownloadOrSync = 2, Track = 3 };
+
+bool deviceAllowsLocalEpubDownloads() { return !gpio.deviceIsX3() && !gpio.deviceIsX4(); }
+
+bool shouldShowLocalEpubAction(const CpPluginInfo& pluginInfo) {
+  return OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo) && deviceAllowsLocalEpubDownloads();
+}
+
+bool isChapterProgressComplete(uint32_t lastReadPage, uint32_t lastReadPageCount) {
+  return lastReadPageCount > 0 && (lastReadPage + 1) >= lastReadPageCount;
+}
+
+bool shouldResumeTrackedChapter(const TrackedSeriesInfo& trackedItem) {
+  return !trackedItem.lastReadChapterUrl.empty() &&
+         !isChapterProgressComplete(trackedItem.lastReadPage, trackedItem.lastReadPageCount);
+}
 }
 
 std::string HakoBookDetailActivity::summaryText() const {
@@ -114,7 +215,7 @@ std::string HakoBookDetailActivity::summaryText() const {
 int HakoBookDetailActivity::summaryVisibleLineCapacity() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageHeight = renderer.getScreenHeight();
-  const int actionCount = OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo) ? 4 : 3;
+  const int actionCount = shouldShowLocalEpubAction(pluginInfo) ? 4 : 3;
   const int menuTop = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing * 2 -
                       actionCount * (metrics.menuRowHeight + metrics.menuSpacing);
   const int infoBottom = menuTop - metrics.verticalSpacing;
@@ -161,7 +262,7 @@ bool HakoBookDetailActivity::ensureChaptersLoaded(const char* loadingLabel) {
   }
 
   if (!OnlineSourceBridge::fetchToc(pluginInfo, detail.url, chapters)) {
-    queueMessage = "Failed to load chapters";
+    queueMessage = OnlineSourceBridge::getLastError().empty() ? "Failed to load chapters" : OnlineSourceBridge::getLastError();
     queueMessageUntilMs = millis() + 1800;
     requestUpdate();
     return false;
@@ -170,6 +271,58 @@ bool HakoBookDetailActivity::ensureChaptersLoaded(const char* loadingLabel) {
   refreshTrackedState();
   requestUpdate();
   return !chapters.empty();
+}
+
+bool HakoBookDetailActivity::tryLoadPagedChapterContext(const HakoChapterRef& ref, std::vector<HakoChapterRef>& outChapters,
+                                                        int& outChapterIndex, int& outCurrentPage, int& outTotalPages) {
+  outChapters.clear();
+  outChapterIndex = -1;
+  outCurrentPage = 1;
+  outTotalPages = 1;
+
+  if (!OnlineSourceBridge::supportsPagedToc(pluginInfo) || detail.url.empty()) {
+    return false;
+  }
+
+  int preferredChapterIndex = static_cast<int>(ref.index);
+  if (preferredChapterIndex <= 0) {
+    preferredChapterIndex = inferChapterNumberForPagedBrowse(ref.url, ref.title);
+  }
+  if (preferredChapterIndex <= 0) {
+    return false;
+  }
+
+  OnlineSourceBridge::TocPageResult pageResult;
+  const int pageSize = std::max(1, OnlineSourceBridge::pagedTocPageSize(pluginInfo));
+  const int targetPage = std::max(1, ((preferredChapterIndex - 1) / pageSize) + 1);
+  if (!OnlineSourceBridge::fetchTocPage(pluginInfo, detail.url, targetPage, pageResult) || pageResult.chapters.empty()) {
+    return false;
+  }
+
+  outChapters = std::move(pageResult.chapters);
+  outCurrentPage = std::max(1, pageResult.page);
+  outTotalPages = std::max(1, pageResult.totalPages);
+  outChapterIndex = findChapterIndexForRef(outChapters, ref);
+
+  if (outChapterIndex < 0 && preferredChapterIndex > 0) {
+    for (size_t i = 0; i < outChapters.size(); ++i) {
+      if (static_cast<int>(outChapters[i].index) == preferredChapterIndex) {
+        outChapterIndex = static_cast<int>(i);
+        break;
+      }
+    }
+  }
+
+  if (outChapterIndex < 0) {
+    const int pageBaseIndex =
+        !outChapters.empty() && outChapters.front().index > 0 ? static_cast<int>(outChapters.front().index) : ((outCurrentPage - 1) * pageSize) + 1;
+    const int fallbackIndex = preferredChapterIndex - pageBaseIndex;
+    if (fallbackIndex >= 0 && fallbackIndex < static_cast<int>(outChapters.size())) {
+      outChapterIndex = fallbackIndex;
+    }
+  }
+
+  return outChapterIndex >= 0 && outChapterIndex < static_cast<int>(outChapters.size());
 }
 
 void HakoBookDetailActivity::refreshTrackedState() {
@@ -209,6 +362,37 @@ void HakoBookDetailActivity::toggleTracking() {
 }
 
 void HakoBookDetailActivity::openChapter(const HakoChapterRef& ref) {
+  LOG_DBG("HDETAIL", "Open chapter requested tracked=%d hasUrl=%d", trackedItem.id.empty() ? 0 : 1, ref.url.empty() ? 0 : 1);
+  std::vector<HakoChapterRef> readerChapters = chapters;
+  int readerChapterIndex = findChapterIndexForRef(readerChapters, ref);
+  int readerCurrentPage = 1;
+  int readerTotalPages = 1;
+  bool readerPagedMode = false;
+
+  if (readerChapters.empty()) {
+    if (!tryLoadPagedChapterContext(ref, readerChapters, readerChapterIndex, readerCurrentPage, readerTotalPages)) {
+      if (!ensureChaptersLoaded("Loading chapters...")) {
+        return;
+      }
+      readerChapters = chapters;
+      readerChapterIndex = findChapterIndexForRef(readerChapters, ref);
+      if (readerChapterIndex < 0 &&
+          tryLoadPagedChapterContext(ref, readerChapters, readerChapterIndex, readerCurrentPage, readerTotalPages)) {
+        readerPagedMode = true;
+      }
+    } else {
+      readerPagedMode = true;
+    }
+  } else if (readerChapterIndex < 0 &&
+             tryLoadPagedChapterContext(ref, readerChapters, readerChapterIndex, readerCurrentPage, readerTotalPages)) {
+    readerPagedMode = true;
+  }
+
+  if (!readerPagedMode && readerChapterIndex >= 0) {
+    readerCurrentPage = 1;
+    readerTotalPages = 1;
+  }
+
   HakoChapterContent chapter;
   {
     RenderLock lock(*this);
@@ -216,13 +400,21 @@ void HakoBookDetailActivity::openChapter(const HakoChapterRef& ref) {
     renderer.displayBuffer();
   }
   if (!OnlineSourceBridge::fetchChapter(pluginInfo, ref, chapter)) {
+    LOG_ERR("HDETAIL", "Open chapter failed error='%s'", OnlineSourceBridge::getLastError().c_str());
     RenderLock lock(*this);
-    GUI.drawPopup(renderer, "Failed to load chapter");
+    const std::string message =
+        OnlineSourceBridge::getLastError().empty() ? "Failed to load chapter" : OnlineSourceBridge::getLastError();
+    GUI.drawPopup(renderer, message.c_str());
     requestUpdate();
     return;
   }
 
-  activityManager.pushActivity(std::make_unique<HakoChapterReaderActivity>(renderer, mappedInput, std::move(chapter), trackedItem.id));
+  LOG_DBG("HDETAIL", "Open chapter success textBytes=%u", static_cast<unsigned>(chapter.text.size()));
+
+  activityManager.pushActivity(std::make_unique<HakoChapterReaderActivity>(
+      renderer, mappedInput, pluginInfo, std::move(chapter), std::move(readerChapters), readerChapterIndex, trackedItem.id,
+      detail.title, detail.author, detail.url, readerPagedMode, HakoChapterReaderActivity::InitialPageMode::RestoreTracked,
+      readerCurrentPage, readerTotalPages));
 }
 
 void HakoBookDetailActivity::openChapterAtIndex(int index) {
@@ -240,19 +432,74 @@ void HakoBookDetailActivity::downloadOrSyncEpub() {
     return;
   }
 
+  if (!deviceAllowsLocalEpubDownloads()) {
+    queueMessage = "EPUB download disabled on X3/X4";
+    queueMessageUntilMs = millis() + 1800;
+    requestUpdate();
+    return;
+  }
+
   if (!ensureChaptersLoaded("Loading chapters...")) {
     return;
   }
 
+  HakoDownloadOptions options = makeForegroundDownloadOptions();
+  int lastShownProgress = -1;
+  std::string lastShownLabel;
+  const auto progress = [this, &lastShownProgress, &lastShownLabel](const HakoProgressState& state) {
+    const int progressValue = progressPercentForForegroundDownload(state);
+    const std::string label = popupLabelForForegroundDownload(state);
+    if (label == lastShownLabel && progressValue == lastShownProgress) {
+      return true;
+    }
+
+    lastShownProgress = progressValue;
+    lastShownLabel = label;
+
+    RenderLock lock(*this);
+    const Rect popupRect = GUI.drawPopup(renderer, label.c_str());
+    GUI.fillPopupProgress(renderer, popupRect, progressValue);
+    renderer.displayBuffer();
+    return true;
+  };
+
   trackedItem = OnlineSourceBridge::makeTrackedInfo(pluginInfo, detail, chapters, tracked ? &trackedItem : nullptr);
+  if (trackedItem.epubPath.empty()) {
+    trackedItem.epubPath = HakoEpubService::buildDefaultEpubPath(detail);
+  }
+
   std::string message;
-  const bool queued = tracked ? BACKGROUND_DOWNLOAD_MANAGER.enqueueTrackedSync(trackedItem, &message)
-                              : BACKGROUND_DOWNLOAD_MANAGER.enqueueHakoDownload(pluginInfo, trackedItem, &message);
-  if (queued && !tracked) {
+  bool ok = false;
+  if (tracked) {
+    HakoTrackedSyncResult result;
+    ok = HakoEpubService::syncTrackedSeries(pluginInfo, trackedItem, result, &options, progress);
+    message = result.message.empty() ? (ok ? "EPUB updated" : "Update failed") : result.message;
+  } else {
+    std::string error;
+    ok = HakoEpubService::downloadEpub(pluginInfo, detail, chapters, trackedItem.epubPath, &error, &options, progress);
+    if (ok) {
+      TRACKED_SERIES_STORE.ensureLoaded();
+      std::string persistError;
+      if (!TRACKED_SERIES_STORE.upsert(trackedItem, &persistError)) {
+        ok = false;
+        message = persistError.empty() ? "Failed to save library entry" : persistError;
+      } else {
+        message = "EPUB downloaded";
+      }
+    } else {
+      message = error.empty() ? "Download failed" : error;
+    }
+  }
+
+  if (ok) {
+    refreshTrackedState();
+    requestUpdate();
+  } else {
     refreshTrackedState();
   }
-  queueMessage = message.empty() ? (queued ? "Added to downloads" : "Queue failed") : message;
+
   queueMessageUntilMs = millis() + 1800;
+  queueMessage = message;
   requestUpdate();
 }
 
@@ -354,11 +601,14 @@ void HakoBookDetailActivity::loop() {
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && confirmShortPending) {
     confirmShortPending = false;
+    LOG_DBG("HDETAIL", "Confirm action=%d hasLatest=%d tracked=%d hasLastRead=%d", selectedAction,
+            detail.latestChapterUrl.empty() ? 0 : 1, tracked ? 1 : 0, trackedItem.lastReadChapterUrl.empty() ? 0 : 1);
     if (selectedAction == static_cast<int>(DetailAction::Read)) {
-      if (tracked && !trackedItem.lastReadChapterUrl.empty()) {
+      if (tracked && shouldResumeTrackedChapter(trackedItem)) {
         HakoChapterRef ref;
         ref.url = trackedItem.lastReadChapterUrl;
         ref.title = trackedItem.lastReadChapterTitle.empty() ? std::string("Continue Reading") : trackedItem.lastReadChapterTitle;
+        LOG_DBG("HDETAIL", "Read action resumes tracked chapter");
         openChapter(ref);
         return;
       }
@@ -367,15 +617,26 @@ void HakoBookDetailActivity::loop() {
         HakoChapterRef ref;
         ref.url = detail.latestChapterUrl;
         ref.title = detail.latestChapterTitle.empty() ? std::string("Latest Chapter") : detail.latestChapterTitle;
+        LOG_DBG("HDETAIL", "Read action opens latest chapter directly");
         openChapter(ref);
         return;
       }
 
+      LOG_DBG("HDETAIL", "Read action falling back to TOC load");
       if (!ensureChaptersLoaded("Loading chapters...")) {
+        LOG_ERR("HDETAIL", "Read action failed to load TOC for fallback");
         return;
       }
-      const int lastReadIndex = tracked ? findChapterIndexByUrl(chapters, trackedItem.lastReadChapterUrl) : -1;
-      openChapterAtIndex(lastReadIndex >= 0 ? lastReadIndex : static_cast<int>(chapters.size()) - 1);
+      HakoChapterRef trackedRef;
+      trackedRef.url = trackedItem.lastReadChapterUrl;
+      trackedRef.title = trackedItem.lastReadChapterTitle;
+      const int lastReadIndex = tracked ? findChapterIndexForRef(chapters, trackedRef) : -1;
+      if (tracked && isChapterProgressComplete(trackedItem.lastReadPage, trackedItem.lastReadPageCount) &&
+          lastReadIndex >= 0 && lastReadIndex + 1 < static_cast<int>(chapters.size())) {
+        openChapterAtIndex(lastReadIndex + 1);
+      } else {
+        openChapterAtIndex(lastReadIndex >= 0 ? lastReadIndex : static_cast<int>(chapters.size()) - 1);
+      }
     } else if (selectedAction == static_cast<int>(DetailAction::Browse)) {
       if (chapters.empty() && OnlineSourceBridge::supportsPagedToc(pluginInfo)) {
         std::string preferredUrl;
@@ -398,7 +659,7 @@ void HakoBookDetailActivity::loop() {
         activityManager.pushActivity(std::make_unique<HakoChapterListActivity>(renderer, mappedInput, pluginInfo, detail.title,
                                                                                detail.author, chapters, false, trackedItem.id));
       }
-    } else if (OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo) &&
+    } else if (shouldShowLocalEpubAction(pluginInfo) &&
                selectedAction == static_cast<int>(DetailAction::DownloadOrSync)) {
       downloadOrSyncEpub();
     } else {
@@ -408,13 +669,13 @@ void HakoBookDetailActivity::loop() {
   }
 
   buttonNavigator.onNext([this] {
-    const int actionCount = OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo) ? 4 : 3;
+    const int actionCount = shouldShowLocalEpubAction(pluginInfo) ? 4 : 3;
     selectedAction = ButtonNavigator::nextIndex(selectedAction, actionCount);
     requestUpdate();
   });
 
   buttonNavigator.onPrevious([this] {
-    const int actionCount = OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo) ? 4 : 3;
+    const int actionCount = shouldShowLocalEpubAction(pluginInfo) ? 4 : 3;
     selectedAction = ButtonNavigator::previousIndex(selectedAction, actionCount);
     requestUpdate();
   });
@@ -437,7 +698,7 @@ void HakoBookDetailActivity::render(RenderLock&&) {
       (detail.ongoing ? std::string("Ongoing") : std::string("Completed"));
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, safeTitle.c_str(), meta.c_str());
 
-  const int actionCount = OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo) ? 4 : 3;
+  const int actionCount = shouldShowLocalEpubAction(pluginInfo) ? 4 : 3;
   const int menuTop = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing * 2 -
                       actionCount * (metrics.menuRowHeight + metrics.menuSpacing);
   const int infoBottom = menuTop - metrics.verticalSpacing;
@@ -473,7 +734,7 @@ void HakoBookDetailActivity::render(RenderLock&&) {
   renderer.drawText(UI_10_FONT_ID, metaX, metaY, renderer.truncatedText(UI_10_FONT_ID, chapterCount.c_str(), metaWidth).c_str(), true);
   metaY += renderer.getLineHeight(UI_10_FONT_ID) + 4;
 
-  if (OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo)) {
+  if (shouldShowLocalEpubAction(pluginInfo)) {
     const size_t epubSlashPos = trackedItem.epubPath.find_last_of('/');
     const std::string epubName =
         epubSlashPos == std::string::npos ? trackedItem.epubPath : trackedItem.epubPath.substr(epubSlashPos + 1);
@@ -538,11 +799,11 @@ void HakoBookDetailActivity::render(RenderLock&&) {
                      selectedAction,
                      [this](int index) {
                        if (index == 0) {
-                         return tracked && !trackedItem.lastReadChapterUrl.empty() ? std::string("Continue Reading")
-                                                                                  : std::string("Read Latest");
+                         return tracked && shouldResumeTrackedChapter(trackedItem) ? std::string("Continue Reading")
+                                                                                   : std::string("Read Latest");
                        }
                        if (index == 1) return std::string("Browse Chapters");
-                       if (OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo) && index == 2) {
+                       if (shouldShowLocalEpubAction(pluginInfo) && index == 2) {
                          return tracked ? std::string("Update EPUB") : std::string("Download EPUB");
                        }
                        return tracked ? std::string("Remove from Library") : std::string("Add to Library");

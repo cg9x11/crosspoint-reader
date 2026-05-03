@@ -1,0 +1,11 @@
+services:
+  online-library-server:
+    build: .
+    container_name: crosspoint-online-library
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      CACHE_MAX_ITEMS: 256
+    ports:
+      - "8787:8787"

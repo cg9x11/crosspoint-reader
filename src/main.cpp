@@ -11,6 +11,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <SPI.h>
+#include <WiFi.h>
 #include <builtinFonts/all.h>
 
 #include <cstring>
@@ -27,6 +28,7 @@
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "components/UITheme.h"
+#include "fonts/CustomReaderFonts.h"
 #include "fontIds.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
@@ -36,6 +38,13 @@ GfxRenderer renderer(display);
 ActivityManager activityManager(renderer, mappedInputManager);
 FontDecompressor fontDecompressor;
 FontCacheManager fontCacheManager(renderer.getFontMap());
+
+#ifdef CROSSPOINT_EMULATED
+void emulatorWakeFromSleep() {
+  activityManager.goHome();
+  activityManager.requestUpdate(true);
+}
+#endif
 
 // Fonts
 EpdFont notoserif14RegularFont(&notoserif_14_regular);
@@ -64,6 +73,7 @@ EpdFont notoserif18BoldItalicFont(&notoserif_18_bolditalic);
 EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont, &notoserif18BoldFont, &notoserif18ItalicFont,
                                     &notoserif18BoldItalicFont);
 
+#ifndef CROSSPOINT_TRIM_SANS_READER_FONTS
 EpdFont notosans12RegularFont(&notosans_12_regular);
 EpdFont notosans12BoldFont(&notosans_12_bold);
 EpdFont notosans12ItalicFont(&notosans_12_italic);
@@ -88,7 +98,9 @@ EpdFont notosans18ItalicFont(&notosans_18_italic);
 EpdFont notosans18BoldItalicFont(&notosans_18_bolditalic);
 EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont,
                                    &notosans18BoldItalicFont);
+#endif
 
+#ifndef CROSSPOINT_TRIM_OPTIONAL_FONTS
 EpdFont opendyslexic8RegularFont(&opendyslexic_8_regular);
 EpdFont opendyslexic8BoldFont(&opendyslexic_8_bold);
 EpdFont opendyslexic8ItalicFont(&opendyslexic_8_italic);
@@ -113,6 +125,7 @@ EpdFont opendyslexic14ItalicFont(&opendyslexic_14_italic);
 EpdFont opendyslexic14BoldItalicFont(&opendyslexic_14_bolditalic);
 EpdFontFamily opendyslexic14FontFamily(&opendyslexic14RegularFont, &opendyslexic14BoldFont, &opendyslexic14ItalicFont,
                                        &opendyslexic14BoldItalicFont);
+#endif
 #endif  // OMIT_FONTS
 
 EpdFont smallFont(&notosans_8_regular);
@@ -149,7 +162,7 @@ void verifyPowerButtonDuration() {
   const uint16_t calibratedPressDuration =
       (calibration < SETTINGS.getPowerButtonDuration()) ? SETTINGS.getPowerButtonDuration() - calibration : 1;
 
-  gpio.update();
+  mappedInputManager.update();
   // Needed because inputManager.isPressed() may take up to ~500ms to return the correct state
   while (!gpio.isPressed(HalGPIO::BTN_POWER) && millis() - start < 1000) {
     delay(10);  // only wait 10ms each iteration to not delay too much in case of short configured duration.
@@ -192,6 +205,25 @@ void enterDeepSleep() {
   display.deepSleep();
   LOG_DBG("MAIN", "Entering deep sleep");
 
+#ifdef CROSSPOINT_EMULATED
+  // Emulator behavior: treat sleep as a blocking suspended state.
+  // Wake on the next power-button press, then return to Home.
+  waitForPowerRelease();
+  while (true) {
+    gpio.update();
+    if (gpio.wasPressed(HalGPIO::BTN_POWER) || gpio.isPressed(HalGPIO::BTN_POWER)) {
+      break;
+    }
+    delay(10);
+  }
+  waitForPowerRelease();
+  LOG_DBG("SIM", "Waking emulator from sleep");
+  activityManager.goHome();
+  activityManager.requestUpdate(true);
+  activityManager.loop();
+  return;
+#endif
+
   powerManager.startDeepSleep(gpio);
 }
 
@@ -213,14 +245,19 @@ void setupDisplayAndFonts() {
   renderer.insertFont(NOTOSERIF_16_FONT_ID, notoserif16FontFamily);
   renderer.insertFont(NOTOSERIF_18_FONT_ID, notoserif18FontFamily);
 
+#ifndef CROSSPOINT_TRIM_SANS_READER_FONTS
   renderer.insertFont(NOTOSANS_12_FONT_ID, notosans12FontFamily);
   renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
+#endif
+  registerCustomReaderFonts(renderer);
+#ifndef CROSSPOINT_TRIM_OPTIONAL_FONTS
   renderer.insertFont(OPENDYSLEXIC_8_FONT_ID, opendyslexic8FontFamily);
   renderer.insertFont(OPENDYSLEXIC_10_FONT_ID, opendyslexic10FontFamily);
   renderer.insertFont(OPENDYSLEXIC_12_FONT_ID, opendyslexic12FontFamily);
   renderer.insertFont(OPENDYSLEXIC_14_FONT_ID, opendyslexic14FontFamily);
+#endif
 #endif  // OMIT_FONTS
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
@@ -352,7 +389,7 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || activityManager.preventAutoSleep() ||
+  if (mappedInputManager.wasAnyPressed() || mappedInputManager.wasAnyReleased() || activityManager.preventAutoSleep() ||
       BACKGROUND_DOWNLOAD_MANAGER.hasActiveWork()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
@@ -361,7 +398,6 @@ void loop() {
   if (BACKGROUND_DOWNLOAD_MANAGER.consumeUiRefreshRequested()) {
     activityManager.requestUpdate();
   }
-
   static bool screenshotButtonsReleased = true;
   if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN)) {
     if (screenshotButtonsReleased) {
@@ -407,7 +443,6 @@ void loop() {
   if (gpio.wasUsbStateChanged()) {
     activityManager.requestUpdate();
   }
-
   const unsigned long activityStartTime = millis();
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;

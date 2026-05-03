@@ -322,6 +322,17 @@ bool JsonSettingsIO::saveRecentBooks(const RecentBooksStore& store, const char* 
     obj["title"] = book.title;
     obj["author"] = book.author;
     obj["coverBmpPath"] = book.coverBmpPath;
+    obj["progressPercent"] = book.progressPercent;
+    obj["readingTimeSeconds"] = book.readingTimeSeconds;
+    obj["kind"] = static_cast<uint8_t>(book.kind);
+    if (!book.pluginId.empty()) obj["pluginId"] = book.pluginId;
+    if (!book.runtimeProfile.empty()) obj["runtimeProfile"] = book.runtimeProfile;
+    if (!book.seriesUrl.empty()) obj["seriesUrl"] = book.seriesUrl;
+    if (!book.coverUrl.empty()) obj["coverUrl"] = book.coverUrl;
+    if (!book.chapterUrl.empty()) obj["chapterUrl"] = book.chapterUrl;
+    if (!book.chapterTitle.empty()) obj["chapterTitle"] = book.chapterTitle;
+    if (book.lastReadPage > 0) obj["lastReadPage"] = book.lastReadPage;
+    if (book.lastReadPageCount > 0) obj["lastReadPageCount"] = book.lastReadPageCount;
   }
 
   String json;
@@ -346,6 +357,17 @@ bool JsonSettingsIO::loadRecentBooks(RecentBooksStore& store, const char* json) 
     book.title = obj["title"] | std::string("");
     book.author = obj["author"] | std::string("");
     book.coverBmpPath = obj["coverBmpPath"] | std::string("");
+    book.progressPercent = obj["progressPercent"] | static_cast<uint8_t>(0);
+    book.readingTimeSeconds = obj["readingTimeSeconds"] | static_cast<uint32_t>(0);
+    book.kind = static_cast<RecentBookKind>(obj["kind"] | static_cast<uint8_t>(0));
+    book.pluginId = obj["pluginId"] | std::string("");
+    book.runtimeProfile = obj["runtimeProfile"] | std::string("");
+    book.seriesUrl = obj["seriesUrl"] | std::string("");
+    book.coverUrl = obj["coverUrl"] | std::string("");
+    book.chapterUrl = obj["chapterUrl"] | std::string("");
+    book.chapterTitle = obj["chapterTitle"] | std::string("");
+    book.lastReadPage = obj["lastReadPage"] | static_cast<uint32_t>(0);
+    book.lastReadPageCount = obj["lastReadPageCount"] | static_cast<uint32_t>(0);
     store.recentBooks.push_back(book);
   }
 

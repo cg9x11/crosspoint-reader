@@ -784,7 +784,8 @@ bool HakoPluginExecutor::fetchToc(const std::string& url, std::vector<HakoChapte
   return !outToc.empty();
 }
 
-bool HakoPluginExecutor::fetchChapter(const HakoChapterRef& ref, HakoChapterContent& outContent) {
+bool HakoPluginExecutor::fetchChapter(const HakoChapterRef& ref, HakoChapterContent& outContent,
+                                      const bool includePlainText) {
   const std::string url = makeAbsoluteUrl(ref.url);
   for (size_t attemptIndex = 0; attemptIndex <= sizeof(CHAPTER_FETCH_RETRY_DELAYS_MS) / sizeof(CHAPTER_FETCH_RETRY_DELAYS_MS[0]);
        ++attemptIndex) {
@@ -797,7 +798,11 @@ bool HakoPluginExecutor::fetchChapter(const HakoChapterRef& ref, HakoChapterCont
         outContent.ref = ref;
         outContent.html = decodeProtectedContent(chapterHtml);
         cleanupChapterHtml(outContent.html);
-        outContent.text = stripTags(outContent.html);
+        if (includePlainText) {
+          outContent.text = stripTags(outContent.html);
+        } else {
+          outContent.text.clear();
+        }
         if (!outContent.html.empty() || !outContent.text.empty()) {
           return true;
         }
@@ -812,3 +817,5 @@ bool HakoPluginExecutor::fetchChapter(const HakoChapterRef& ref, HakoChapterCont
   }
   return false;
 }
+
+void HakoPluginExecutor::clearMemoryCaches() {}

@@ -76,6 +76,28 @@ void CrossPointSettings::validateFrontButtonMapping(CrossPointSettings& settings
   }
 }
 
+void CrossPointSettings::normalizeForBuild() {
+  if (fontFamily >= FONT_FAMILY_COUNT) {
+    fontFamily = NOTOSERIF;
+  }
+
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+  if (fontFamily == NOTOSANS) {
+    fontFamily = NOTOSERIF;
+  }
+#endif
+
+#ifdef CROSSPOINT_TRIM_OPTIONAL_FONTS
+  if (fontFamily == OPENDYSLEXIC) {
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+    fontFamily = NOTOSERIF;
+#else
+    fontFamily = NOTOSANS;
+#endif
+  }
+#endif
+}
+
 bool CrossPointSettings::saveToFile() const {
   Storage.mkdir("/.crosspoint");
   return JsonSettingsIO::saveSettings(*this, SETTINGS_FILE_JSON);
@@ -88,6 +110,11 @@ bool CrossPointSettings::loadFromFile() {
     if (!json.isEmpty()) {
       bool resave = false;
       bool result = JsonSettingsIO::loadSettings(*this, json.c_str(), &resave);
+      const uint8_t previousFontFamily = fontFamily;
+      normalizeForBuild();
+      if (fontFamily != previousFontFamily) {
+        resave = true;
+      }
       if (result && resave) {
         if (saveToFile()) {
           LOG_DBG("CPS", "Resaved settings to update format");
@@ -219,12 +246,30 @@ bool CrossPointSettings::loadFromBinaryFile() {
     applyLegacyFrontButtonLayout(*this);
   }
 
+  normalizeForBuild();
+
   LOG_DBG("CPS", "Settings loaded from binary file");
   return true;
 }
 
 float CrossPointSettings::getReaderLineCompression() const {
-  switch (fontFamily) {
+  uint8_t effectiveFontFamily = fontFamily;
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+  if (effectiveFontFamily == NOTOSANS) {
+    effectiveFontFamily = NOTOSERIF;
+  }
+#endif
+#ifdef CROSSPOINT_TRIM_OPTIONAL_FONTS
+  if (effectiveFontFamily == OPENDYSLEXIC) {
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+    effectiveFontFamily = NOTOSERIF;
+#else
+    effectiveFontFamily = NOTOSANS;
+#endif
+  }
+#endif
+
+  switch (effectiveFontFamily) {
     case NOTOSERIF:
     default:
       switch (lineSpacing) {
@@ -255,6 +300,26 @@ float CrossPointSettings::getReaderLineCompression() const {
           return 0.95f;
         case WIDE:
           return 1.0f;
+      }
+    case BOKERLAM:
+      switch (lineSpacing) {
+        case TIGHT:
+          return 0.95f;
+        case NORMAL:
+        default:
+          return 1.0f;
+        case WIDE:
+          return 1.1f;
+      }
+    case KICOMICTAXY:
+      switch (lineSpacing) {
+        case TIGHT:
+          return 0.95f;
+        case NORMAL:
+        default:
+          return 1.0f;
+        case WIDE:
+          return 1.1f;
       }
   }
 }
@@ -292,7 +357,23 @@ int CrossPointSettings::getRefreshFrequency() const {
 }
 
 int CrossPointSettings::getReaderFontId() const {
-  switch (fontFamily) {
+  uint8_t effectiveFontFamily = fontFamily;
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+  if (effectiveFontFamily == NOTOSANS) {
+    effectiveFontFamily = NOTOSERIF;
+  }
+#endif
+#ifdef CROSSPOINT_TRIM_OPTIONAL_FONTS
+  if (effectiveFontFamily == OPENDYSLEXIC) {
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+    effectiveFontFamily = NOTOSERIF;
+#else
+    effectiveFontFamily = NOTOSANS;
+#endif
+  }
+#endif
+
+  switch (effectiveFontFamily) {
     case NOTOSERIF:
     default:
       switch (fontSize) {
@@ -329,6 +410,30 @@ int CrossPointSettings::getReaderFontId() const {
           return OPENDYSLEXIC_12_FONT_ID;
         case EXTRA_LARGE:
           return OPENDYSLEXIC_14_FONT_ID;
+      }
+    case BOKERLAM:
+      switch (fontSize) {
+        case SMALL:
+          return BOKERLAM_12_FONT_ID;
+        case MEDIUM:
+        default:
+          return BOKERLAM_14_FONT_ID;
+        case LARGE:
+          return BOKERLAM_16_FONT_ID;
+        case EXTRA_LARGE:
+          return BOKERLAM_18_FONT_ID;
+      }
+    case KICOMICTAXY:
+      switch (fontSize) {
+        case SMALL:
+          return KICOMICTAXY_12_FONT_ID;
+        case MEDIUM:
+        default:
+          return KICOMICTAXY_14_FONT_ID;
+        case LARGE:
+          return KICOMICTAXY_16_FONT_ID;
+        case EXTRA_LARGE:
+          return KICOMICTAXY_18_FONT_ID;
       }
   }
 }

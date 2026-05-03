@@ -22,17 +22,19 @@ class HakoChapterListActivity final : public Activity {
   int currentPage = 1;
   int totalPages = 1;
   bool pagedMode = false;
+  bool selectionOnly = false;
   std::string pageMessage;
   uint32_t pageMessageUntilMs = 0;
 
   bool loadPage(int page);
+  void applyPreferredSelection();
 
  public:
   HakoChapterListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, CpPluginInfo pluginInfo,
                           std::string bookTitle, std::string bookAuthor, std::vector<HakoChapterRef> chapters, bool selectLatest,
                           std::string trackedSeriesId = {}, std::string seriesUrl = {}, bool pagedMode = false,
                           std::string preferredChapterUrl = {}, std::string preferredChapterTitle = {},
-                          int preferredChapterIndex = 0)
+                          int preferredChapterIndex = 0, bool selectionOnly = false)
       : Activity("HakoChapters", renderer, mappedInput),
         pluginInfo(std::move(pluginInfo)),
         bookTitle(std::move(bookTitle)),
@@ -43,7 +45,8 @@ class HakoChapterListActivity final : public Activity {
         preferredChapterUrl(std::move(preferredChapterUrl)),
         preferredChapterTitle(std::move(preferredChapterTitle)),
         preferredChapterIndex(preferredChapterIndex),
-        pagedMode(pagedMode) {
+        pagedMode(pagedMode),
+        selectionOnly(selectionOnly) {
     if (selectLatest && !this->chapters.empty()) {
       selectedIndex = static_cast<int>(this->chapters.size()) - 1;
     }

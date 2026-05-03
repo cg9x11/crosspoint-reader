@@ -50,12 +50,12 @@ class HakoEpubService {
                                            const std::vector<HakoChapterRef>& toc,
                                            const TrackedSeriesInfo* existing = nullptr);
 
-  static bool downloadEpub(const HakoBookDetail& detail, const std::vector<HakoChapterRef>& toc,
+  static bool downloadEpub(const CpPluginInfo& pluginInfo, const HakoBookDetail& detail, const std::vector<HakoChapterRef>& toc,
                            const std::string& epubPath, std::string* outError = nullptr,
                            const HakoDownloadOptions* options = nullptr,
                            const HakoProgressCallback& progress = HakoProgressCallback());
 
-  static bool syncTrackedSeries(const TrackedSeriesInfo& current, HakoTrackedSyncResult& outResult,
+  static bool syncTrackedSeries(const CpPluginInfo& pluginInfo, const TrackedSeriesInfo& current, HakoTrackedSyncResult& outResult,
                                 const HakoDownloadOptions* options = nullptr,
                                 const HakoProgressCallback& progress = HakoProgressCallback());
 };

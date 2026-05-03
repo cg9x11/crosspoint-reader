@@ -1,9 +1,16 @@
 #include "FontCacheManager.h"
 
+#include <Arduino.h>
 #include <FontDecompressor.h>
 #include <Logging.h>
+#include <esp_heap_caps.h>
 
 #include <cstring>
+
+namespace {
+constexpr size_t PREWARM_MIN_FREE_HEAP_BYTES = 64 * 1024;
+constexpr size_t PREWARM_MIN_LARGEST_BLOCK_BYTES = 28 * 1024;
+}
 
 FontCacheManager::FontCacheManager(const std::map<int, EpdFontFamily>& fontMap) : fontMap_(fontMap) {}
 
@@ -74,11 +81,17 @@ void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
   }
   if (styleMask == 0) styleMask = 1;  // default to regular
 
-  manager_->prewarmCache(manager_->scanFontId_, manager_->scanText_.c_str(), styleMask);
+  const size_t freeHeap = ESP.getFreeHeap();
+  const size_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (freeHeap >= PREWARM_MIN_FREE_HEAP_BYTES && largestBlock >= PREWARM_MIN_LARGEST_BLOCK_BYTES) {
+    manager_->prewarmCache(manager_->scanFontId_, manager_->scanText_.c_str(), styleMask);
+  } else {
+    LOG_DBG("FCM", "Skip prewarm: heap=%u largest=%u text=%u", static_cast<unsigned>(freeHeap),
+            static_cast<unsigned>(largestBlock), static_cast<unsigned>(manager_->scanText_.size()));
+  }
 
   // Free scan string memory
   manager_->scanText_.clear();
-  manager_->scanText_.shrink_to_fit();
 }
 
 FontCacheManager::PrewarmScope::~PrewarmScope() {

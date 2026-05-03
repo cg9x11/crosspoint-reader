@@ -2,7 +2,6 @@
 
 #include <vector>
 
-#include "../../BackgroundDownloadManager.h"
 #include "../../PluginStore.h"
 #include "../../TrackedSeriesStore.h"
 #include "../../plugins/HakoEpubService.h"
@@ -34,6 +33,8 @@ class HakoBookDetailActivity final : public Activity {
   void toggleTracking();
   void openChapter(const HakoChapterRef& ref);
   void openChapterAtIndex(int index);
+  bool tryLoadPagedChapterContext(const HakoChapterRef& ref, std::vector<HakoChapterRef>& outChapters, int& outChapterIndex,
+                                  int& outCurrentPage, int& outTotalPages);
   void downloadOrSyncEpub();
   bool ensureChaptersLoaded(const char* loadingLabel);
   void ensurePreviewAssets();

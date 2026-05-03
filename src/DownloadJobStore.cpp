@@ -6,13 +6,35 @@
 
 #include <algorithm>
 
+#include "PluginStore.h"
+
 namespace {
 constexpr char DOWNLOAD_JOBS_FILE[] = "/.crosspoint/data/download_jobs.json";
+constexpr char DOWNLOAD_JOBS_TMP_FILE[] = "/.crosspoint/data/download_jobs.tmp";
+constexpr char DOWNLOAD_JOBS_BACKUP_FILE[] = "/.crosspoint/data/download_jobs.bak";
 constexpr char LEGACY_DOWNLOAD_JOBS_FILE[] = "/.crosspoint/plugins/download_jobs.json";
 constexpr uint32_t STORE_VERSION = 2;
 constexpr size_t MAX_PERSISTED_TERMINAL_JOBS = 12;
 constexpr size_t MAX_STATUS_MESSAGE_LENGTH = 96;
 constexpr size_t MAX_CHAPTER_TITLE_LENGTH = 96;
+
+void skipUtf8Bom(FsFile& file) {
+  const int first = file.read();
+  if (first < 0) {
+    return;
+  }
+  if (first != 0xEF) {
+    file.seek(0);
+    return;
+  }
+
+  const int second = file.read();
+  const int third = file.read();
+  if (second == 0xBB && third == 0xBF) {
+    return;
+  }
+  file.seek(0);
+}
 
 const char* kindToString(DownloadJobKind kind) {
   switch (kind) {
@@ -84,7 +106,7 @@ std::vector<DownloadJobInfo> compactJobsForStorage(const std::vector<DownloadJob
   std::vector<DownloadJobInfo> activeJobs;
   std::vector<DownloadJobInfo> terminalJobs;
   activeJobs.reserve(jobs.size());
-  terminalJobs.reserve(jobs.size());
+  terminalJobs.reserve(std::min(jobs.size(), MAX_PERSISTED_TERMINAL_JOBS));
 
   for (const auto& job : jobs) {
     DownloadJobInfo copy = job;
@@ -106,6 +128,18 @@ std::vector<DownloadJobInfo> compactJobsForStorage(const std::vector<DownloadJob
   activeJobs.insert(activeJobs.end(), terminalJobs.begin(), terminalJobs.end());
   return activeJobs;
 }
+
+bool normalizeDownloadJobIdentity(DownloadJobInfo& job) {
+  const std::string canonicalPluginId = PluginStore::canonicalizePluginId(job.pluginId, job.runtimeProfile);
+  const std::string canonicalRuntimeProfile =
+      PluginStore::canonicalizeRuntimeProfile(canonicalPluginId.empty() ? job.pluginId : canonicalPluginId, job.runtimeProfile);
+  const bool changed = canonicalPluginId != job.pluginId || canonicalRuntimeProfile != job.runtimeProfile;
+  if (!canonicalPluginId.empty()) {
+    job.pluginId = canonicalPluginId;
+  }
+  job.runtimeProfile = canonicalRuntimeProfile;
+  return changed;
+}
 }  // namespace
 
 bool DownloadJobStore::loadFromDisk(std::vector<DownloadJobInfo>& outJobs) {
@@ -122,13 +156,19 @@ bool DownloadJobStore::loadFromDisk(std::vector<DownloadJobInfo>& outJobs) {
     return true;
   }
 
-  const String json = Storage.readFile(sourcePath);
-  if (json.isEmpty()) {
+  FsFile file;
+  if (!Storage.openFileForRead("DLJ", sourcePath, file)) {
+    return false;
+  }
+  if (!file || file.size() == 0) {
+    file.close();
     return true;
   }
 
+  skipUtf8Bom(file);
   JsonDocument doc;
-  const auto error = deserializeJson(doc, json.c_str());
+  const auto error = deserializeJson(doc, file);
+  file.close();
   if (error) {
     LOG_ERR("DLJ", "Failed to parse download job store: %s", error.c_str());
     return false;
@@ -136,6 +176,7 @@ bool DownloadJobStore::loadFromDisk(std::vector<DownloadJobInfo>& outJobs) {
 
   JsonArray items = doc["j"].is<JsonArray>() ? doc["j"].as<JsonArray>() : doc["jobs"].as<JsonArray>();
   outJobs.reserve(items.size());
+  bool migrated = sourcePath != DOWNLOAD_JOBS_FILE;
   for (JsonObject obj : items) {
     DownloadJobInfo job;
     job.id = readStringField(obj, "i", "id");
@@ -161,6 +202,7 @@ bool DownloadJobStore::loadFromDisk(std::vector<DownloadJobInfo>& outJobs) {
     job.updatedAtMs = readUIntField(obj, "ut", "updatedAtMs");
     job.statusMessage = compactText(readStringField(obj, "sm", "statusMessage"), MAX_STATUS_MESSAGE_LENGTH);
     job.currentChapterTitle = compactText(readStringField(obj, "ch", "currentChapterTitle"), MAX_CHAPTER_TITLE_LENGTH);
+    migrated = normalizeDownloadJobIdentity(job) || migrated;
 
     if (job.id.empty() || job.pluginId.empty() || job.seriesUrl.empty()) {
       LOG_ERR("DLJ", "Skipping invalid download job");
@@ -168,7 +210,11 @@ bool DownloadJobStore::loadFromDisk(std::vector<DownloadJobInfo>& outJobs) {
     }
     outJobs.push_back(std::move(job));
   }
-  outJobs = compactJobsForStorage(outJobs);
+  auto compactedJobs = compactJobsForStorage(outJobs);
+  outJobs.swap(compactedJobs);
+  if (migrated) {
+    saveToDisk(outJobs, nullptr);
+  }
   return true;
 }
 
@@ -201,11 +247,38 @@ bool DownloadJobStore::saveToDisk(const std::vector<DownloadJobInfo>& jobs, std:
     if (!job.currentChapterTitle.empty()) obj["ch"] = compactText(job.currentChapterTitle, MAX_CHAPTER_TITLE_LENGTH);
   }
 
-  String json;
-  serializeJson(doc, json);
-  if (!Storage.writeFile(DOWNLOAD_JOBS_FILE, json)) {
+  FsFile file;
+  if (!Storage.openFileForWrite("DLJ", DOWNLOAD_JOBS_TMP_FILE, file)) {
     if (outError) *outError = "Failed to write download jobs";
     return false;
+  }
+  const size_t expectedBytes = measureJson(doc);
+  const size_t written = serializeJson(doc, file);
+  file.flush();
+  file.close();
+  if (written != expectedBytes) {
+    Storage.remove(DOWNLOAD_JOBS_TMP_FILE);
+    if (outError) *outError = "Failed to write download jobs";
+    return false;
+  }
+  if (Storage.exists(DOWNLOAD_JOBS_FILE)) {
+    Storage.remove(DOWNLOAD_JOBS_BACKUP_FILE);
+    if (!Storage.rename(DOWNLOAD_JOBS_FILE, DOWNLOAD_JOBS_BACKUP_FILE)) {
+      Storage.remove(DOWNLOAD_JOBS_TMP_FILE);
+      if (outError) *outError = "Failed to rotate download jobs";
+      return false;
+    }
+  }
+  if (!Storage.rename(DOWNLOAD_JOBS_TMP_FILE, DOWNLOAD_JOBS_FILE)) {
+    if (Storage.exists(DOWNLOAD_JOBS_BACKUP_FILE)) {
+      Storage.rename(DOWNLOAD_JOBS_BACKUP_FILE, DOWNLOAD_JOBS_FILE);
+    }
+    Storage.remove(DOWNLOAD_JOBS_TMP_FILE);
+    if (outError) *outError = "Failed to finalize download jobs";
+    return false;
+  }
+  if (Storage.exists(DOWNLOAD_JOBS_BACKUP_FILE)) {
+    Storage.remove(DOWNLOAD_JOBS_BACKUP_FILE);
   }
   if (Storage.exists(LEGACY_DOWNLOAD_JOBS_FILE)) {
     Storage.remove(LEGACY_DOWNLOAD_JOBS_FILE);
