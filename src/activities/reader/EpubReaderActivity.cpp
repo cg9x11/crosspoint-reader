@@ -52,6 +52,8 @@ void EpubReaderActivity::onEnter() {
     return;
   }
 
+  skipNextButtonCheck = true;
+
   // Configure screen orientation based on settings
   // NOTE: This affects layout math and must be applied before any render calls.
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
@@ -119,6 +121,10 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  if (consumePendingButtonRelease()) {
+    return;
+  }
+
   if (automaticPageTurnActive) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
         mappedInput.wasReleased(MappedInputManager::Button::Back)) {
@@ -159,6 +165,7 @@ void EpubReaderActivity::loop() {
                                renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
                                SETTINGS.orientation, !currentPageFootnotes.empty()),
                            [this](const ActivityResult& result) {
+                             skipNextButtonCheck = true;
                              // Always apply orientation change even if the menu was cancelled
                              const auto& menu = std::get<MenuResult>(result.data);
                              applyOrientation(menu.orientation);
@@ -237,6 +244,36 @@ void EpubReaderActivity::loop() {
   }
 }
 
+bool EpubReaderActivity::consumePendingButtonRelease() {
+  if (!skipNextButtonCheck) {
+    return false;
+  }
+
+  const bool anyReaderButtonHeld =
+      mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+      mappedInput.isPressed(MappedInputManager::Button::Back) ||
+      mappedInput.isPressed(MappedInputManager::Button::Left) ||
+      mappedInput.isPressed(MappedInputManager::Button::Right) ||
+      mappedInput.isPressed(MappedInputManager::Button::Up) ||
+      mappedInput.isPressed(MappedInputManager::Button::Down) ||
+      mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+      mappedInput.isPressed(MappedInputManager::Button::PageForward);
+  if (anyReaderButtonHeld) {
+    return true;
+  }
+
+  mappedInput.wasReleased(MappedInputManager::Button::Confirm);
+  mappedInput.wasReleased(MappedInputManager::Button::Back);
+  mappedInput.wasReleased(MappedInputManager::Button::Left);
+  mappedInput.wasReleased(MappedInputManager::Button::Right);
+  mappedInput.wasReleased(MappedInputManager::Button::Up);
+  mappedInput.wasReleased(MappedInputManager::Button::Down);
+  mappedInput.wasReleased(MappedInputManager::Button::PageBack);
+  mappedInput.wasReleased(MappedInputManager::Button::PageForward);
+  skipNextButtonCheck = false;
+  return true;
+}
+
 // Translate an absolute percent into a spine index plus a normalized position
 // within that spine so we can jump after the section is loaded.
 void EpubReaderActivity::jumpToPercent(int percent) {
@@ -308,6 +345,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       startActivityForResult(
           std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, path, spineIdx),
           [this](const ActivityResult& result) {
+            skipNextButtonCheck = true;
             if (!result.isCancelled && currentSpineIndex != std::get<ChapterResult>(result.data).spineIndex) {
               RenderLock lock(*this);
               currentSpineIndex = std::get<ChapterResult>(result.data).spineIndex;
@@ -320,6 +358,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     case EpubReaderMenuActivity::MenuAction::FOOTNOTES: {
       startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
                              [this](const ActivityResult& result) {
+                               skipNextButtonCheck = true;
                                if (!result.isCancelled) {
                                  const auto& footnoteResult = std::get<FootnoteResult>(result.data);
                                  navigateToHref(footnoteResult.href, true);
@@ -338,6 +377,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       startActivityForResult(
           std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
           [this](const ActivityResult& result) {
+            skipNextButtonCheck = true;
             if (!result.isCancelled) {
               jumpToPercent(std::get<PercentResult>(result.data).percent);
             }
@@ -363,7 +403,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           }
           if (!fullText.empty()) {
             startActivityForResult(std::make_unique<QrDisplayActivity>(renderer, mappedInput, fullText),
-                                   [this](const ActivityResult& result) {});
+                                   [this](const ActivityResult&) { skipNextButtonCheck = true; });
             break;
           }
         }
@@ -416,6 +456,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
             std::make_unique<KOReaderSyncActivity>(renderer, mappedInput, epub, epub->getPath(), currentSpineIndex,
                                                    currentPage, totalPages, paragraphIndex),
             [this](const ActivityResult& result) {
+              skipNextButtonCheck = true;
               if (!result.isCancelled) {
                 const auto& sync = std::get<SyncResult>(result.data);
                 if (currentSpineIndex != sync.spineIndex || (section && section->currentPage != sync.page)) {

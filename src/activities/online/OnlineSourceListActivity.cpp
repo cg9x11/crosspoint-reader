@@ -10,6 +10,7 @@
 #include <tuple>
 
 #include "../../plugins/OnlineSourceBridge.h"
+#include "../../network/WirelessCoordinator.h"
 #include "../../util/StringUtils.h"
 #include "../network/WifiSelectionActivity.h"
 #include "HakoSearchActivity.h"
@@ -30,10 +31,7 @@ int sourceOriginRank(const CpPluginInfo& plugin) {
   if (plugin.runtimeOrigin == "server") {
     return 0;
   }
-  if (plugin.runtimeOrigin == "vbook") {
-    return 1;
-  }
-  return 2;
+  return 1;
 }
 
 int sourceIdRank(const CpPluginInfo& plugin) {
@@ -50,32 +48,19 @@ bool shouldShowLocale(const CpPluginInfo& plugin) {
 
 std::string buildSourceSubtitle(const CpPluginInfo& plugin) {
   const std::string localePrefix = shouldShowLocale(plugin) ? plugin.locale + " | " : "";
-  if (plugin.runtimeOrigin == "server") {
-    return localePrefix + "Server";
-  }
-
-  if (plugin.runtimeOrigin == "vbook") {
-    return localePrefix + "Direct web";
-  }
-
-  if (!plugin.runtimeProfile.empty()) {
-    return localePrefix + plugin.runtimeProfile;
-  }
-
-  return plugin.locale.empty() ? std::string("Source") : plugin.locale;
+  return localePrefix + "Server";
 }
 }
 
-void OnlineSourceListActivity::reloadPlugins() {
+void OnlineSourceListActivity::reloadPlugins(bool forceRefresh) {
   supportedPlugins.clear();
+  sourceLoadError.clear();
 
   std::vector<CpPluginInfo> sourceCandidates;
   if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
-    if (!OnlineSourceBridge::fetchSourceCatalog(sourceCandidates)) {
-      OnlineSourceBridge::buildFallbackSourceCatalog(sourceCandidates);
+    if (!OnlineSourceBridge::fetchSourceCatalog(sourceCandidates, forceRefresh)) {
+      sourceLoadError = OnlineSourceBridge::getLastError();
     }
-  } else {
-    OnlineSourceBridge::buildFallbackSourceCatalog(sourceCandidates);
   }
 
   std::map<std::string, size_t> bestPluginIndexByFamily;
@@ -132,7 +117,7 @@ void OnlineSourceListActivity::restoreSelection() {
 
 void OnlineSourceListActivity::onEnter() {
   Activity::onEnter();
-  reloadPlugins();
+  reloadPlugins(true);
   autoWifiLaunchPending = WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress(0, 0, 0, 0);
   requestUpdate();
 }
@@ -145,6 +130,7 @@ void OnlineSourceListActivity::launchSelectedSource() {
   const auto& plugin = supportedPlugins[selectedIndex];
   selectedPluginId = plugin.id;
   g_lastSelectedOnlineSourceId = plugin.id;
+  prepareForWifiUse("ONLINE");
   activityManager.pushActivity(std::make_unique<HakoSearchActivity>(renderer, mappedInput, plugin));
 }
 
@@ -164,17 +150,21 @@ void OnlineSourceListActivity::onWifiSelectionComplete(const bool connected) {
     return;
   }
 
-  reloadPlugins();
+  reloadPlugins(true);
   if (!pendingLaunchIndex.has_value()) {
     requestUpdate();
     return;
   }
 
-  selectedPluginId = supportedPlugins.empty() || *pendingLaunchIndex < 0 ||
-                             *pendingLaunchIndex >= static_cast<int>(supportedPlugins.size())
+  if (supportedPlugins.empty()) {
+    pendingLaunchIndex.reset();
+    requestUpdate();
+    return;
+  }
+
+  selectedPluginId = *pendingLaunchIndex < 0 || *pendingLaunchIndex >= static_cast<int>(supportedPlugins.size())
                          ? std::string()
                          : supportedPlugins[*pendingLaunchIndex].id;
-  reloadPlugins();
   pendingLaunchIndex.reset();
   launchSelectedSource();
 }
@@ -193,7 +183,12 @@ void OnlineSourceListActivity::loop() {
 
   if (supportedPlugins.empty()) {
     if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-      finish();
+      if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+        reloadPlugins(true);
+        requestUpdate();
+      } else {
+        launchWifiSelection();
+      }
     }
     return;
   }
@@ -243,7 +238,8 @@ void OnlineSourceListActivity::render(RenderLock&&) {
 
   if (supportedPlugins.empty()) {
     renderer.drawCenteredText(UI_12_FONT_ID, pageHeight / 2 - renderer.getLineHeight(UI_12_FONT_ID), "No online sources");
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 4, "Connect WiFi and try again");
+    const char* message = sourceLoadError.empty() ? "Connect WiFi and try again" : sourceLoadError.c_str();
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 4, message);
   } else {
     GUI.drawList(
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<int>(supportedPlugins.size()), selectedIndex,
@@ -255,8 +251,11 @@ void OnlineSourceListActivity::render(RenderLock&&) {
         [](int) { return Library; });
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), supportedPlugins.empty() ? tr(STR_DONE) : tr(STR_SELECT),
-                                            tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const char* confirmLabel = tr(STR_SELECT);
+  if (supportedPlugins.empty()) {
+    confirmLabel = WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0) ? "Retry" : "Connect";
+  }
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }

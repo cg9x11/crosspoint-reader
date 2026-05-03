@@ -17,6 +17,7 @@
 #include <builtinFonts/notoserif_18_italic.h>
 #include <builtinFonts/notoserif_18_regular.h>
 #include <builtinFonts/notosans_8_regular.h>
+#ifndef CROSSPOINT_TRIM_SANS_READER_FONTS
 #include <builtinFonts/notosans_12_bold.h>
 #include <builtinFonts/notosans_12_bolditalic.h>
 #include <builtinFonts/notosans_12_italic.h>
@@ -33,8 +34,16 @@
 #include <builtinFonts/notosans_18_bolditalic.h>
 #include <builtinFonts/notosans_18_italic.h>
 #include <builtinFonts/notosans_18_regular.h>
+#endif
+#include <builtinFonts/bokerlam_12_regular.h>
 #include <builtinFonts/bokerlam_14_regular.h>
+#include <builtinFonts/bokerlam_16_regular.h>
+#include <builtinFonts/bokerlam_18_regular.h>
+#include <builtinFonts/kicomictaxy_12_regular.h>
 #include <builtinFonts/kicomictaxy_14_regular.h>
+#include <builtinFonts/kicomictaxy_16_regular.h>
+#include <builtinFonts/kicomictaxy_18_regular.h>
+#ifndef CROSSPOINT_TRIM_OPTIONAL_FONTS
 #include <builtinFonts/opendyslexic_10_bold.h>
 #include <builtinFonts/opendyslexic_10_bolditalic.h>
 #include <builtinFonts/opendyslexic_10_italic.h>
@@ -51,6 +60,7 @@
 #include <builtinFonts/opendyslexic_8_bolditalic.h>
 #include <builtinFonts/opendyslexic_8_italic.h>
 #include <builtinFonts/opendyslexic_8_regular.h>
+#endif
 #include <builtinFonts/ubuntu_10_bold.h>
 #include <builtinFonts/ubuntu_10_regular.h>
 #include <builtinFonts/ubuntu_12_bold.h>

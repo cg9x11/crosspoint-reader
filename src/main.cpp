@@ -75,6 +75,7 @@ EpdFont notoserif18BoldItalicFont(&notoserif_18_bolditalic);
 EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont, &notoserif18BoldFont, &notoserif18ItalicFont,
                                     &notoserif18BoldItalicFont);
 
+#ifndef CROSSPOINT_TRIM_SANS_READER_FONTS
 EpdFont notosans12RegularFont(&notosans_12_regular);
 EpdFont notosans12BoldFont(&notosans_12_bold);
 EpdFont notosans12ItalicFont(&notosans_12_italic);
@@ -99,20 +100,27 @@ EpdFont notosans18ItalicFont(&notosans_18_italic);
 EpdFont notosans18BoldItalicFont(&notosans_18_bolditalic);
 EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont,
                                    &notosans18BoldItalicFont);
+#endif
 
+EpdFont bokerlam12RegularFont(&bokerlam_12_regular);
 EpdFont bokerlam14RegularFont(&bokerlam_14_regular);
+EpdFont bokerlam16RegularFont(&bokerlam_16_regular);
+EpdFont bokerlam18RegularFont(&bokerlam_18_regular);
+EpdFontFamily bokerlam12FontFamily(&bokerlam12RegularFont);
 EpdFontFamily bokerlam14FontFamily(&bokerlam14RegularFont);
-// Keep a single embedded asset for each optional decorative font to contain flash growth.
-EpdFontFamily bokerlam12FontFamily(&bokerlam14RegularFont);
-EpdFontFamily bokerlam16FontFamily(&bokerlam14RegularFont);
-EpdFontFamily bokerlam18FontFamily(&bokerlam14RegularFont);
+EpdFontFamily bokerlam16FontFamily(&bokerlam16RegularFont);
+EpdFontFamily bokerlam18FontFamily(&bokerlam18RegularFont);
 
+EpdFont kicomictaxy12RegularFont(&kicomictaxy_12_regular);
 EpdFont kicomictaxy14RegularFont(&kicomictaxy_14_regular);
+EpdFont kicomictaxy16RegularFont(&kicomictaxy_16_regular);
+EpdFont kicomictaxy18RegularFont(&kicomictaxy_18_regular);
+EpdFontFamily kicomictaxy12FontFamily(&kicomictaxy12RegularFont);
 EpdFontFamily kicomictaxy14FontFamily(&kicomictaxy14RegularFont);
-EpdFontFamily kicomictaxy12FontFamily(&kicomictaxy14RegularFont);
-EpdFontFamily kicomictaxy16FontFamily(&kicomictaxy14RegularFont);
-EpdFontFamily kicomictaxy18FontFamily(&kicomictaxy14RegularFont);
+EpdFontFamily kicomictaxy16FontFamily(&kicomictaxy16RegularFont);
+EpdFontFamily kicomictaxy18FontFamily(&kicomictaxy18RegularFont);
 
+#ifndef CROSSPOINT_TRIM_OPTIONAL_FONTS
 EpdFont opendyslexic8RegularFont(&opendyslexic_8_regular);
 EpdFont opendyslexic8BoldFont(&opendyslexic_8_bold);
 EpdFont opendyslexic8ItalicFont(&opendyslexic_8_italic);
@@ -137,6 +145,7 @@ EpdFont opendyslexic14ItalicFont(&opendyslexic_14_italic);
 EpdFont opendyslexic14BoldItalicFont(&opendyslexic_14_bolditalic);
 EpdFontFamily opendyslexic14FontFamily(&opendyslexic14RegularFont, &opendyslexic14BoldFont, &opendyslexic14ItalicFont,
                                        &opendyslexic14BoldItalicFont);
+#endif
 #endif  // OMIT_FONTS
 
 EpdFont smallFont(&notosans_8_regular);
@@ -261,10 +270,12 @@ void setupDisplayAndFonts() {
   renderer.insertFont(NOTOSERIF_16_FONT_ID, notoserif16FontFamily);
   renderer.insertFont(NOTOSERIF_18_FONT_ID, notoserif18FontFamily);
 
+#ifndef CROSSPOINT_TRIM_SANS_READER_FONTS
   renderer.insertFont(NOTOSANS_12_FONT_ID, notosans12FontFamily);
   renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
+#endif
   renderer.insertFont(BOKERLAM_12_FONT_ID, bokerlam12FontFamily);
   renderer.insertFont(BOKERLAM_14_FONT_ID, bokerlam14FontFamily);
   renderer.insertFont(BOKERLAM_16_FONT_ID, bokerlam16FontFamily);
@@ -273,10 +284,12 @@ void setupDisplayAndFonts() {
   renderer.insertFont(KICOMICTAXY_14_FONT_ID, kicomictaxy14FontFamily);
   renderer.insertFont(KICOMICTAXY_16_FONT_ID, kicomictaxy16FontFamily);
   renderer.insertFont(KICOMICTAXY_18_FONT_ID, kicomictaxy18FontFamily);
+#ifndef CROSSPOINT_TRIM_OPTIONAL_FONTS
   renderer.insertFont(OPENDYSLEXIC_8_FONT_ID, opendyslexic8FontFamily);
   renderer.insertFont(OPENDYSLEXIC_10_FONT_ID, opendyslexic10FontFamily);
   renderer.insertFont(OPENDYSLEXIC_12_FONT_ID, opendyslexic12FontFamily);
   renderer.insertFont(OPENDYSLEXIC_14_FONT_ID, opendyslexic14FontFamily);
+#endif
 #endif  // OMIT_FONTS
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);

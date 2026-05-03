@@ -25,10 +25,11 @@
 
 namespace {
 constexpr int MAX_SUMMARY_WRAP_LINES = 96;
-constexpr uint32_t ONLINE_SOURCE_LOAD_TASK_STACK_BYTES = 7168;
+constexpr uint32_t ONLINE_SOURCE_LOAD_TASK_STACK_BYTES = 12288;
 constexpr uint32_t MIN_FREE_HEAP_FOR_PREVIEW_DETAIL = 90000;
-constexpr uint32_t MIN_FREE_HEAP_FOR_PREVIEW_COVER = 85000;
+constexpr uint32_t MIN_FREE_HEAP_FOR_PREVIEW_COVER_FETCH = 60000;
 constexpr uint32_t MIN_LARGEST_BLOCK_FOR_PREVIEW = 70000;
+constexpr uint32_t MIN_LARGEST_BLOCK_FOR_PREVIEW_COVER_FETCH = 36000;
 constexpr int PREVIEW_COVER_TARGET_HEIGHT = 92;
 
 enum class AsyncLoadKind : uint8_t { Home = 1, Search = 2 };
@@ -59,51 +60,9 @@ bool canLoadPreviewDetailNow() {
   return ESP.getFreeHeap() >= MIN_FREE_HEAP_FOR_PREVIEW_DETAIL && ESP.getMaxAllocHeap() >= MIN_LARGEST_BLOCK_FOR_PREVIEW;
 }
 
-bool canLoadPreviewCoverNow() {
-  return ESP.getFreeHeap() >= MIN_FREE_HEAP_FOR_PREVIEW_COVER && ESP.getMaxAllocHeap() >= MIN_LARGEST_BLOCK_FOR_PREVIEW;
-}
-
-bool shouldUseMinimalDetailFallbackNow() {
-  return ESP.getFreeHeap() < 70000 || ESP.getMaxAllocHeap() < 60000;
-}
-
-std::string trimAsciiSpaces(std::string value) {
-  auto isSpace = [](unsigned char ch) { return std::isspace(ch) != 0; };
-  value.erase(value.begin(), std::find_if(value.begin(), value.end(), [&](char ch) { return !isSpace(static_cast<unsigned char>(ch)); }));
-  value.erase(std::find_if(value.rbegin(), value.rend(), [&](char ch) { return !isSpace(static_cast<unsigned char>(ch)); }).base(),
-              value.end());
-  return value;
-}
-
-std::string lowerAscii(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return value;
-}
-
-std::string authorFromSearchDescription(const std::string& description) {
-  const std::string safe = StringUtils::toDisplaySafeAscii(description);
-  const std::string lower = lowerAscii(safe);
-  const char* prefixes[] = {"tac gia:", "author:"};
-  for (const char* prefix : prefixes) {
-    const std::string needle(prefix);
-    if (lower.rfind(needle, 0) == 0) {
-      return trimAsciiSpaces(safe.substr(needle.size()));
-    }
-  }
-  return trimAsciiSpaces(safe);
-}
-
-HakoBookDetail minimalDetailFromSearchResult(const HakoSearchResult& selected) {
-  HakoBookDetail detail;
-  detail.title = StringUtils::toDisplaySafeAscii(selected.title);
-  detail.url = selected.url;
-  detail.author = authorFromSearchDescription(selected.description);
-  detail.coverUrl = selected.coverUrl;
-  detail.descriptionHtml.clear();
-  detail.latestChapterTitle = selected.homeLatestChapterTitle;
-  detail.ongoing = true;
-  return detail;
+bool canAttemptPreviewCoverFetchNow() {
+  return ESP.getFreeHeap() >= MIN_FREE_HEAP_FOR_PREVIEW_COVER_FETCH &&
+         ESP.getMaxAllocHeap() >= MIN_LARGEST_BLOCK_FOR_PREVIEW_COVER_FETCH;
 }
 
 SemaphoreHandle_t g_asyncLoadMutex = nullptr;
@@ -555,14 +514,31 @@ void HakoSearchActivity::maybeLoadSelectedCover() {
     return;
   }
 
-  if (millis() < previewSelectionChangedAtMs + COVER_FETCH_DELAY_MS || !canLoadPreviewCoverNow()) {
+  if (millis() < previewSelectionChangedAtMs + COVER_FETCH_DELAY_MS) {
+    return;
+  }
+
+  const std::string coverUrl = selectedResolvedCoverUrl();
+  if (coverUrl.empty()) {
+    coverCache.push_back(CoverCacheEntry{selected.url, "", true});
+    pruneCoverCache(selected.url);
+    requestUpdate();
     return;
   }
 
   std::string coverPath;
-  const std::string coverUrl = selectedResolvedCoverUrl();
-  const bool ok =
-      !coverUrl.empty() && OnlineCoverStore::getOrCreateThumb(coverUrl, PREVIEW_COVER_TARGET_HEIGHT, coverPath);
+  if (OnlineCoverStore::tryGetCachedThumb(coverUrl, PREVIEW_COVER_TARGET_HEIGHT, coverPath)) {
+    coverCache.push_back(CoverCacheEntry{selected.url, coverPath, false});
+    pruneCoverCache(selected.url);
+    requestUpdate();
+    return;
+  }
+
+  if (!canAttemptPreviewCoverFetchNow()) {
+    return;
+  }
+
+  const bool ok = OnlineCoverStore::getOrCreateThumb(coverUrl, PREVIEW_COVER_TARGET_HEIGHT, coverPath);
   coverCache.push_back(CoverCacheEntry{selected.url, ok ? coverPath : "", !ok});
   pruneCoverCache(selected.url);
   requestUpdate();
@@ -662,10 +638,17 @@ bool HakoSearchActivity::selectedCoverFailed() const {
     return false;
   }
 
-  std::string ignoredCoverPath;
   const std::string coverUrl = selectedResolvedCoverUrl();
-  return coverUrl.empty() ||
-         !OnlineCoverStore::tryGetCachedThumb(coverUrl, PREVIEW_COVER_TARGET_HEIGHT, ignoredCoverPath);
+  if (coverUrl.empty()) {
+    return true;
+  }
+
+  std::string ignoredCoverPath;
+  if (OnlineCoverStore::tryGetCachedThumb(coverUrl, PREVIEW_COVER_TARGET_HEIGHT, ignoredCoverPath)) {
+    return false;
+  }
+
+  return false;
 }
 
 int HakoSearchActivity::selectedPreviewVisibleLineCapacity() const {
@@ -1053,12 +1036,6 @@ void HakoSearchActivity::loop() {
       errorMessage = OnlineSourceBridge::getLastError();
       if (errorMessage.empty()) {
         errorMessage = "Failed to load book";
-      }
-      if (pluginInfo.id == "truyenfull" || shouldUseMinimalDetailFallbackNow()) {
-        HakoBookDetail fallbackDetail = minimalDetailFromSearchResult(selected);
-        activityManager.pushActivity(std::make_unique<HakoBookDetailActivity>(
-            renderer, mappedInput, pluginInfo, std::move(fallbackDetail), std::vector<HakoChapterRef>{}));
-        return;
       }
       showPopupMessage(errorMessage);
       return;

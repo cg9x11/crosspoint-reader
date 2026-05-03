@@ -13,6 +13,7 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WirelessCoordinator.h"
 
 namespace {
 constexpr int32_t MAX_24_GHZ_WIFI_CHANNEL = 14;
@@ -22,6 +23,7 @@ constexpr const char* WIFI_24_GHZ_ONLY_ERROR = "2.4 GHz only";
 
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
+  prepareForWifiUse("WIFI");
 
   // Load saved WiFi credentials - SD card operations need lock as we use SPI
   // for both

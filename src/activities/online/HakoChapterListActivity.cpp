@@ -13,8 +13,6 @@
 #include "fontIds.h"
 
 namespace {
-constexpr int TRUYENFULL_TOC_PAGE_SIZE = 50;
-
 std::string lowerAscii(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -100,6 +98,29 @@ int inferChapterNumber(const std::string& url, const std::string& title) {
     return fromUrl;
   }
   return parseLeadingChapterNumberFromTitle(title);
+}
+
+int pageStartIndexFor(const std::vector<HakoChapterRef>& chapters, int currentPage, const CpPluginInfo& pluginInfo) {
+  if (!chapters.empty() && chapters.front().index > 0) {
+    return static_cast<int>(chapters.front().index);
+  }
+
+  const int pageSize = std::max(1, OnlineSourceBridge::pagedTocPageSize(pluginInfo));
+  return ((std::max(1, currentPage) - 1) * pageSize) + 1;
+}
+
+int resolveAbsoluteChapterIndex(const HakoChapterRef& chapter, const std::vector<HakoChapterRef>& chapters, int currentPage,
+                                int selectedIndex, const CpPluginInfo& pluginInfo) {
+  if (chapter.index > 0) {
+    return static_cast<int>(chapter.index);
+  }
+
+  const int inferred = inferChapterNumber(chapter.url, chapter.title);
+  if (inferred > 0) {
+    return inferred;
+  }
+
+  return pageStartIndexFor(chapters, currentPage, pluginInfo) + selectedIndex;
 }
 
 std::string buildChapterRowTitle(const HakoChapterRef& chapter) {
@@ -197,7 +218,7 @@ bool HakoChapterListActivity::loadPage(int page) {
       }
     }
   } else if (preferredChapterIndex > 0) {
-    const int pageStartIndex = (currentPage - 1) * TRUYENFULL_TOC_PAGE_SIZE + 1;
+    const int pageStartIndex = pageStartIndexFor(chapters, currentPage, pluginInfo);
     const int pageEndIndex = pageStartIndex + static_cast<int>(chapters.size()) - 1;
     if (preferredChapterIndex >= pageStartIndex && preferredChapterIndex <= pageEndIndex) {
       selectedIndex = preferredChapterIndex - pageStartIndex;
@@ -214,7 +235,8 @@ void HakoChapterListActivity::onEnter() {
   Activity::onEnter();
   if (pagedMode && chapters.empty()) {
     if (preferredChapterIndex > 0) {
-      currentPage = std::max(1, ((preferredChapterIndex - 1) / TRUYENFULL_TOC_PAGE_SIZE) + 1);
+      const int pageSize = std::max(1, OnlineSourceBridge::pagedTocPageSize(pluginInfo));
+      currentPage = std::max(1, ((preferredChapterIndex - 1) / pageSize) + 1);
     }
     loadPage(currentPage);
     return;
@@ -259,7 +281,9 @@ void HakoChapterListActivity::loop() {
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     if (selectionOnly) {
-      const int resultIndex = pagedMode && !chapters.empty() ? static_cast<int>(chapters[selectedIndex].index) - 1 : selectedIndex;
+      const int resultIndex = pagedMode && !chapters.empty()
+                                  ? resolveAbsoluteChapterIndex(chapters[selectedIndex], chapters, currentPage, selectedIndex, pluginInfo) - 1
+                                  : selectedIndex;
       setResult(OnlineChapterResult{resultIndex});
       finish();
       return;

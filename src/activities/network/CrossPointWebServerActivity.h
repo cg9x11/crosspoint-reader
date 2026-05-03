@@ -54,6 +54,8 @@ class CrossPointWebServerActivity final : public Activity {
   void startAccessPoint();
   void startWebServer();
   void stopWebServer();
+  void leaveServerRunningInBackground();
+  void returnToPreviousOrHome();
 
  public:
   explicit CrossPointWebServerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

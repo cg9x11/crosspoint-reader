@@ -11,10 +11,13 @@ class BackgroundWebServerRuntime {
   std::unique_ptr<CrossPointWebServer> takeOwnership();
   void stop();
   void loop();
+  void requestHandoff();
+  bool consumeHandoffRequest();
 
  private:
   std::unique_ptr<CrossPointWebServer> server;
   unsigned long lastHandleClientTime = 0;
+  bool handoffRequested = false;
 };
 
 extern BackgroundWebServerRuntime BACKGROUND_WEB_SERVER_RUNTIME;

@@ -159,6 +159,26 @@ void SettingsActivity::toggleCurrentSetting() {
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(setting.enumValues.size());
+
+    if (setting.valuePtr == &CrossPointSettings::fontFamily) {
+      for (uint8_t guard = 0; guard < CrossPointSettings::FONT_FAMILY_COUNT; ++guard) {
+        bool valid = true;
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+        if (SETTINGS.fontFamily == CrossPointSettings::NOTOSANS) {
+          valid = false;
+        }
+#endif
+#ifdef CROSSPOINT_TRIM_OPTIONAL_FONTS
+        if (SETTINGS.fontFamily == CrossPointSettings::OPENDYSLEXIC) {
+          valid = false;
+        }
+#endif
+        if (valid) {
+          break;
+        }
+        SETTINGS.fontFamily = (SETTINGS.fontFamily + 1) % CrossPointSettings::FONT_FAMILY_COUNT;
+      }
+    }
   } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
     const int8_t currentValue = SETTINGS.*(setting.valuePtr);
     if (currentValue + setting.valueRange.step > setting.valueRange.max) {
@@ -206,6 +226,7 @@ void SettingsActivity::toggleCurrentSetting() {
     return;
   }
 
+  SETTINGS.normalizeForBuild();
   SETTINGS.saveToFile();
 }
 

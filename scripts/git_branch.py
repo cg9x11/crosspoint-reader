@@ -63,6 +63,30 @@ def get_git_short_sha(project_dir):
     )
 
 
+def is_git_dirty(project_dir):
+    try:
+        status = subprocess.check_output(
+            ['git', 'status', '--porcelain', '--untracked-files=no'],
+            text=True, stderr=subprocess.PIPE, cwd=project_dir
+        ).strip()
+        return bool(status)
+    except FileNotFoundError:
+        warn('git not found on PATH; dirty suffix will be omitted')
+        return False
+    except subprocess.CalledProcessError as e:
+        warn(
+            f'git command failed (exit {e.returncode}): '
+            f'{e.stderr.strip()}; dirty suffix will be omitted'
+        )
+        return False
+    except OSError as e:
+        warn(f'OS error reading git dirty state: {e}; dirty suffix will be omitted')
+        return False
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        warn(f'Unexpected error reading git dirty state: {e}; dirty suffix will be omitted')
+        return False
+
+
 def get_base_version(project_dir):
     ini_path = os.path.join(project_dir, 'platformio.ini')
     if not os.path.isfile(ini_path):
@@ -86,7 +110,8 @@ def inject_version(env):
     base_version = get_base_version(project_dir)
     branch = get_git_branch(project_dir)
     short_sha = get_git_short_sha(project_dir)
-    version_string = f'{base_version}-dev-{branch}-{short_sha}'
+    dirty_suffix = '-dirty' if is_git_dirty(project_dir) else ''
+    version_string = f'{base_version}-dev-{branch}-{short_sha}{dirty_suffix}'
 
     env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
     print(f'CrossPoint build version: {version_string}')

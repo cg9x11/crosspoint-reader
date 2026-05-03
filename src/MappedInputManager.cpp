@@ -28,8 +28,6 @@ void MappedInputManager::update() const {
 void MappedInputManager::updateInjectedButtons() const {
   const unsigned long now = millis();
   for (auto& state : injectedButtons) {
-    state.pressedEdge = false;
-    state.releasedEdge = false;
     if (state.activateOnGeneration != 0 && state.activateOnGeneration <= updateGeneration) {
       state.pressed = true;
       state.pressedEdge = true;
@@ -84,11 +82,27 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
 }
 
 bool MappedInputManager::wasPressed(const Button button) const {
-  return mapButton(button, &HalGPIO::wasPressed) || injectedButtons[buttonToIndex(button)].pressedEdge;
+  if (mapButton(button, &HalGPIO::wasPressed)) {
+    return true;
+  }
+  InjectedButtonState& state = injectedButtons[buttonToIndex(button)];
+  if (state.pressedEdge) {
+    state.pressedEdge = false;
+    return true;
+  }
+  return false;
 }
 
 bool MappedInputManager::wasReleased(const Button button) const {
-  return mapButton(button, &HalGPIO::wasReleased) || injectedButtons[buttonToIndex(button)].releasedEdge;
+  if (mapButton(button, &HalGPIO::wasReleased)) {
+    return true;
+  }
+  InjectedButtonState& state = injectedButtons[buttonToIndex(button)];
+  if (state.releasedEdge) {
+    state.releasedEdge = false;
+    return true;
+  }
+  return false;
 }
 
 bool MappedInputManager::isPressed(const Button button) const {
@@ -132,6 +146,25 @@ unsigned long MappedInputManager::getHeldTime() const {
   }
   const unsigned long hardwareHeldTime = gpio.getHeldTime();
   return hardwareHeldTime > injectedHeldTime ? hardwareHeldTime : injectedHeldTime;
+}
+
+unsigned long MappedInputManager::getHeldTime(const Button button) const {
+  const unsigned long now = millis();
+  unsigned long heldTime = 0;
+
+  if (mapButton(button, &HalGPIO::isPressed)) {
+    heldTime = gpio.getHeldTime();
+  }
+
+  const auto& injectedState = injectedButtons[buttonToIndex(button)];
+  if (injectedState.pressed) {
+    const unsigned long injectedHeldTime = now - injectedState.pressedAtMs;
+    if (injectedHeldTime > heldTime) {
+      heldTime = injectedHeldTime;
+    }
+  }
+
+  return heldTime;
 }
 
 MappedInputManager::Labels MappedInputManager::mapLabels(const char* back, const char* confirm, const char* previous,

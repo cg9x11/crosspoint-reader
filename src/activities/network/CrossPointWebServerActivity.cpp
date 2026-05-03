@@ -19,6 +19,7 @@
 #include "fontIds.h"
 #include "network/BackgroundWebServerRuntime.h"
 #include "util/QrUtils.h"
+#include "network/WirelessCoordinator.h"
 
 namespace {
 // AP Mode configuration
@@ -76,7 +77,7 @@ void CrossPointWebServerActivity::onEnter() {
   startActivityForResult(std::make_unique<NetworkModeSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) {
                            if (result.isCancelled) {
-                             onGoHome();
+                             returnToPreviousOrHome();
                            } else {
                              onNetworkModeSelected(std::get<NetworkModeResult>(result.data).mode);
                            }
@@ -149,7 +150,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
           startActivityForResult(std::make_unique<NetworkModeSelectionActivity>(renderer, mappedInput),
                                  [this](const ActivityResult& result) {
                                    if (result.isCancelled) {
-                                     onGoHome();
+                                     returnToPreviousOrHome();
                                    } else {
                                      onNetworkModeSelected(std::get<NetworkModeResult>(result.data).mode);
                                    }
@@ -160,6 +161,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
 
   if (mode == NetworkMode::JOIN_NETWORK) {
     // STA mode - launch WiFi selection
+    prepareForWifiUse("WEBACT");
     LOG_DBG("WEBACT", "Turning on WiFi (STA mode)...");
     WiFi.mode(WIFI_STA);
 
@@ -176,6 +178,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
                            });
   } else {
     // AP mode - start access point
+    prepareForExclusiveWifiUse("WEBACT");
     state = WebServerActivityState::AP_STARTING;
     requestUpdate();
     startAccessPoint();
@@ -203,7 +206,7 @@ void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) 
     startActivityForResult(std::make_unique<NetworkModeSelectionActivity>(renderer, mappedInput),
                            [this](const ActivityResult& result) {
                              if (result.isCancelled) {
-                               onGoHome();
+                               returnToPreviousOrHome();
                              } else {
                                onNetworkModeSelected(std::get<NetworkModeResult>(result.data).mode);
                              }
@@ -230,7 +233,7 @@ void CrossPointWebServerActivity::startAccessPoint() {
 
   if (!apStarted) {
     LOG_ERR("WEBACT", "ERROR: Failed to start Access Point!");
-    onGoHome();
+    returnToPreviousOrHome();
     return;
   }
 
@@ -288,7 +291,7 @@ void CrossPointWebServerActivity::startWebServer() {
 
   if (ESP.getFreeHeap() < AP_MIN_HEAP_FOR_WEB_SERVER || largestHeapBlock() < 16000) {
     LOG_ERR("WEBACT", "Not enough heap to start web server safely");
-    onGoHome();
+    returnToPreviousOrHome();
     return;
   }
 
@@ -296,7 +299,7 @@ void CrossPointWebServerActivity::startWebServer() {
   webServer.reset(new (std::nothrow) CrossPointWebServer(renderer, mappedInput));
   if (!webServer) {
     LOG_ERR("WEBACT", "Failed to allocate CrossPointWebServer");
-    onGoHome();
+    returnToPreviousOrHome();
     return;
   }
   webServer->begin();
@@ -312,7 +315,7 @@ void CrossPointWebServerActivity::startWebServer() {
     LOG_ERR("WEBACT", "ERROR: Failed to start web server!");
     webServer.reset();
     // Go back on error
-    onGoHome();
+    returnToPreviousOrHome();
   }
 }
 
@@ -325,13 +328,29 @@ void CrossPointWebServerActivity::stopWebServer() {
   webServer.reset();
 }
 
+void CrossPointWebServerActivity::returnToPreviousOrHome() {
+  if (activityManager.hasStackActivities()) {
+    finish();
+    return;
+  }
+  onGoHome();
+}
+
+void CrossPointWebServerActivity::leaveServerRunningInBackground() {
+  if (webServer && webServer->isRunning()) {
+    BACKGROUND_WEB_SERVER_RUNTIME.activate(std::move(webServer));
+    handoffToBackground = true;
+  }
+  returnToPreviousOrHome();
+}
+
 void CrossPointWebServerActivity::loop() {
   // Handle different states
   if (state == WebServerActivityState::SERVER_RUNNING) {
-    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm) && webServer && webServer->isRunning()) {
-      BACKGROUND_WEB_SERVER_RUNTIME.activate(std::move(webServer));
-      handoffToBackground = true;
-      onGoHome();
+    if ((mappedInput.wasPressed(MappedInputManager::Button::Confirm) ||
+         BACKGROUND_WEB_SERVER_RUNTIME.consumeHandoffRequest()) &&
+        webServer && webServer->isRunning()) {
+      leaveServerRunningInBackground();
       return;
     }
 
@@ -390,7 +409,7 @@ void CrossPointWebServerActivity::loop() {
           mappedInput.update();
           // Check for exit button inside loop for responsiveness
           if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-            onGoHome();
+            returnToPreviousOrHome();
             return;
           }
         }
@@ -400,7 +419,7 @@ void CrossPointWebServerActivity::loop() {
 
     // Handle exit on Back button (also check outside loop)
     if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-      onGoHome();
+      returnToPreviousOrHome();
       return;
     }
   }
@@ -501,6 +520,7 @@ void CrossPointWebServerActivity::renderServerRunning() const {
     renderer.drawCenteredText(SMALL_FONT_ID, startY, hostnameUrl.c_str(), true);
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "Home", "", "");
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_EXIT), activityManager.hasStackActivities() ? tr(STR_BACK) : tr(STR_HOME), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

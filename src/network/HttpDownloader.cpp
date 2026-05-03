@@ -20,7 +20,7 @@ namespace {
 std::string g_lastError;
 bool g_lastResponseTruncated = false;
 constexpr uint16_t HTTP_CONNECT_TIMEOUT_MS = 8000;
-constexpr uint16_t HTTP_READ_TIMEOUT_MS = 15000;
+constexpr uint16_t HTTP_READ_TIMEOUT_MS = 35000;
 constexpr uint32_t HTTP_READ_BUFFER_SIZE = 512;
 constexpr uint32_t HTTP_MIN_HEADROOM_BYTES = 12288;
 constexpr uint32_t HTTP_DEFAULT_INITIAL_RESERVE = 12288;
@@ -100,6 +100,9 @@ size_t computeSafeBodyBudget(size_t requestedMaxBytes = 0) {
   return budget;
 }
 
+bool appendBounded(std::string& outContent, const char* data, size_t size, size_t maxBytes, bool allowTruncate,
+                   bool& truncated, bool& overflowed);
+
 class BoundedStringWriteStream final : public Stream {
  public:
   BoundedStringWriteStream(std::string& outContent, size_t maxBytes, bool allowTruncate)
@@ -171,26 +174,62 @@ bool readHttpBody(HTTPClient& http, std::string& outContent, size_t maxBytes = 0
     outContent.reserve(reserveTarget);
   }
 
-  BoundedStringWriteStream stream(outContent, safeBudget, allowTruncate);
-  const int writeResult = http.writeToStream(&stream);
-  if (writeResult < 0) {
-    setLastError("writeToStream error " + std::to_string(writeResult));
+  NetworkClient* rawStream = http.getStreamPtr();
+  if (!rawStream) {
+    setLastError("Missing HTTP stream");
     return false;
   }
 
-  if (stream.overflowed()) {
+  bool truncated = false;
+  bool overflowed = false;
+  size_t totalRead = 0;
+  uint32_t lastDataAtMs = millis();
+  uint8_t buffer[HTTP_READ_BUFFER_SIZE];
+
+  while (http.connected() || rawStream->available() > 0) {
+    const int available = rawStream->available();
+    if (available <= 0) {
+      if ((millis() - lastDataAtMs) > HTTP_READ_TIMEOUT_MS) {
+        setLastError(describeHttpFailure(HTTPC_ERROR_READ_TIMEOUT));
+        return false;
+      }
+      delay(1);
+      continue;
+    }
+
+    const size_t toRead = std::min<size_t>(sizeof(buffer), static_cast<size_t>(available));
+    const int bytesRead = rawStream->readBytes(buffer, toRead);
+    if (bytesRead <= 0) {
+      if ((millis() - lastDataAtMs) > HTTP_READ_TIMEOUT_MS) {
+        setLastError(describeHttpFailure(HTTPC_ERROR_READ_TIMEOUT));
+        return false;
+      }
+      delay(1);
+      continue;
+    }
+
+    lastDataAtMs = millis();
+    totalRead += static_cast<size_t>(bytesRead);
+
+    if (!appendBounded(outContent, reinterpret_cast<const char*>(buffer), static_cast<size_t>(bytesRead), safeBudget,
+                       allowTruncate, truncated, overflowed)) {
+      break;
+    }
+  }
+
+  if (overflowed) {
     setLastError("HTTP body exceeds safe heap budget");
     return false;
   }
 
-  if (stream.truncated()) {
+  if (truncated) {
     g_lastResponseTruncated = true;
     setLastError("Response truncated by RAM limit");
     LOG_DBG("HTTP", "Response truncated at %u bytes (%s)", static_cast<unsigned>(outContent.size()), heapSummary().c_str());
     return true;
   }
 
-  if (reportedLength > 0 && outContent.size() != static_cast<size_t>(reportedLength)) {
+  if (reportedLength > 0 && totalRead != static_cast<size_t>(reportedLength)) {
     setLastError("Partial HTTP body read");
     return false;
   }
@@ -374,11 +413,43 @@ bool readHttpBodyFromMarker(HTTPClient& http, std::string& outContent, const std
     return false;
   }
 
-  MarkerBoundedWriteStream stream(outContent, marker, safeBudget, allowTruncate);
-  const int writeResult = http.writeToStream(&stream);
-  if (writeResult < 0) {
-    setLastError("writeToStream error " + std::to_string(writeResult));
+  NetworkClient* rawStream = http.getStreamPtr();
+  if (!rawStream) {
+    setLastError("Missing HTTP stream");
     return false;
+  }
+
+  MarkerBoundedWriteStream stream(outContent, marker, safeBudget, allowTruncate);
+  uint32_t lastDataAtMs = millis();
+  uint8_t buffer[HTTP_READ_BUFFER_SIZE];
+
+  while (http.connected() || rawStream->available() > 0) {
+    const int available = rawStream->available();
+    if (available <= 0) {
+      if ((millis() - lastDataAtMs) > HTTP_READ_TIMEOUT_MS) {
+        setLastError(describeHttpFailure(HTTPC_ERROR_READ_TIMEOUT));
+        return false;
+      }
+      delay(1);
+      continue;
+    }
+
+    const size_t toRead = std::min<size_t>(sizeof(buffer), static_cast<size_t>(available));
+    const int bytesRead = rawStream->readBytes(buffer, toRead);
+    if (bytesRead <= 0) {
+      if ((millis() - lastDataAtMs) > HTTP_READ_TIMEOUT_MS) {
+        setLastError(describeHttpFailure(HTTPC_ERROR_READ_TIMEOUT));
+        return false;
+      }
+      delay(1);
+      continue;
+    }
+
+    lastDataAtMs = millis();
+    stream.write(buffer, static_cast<size_t>(bytesRead));
+    if (stream.overflowed()) {
+      break;
+    }
   }
 
   if (stream.overflowed()) {
@@ -406,11 +477,40 @@ bool streamHttpBodyFromMarker(HTTPClient& http, const std::string& marker, const
     return false;
   }
 
-  MarkerChunkCallbackStream stream(marker, onChunk);
-  const int writeResult = http.writeToStream(&stream);
-  if (writeResult < 0) {
-    setLastError("writeToStream error " + std::to_string(writeResult));
+  NetworkClient* rawStream = http.getStreamPtr();
+  if (!rawStream) {
+    setLastError("Missing HTTP stream");
     return false;
+  }
+
+  MarkerChunkCallbackStream stream(marker, onChunk);
+  uint32_t lastDataAtMs = millis();
+  uint8_t buffer[HTTP_READ_BUFFER_SIZE];
+
+  while (http.connected() || rawStream->available() > 0) {
+    const int available = rawStream->available();
+    if (available <= 0) {
+      if ((millis() - lastDataAtMs) > HTTP_READ_TIMEOUT_MS) {
+        setLastError(describeHttpFailure(HTTPC_ERROR_READ_TIMEOUT));
+        return false;
+      }
+      delay(1);
+      continue;
+    }
+
+    const size_t toRead = std::min<size_t>(sizeof(buffer), static_cast<size_t>(available));
+    const int bytesRead = rawStream->readBytes(buffer, toRead);
+    if (bytesRead <= 0) {
+      if ((millis() - lastDataAtMs) > HTTP_READ_TIMEOUT_MS) {
+        setLastError(describeHttpFailure(HTTPC_ERROR_READ_TIMEOUT));
+        return false;
+      }
+      delay(1);
+      continue;
+    }
+
+    lastDataAtMs = millis();
+    stream.write(buffer, static_cast<size_t>(bytesRead));
   }
 
   if (!stream.started()) {
@@ -505,15 +605,23 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
   if (httpCode != HTTP_CODE_OK) {
     setLastError(describeHttpFailure(httpCode));
     LOG_ERR("HTTP", "Fetch failed: %d", httpCode);
+    OnlineDebugLog::logHttpFailure(url, httpCode, g_lastError);
     http.end();
     return false;
   }
 
-  http.writeToStream(&outContent);
+  const int streamResult = http.writeToStream(&outContent);
+  if (streamResult < 0) {
+    setLastError("writeToStream error " + std::to_string(streamResult));
+    OnlineDebugLog::logHttpFailure(url, streamResult, g_lastError);
+    LOG_ERR("HTTP", "writeToStream failed: %d", streamResult);
+    http.end();
+    return false;
+  }
 
   http.end();
 
-  LOG_DBG("HTTP", "Fetch success");
+  LOG_DBG("HTTP", "Fetch success (%d bytes)", streamResult);
   return true;
 }
 

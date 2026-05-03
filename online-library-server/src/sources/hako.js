@@ -18,9 +18,9 @@ const SEARCH_TTL_MS = 60_000;
 const DETAIL_TTL_MS = 5 * 60_000;
 const TOC_TTL_MS = 5 * 60_000;
 const CHAPTER_TTL_MS = 2 * 60_000;
-const MAX_HOME_ITEMS = 24;
-const MAX_SEARCH_ITEMS = 24;
-const TOC_PAGE_SIZE = 50;
+const MAX_HOME_ITEMS = 12;
+const MAX_SEARCH_ITEMS = 16;
+const TOC_PAGE_SIZE = 24;
 
 function buildSubtitle(volumeTitle, latestChapterTitle) {
   return [volumeTitle, latestChapterTitle].filter(Boolean).join(" | ");

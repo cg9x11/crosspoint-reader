@@ -16,7 +16,7 @@ export const sourceCatalog = [
     supportsSearch: true,
     supportsTrackedUpdates: true,
     supportsBackgroundDownloads: true,
-    supportsPagedToc: false,
+    supportsPagedToc: true,
     supportsX3: true,
     supportsX4: true
   },

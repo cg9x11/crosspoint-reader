@@ -7,6 +7,19 @@ export function normalizeSpace(value) {
     .trim();
 }
 
+export function capText(value, maxChars) {
+  const safeValue = normalizeSpace(value);
+  if (!maxChars || maxChars < 4) {
+    return safeValue;
+  }
+
+  const chars = Array.from(safeValue);
+  if (chars.length <= maxChars) {
+    return safeValue;
+  }
+  return `${chars.slice(0, maxChars - 1).join("")}…`;
+}
+
 function escapeRegExp(value) {
   return String(value ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

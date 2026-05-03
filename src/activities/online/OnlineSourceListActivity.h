@@ -12,10 +12,11 @@ class OnlineSourceListActivity final : public Activity {
   std::vector<CpPluginInfo> supportedPlugins;
   int selectedIndex = 0;
   std::string selectedPluginId;
+  std::string sourceLoadError;
   std::optional<int> pendingLaunchIndex;
   bool autoWifiLaunchPending = false;
 
-  void reloadPlugins();
+  void reloadPlugins(bool forceRefresh = false);
   void restoreSelection();
   void launchSelectedSource();
   void launchWifiSelection();

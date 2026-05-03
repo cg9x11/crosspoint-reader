@@ -76,6 +76,28 @@ void CrossPointSettings::validateFrontButtonMapping(CrossPointSettings& settings
   }
 }
 
+void CrossPointSettings::normalizeForBuild() {
+  if (fontFamily >= FONT_FAMILY_COUNT) {
+    fontFamily = NOTOSERIF;
+  }
+
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+  if (fontFamily == NOTOSANS) {
+    fontFamily = NOTOSERIF;
+  }
+#endif
+
+#ifdef CROSSPOINT_TRIM_OPTIONAL_FONTS
+  if (fontFamily == OPENDYSLEXIC) {
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+    fontFamily = NOTOSERIF;
+#else
+    fontFamily = NOTOSANS;
+#endif
+  }
+#endif
+}
+
 bool CrossPointSettings::saveToFile() const {
   Storage.mkdir("/.crosspoint");
   return JsonSettingsIO::saveSettings(*this, SETTINGS_FILE_JSON);
@@ -88,6 +110,11 @@ bool CrossPointSettings::loadFromFile() {
     if (!json.isEmpty()) {
       bool resave = false;
       bool result = JsonSettingsIO::loadSettings(*this, json.c_str(), &resave);
+      const uint8_t previousFontFamily = fontFamily;
+      normalizeForBuild();
+      if (fontFamily != previousFontFamily) {
+        resave = true;
+      }
       if (result && resave) {
         if (saveToFile()) {
           LOG_DBG("CPS", "Resaved settings to update format");
@@ -219,12 +246,30 @@ bool CrossPointSettings::loadFromBinaryFile() {
     applyLegacyFrontButtonLayout(*this);
   }
 
+  normalizeForBuild();
+
   LOG_DBG("CPS", "Settings loaded from binary file");
   return true;
 }
 
 float CrossPointSettings::getReaderLineCompression() const {
-  switch (fontFamily) {
+  uint8_t effectiveFontFamily = fontFamily;
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+  if (effectiveFontFamily == NOTOSANS) {
+    effectiveFontFamily = NOTOSERIF;
+  }
+#endif
+#ifdef CROSSPOINT_TRIM_OPTIONAL_FONTS
+  if (effectiveFontFamily == OPENDYSLEXIC) {
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+    effectiveFontFamily = NOTOSERIF;
+#else
+    effectiveFontFamily = NOTOSANS;
+#endif
+  }
+#endif
+
+  switch (effectiveFontFamily) {
     case NOTOSERIF:
     default:
       switch (lineSpacing) {
@@ -312,7 +357,23 @@ int CrossPointSettings::getRefreshFrequency() const {
 }
 
 int CrossPointSettings::getReaderFontId() const {
-  switch (fontFamily) {
+  uint8_t effectiveFontFamily = fontFamily;
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+  if (effectiveFontFamily == NOTOSANS) {
+    effectiveFontFamily = NOTOSERIF;
+  }
+#endif
+#ifdef CROSSPOINT_TRIM_OPTIONAL_FONTS
+  if (effectiveFontFamily == OPENDYSLEXIC) {
+#ifdef CROSSPOINT_TRIM_SANS_READER_FONTS
+    effectiveFontFamily = NOTOSERIF;
+#else
+    effectiveFontFamily = NOTOSANS;
+#endif
+  }
+#endif
+
+  switch (effectiveFontFamily) {
     case NOTOSERIF:
     default:
       switch (fontSize) {

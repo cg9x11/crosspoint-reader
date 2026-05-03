@@ -8,7 +8,6 @@
 #include <cctype>
 
 #include "../../OnlineCoverStore.h"
-#include "../../PluginStore.h"
 #include "../../plugins/HakoEpubService.h"
 #include "../../plugins/HakoPluginExecutor.h"
 #include "../../plugins/OnlineSourceBridge.h"
@@ -53,9 +52,12 @@ bool hasDownloadedEpub(const TrackedSeriesInfo& item) {
   return !item.epubPath.empty() && Storage.exists(item.epubPath.c_str());
 }
 
-CpPluginInfo resolvePluginForTrackedItem(const TrackedSeriesInfo& item) {
-  const auto* plugin = PLUGIN_STORE.getPlugin(item.pluginId);
-  return plugin ? *plugin : OnlineSourceBridge::makeFallbackPluginInfo(item.pluginId, item.runtimeProfile);
+bool resolvePluginForTrackedItem(const TrackedSeriesInfo& item, CpPluginInfo& outPlugin) {
+  return OnlineSourceBridge::resolveCatalogPlugin(item.pluginId, item.runtimeProfile, outPlugin);
+}
+
+CpPluginInfo makeProxyPluginForTrackedItem(const TrackedSeriesInfo& item) {
+  return OnlineSourceBridge::makeCanonicalPluginInfo(item.pluginId, item.runtimeProfile);
 }
 
 const char* coverDebugStatus(bool hasCover, bool failed) {
@@ -144,7 +146,13 @@ void TrackedSeriesActivity::rebuildVisibleItems() {
 void TrackedSeriesActivity::syncSelected(int index) {
   if (index < 0 || index >= static_cast<int>(visibleIndices.size())) return;
   const int itemIndex = visibleIndices[index];
-  const CpPluginInfo plugin = resolvePluginForTrackedItem(items[itemIndex]);
+  CpPluginInfo plugin;
+  if (!resolvePluginForTrackedItem(items[itemIndex], plugin)) {
+    popupMessage = OnlineSourceBridge::getLastError().empty() ? "Source unavailable" : OnlineSourceBridge::getLastError();
+    popupUntilMs = millis() + 1800;
+    requestUpdate();
+    return;
+  }
   if (!OnlineSourceBridge::supportsTrackedUpdates(plugin)) {
     popupMessage = "Update check unavailable";
     popupUntilMs = millis() + 1800;
@@ -169,7 +177,13 @@ void TrackedSeriesActivity::syncAllTracked() {
   int queuedCount = 0;
   std::string blockedMessage;
   for (const auto& item : items) {
-    const CpPluginInfo plugin = resolvePluginForTrackedItem(item);
+    CpPluginInfo plugin;
+    if (!resolvePluginForTrackedItem(item, plugin)) {
+      if (blockedMessage.empty()) {
+        blockedMessage = OnlineSourceBridge::getLastError().empty() ? "Source unavailable" : OnlineSourceBridge::getLastError();
+      }
+      continue;
+    }
     if (!OnlineSourceBridge::supportsTrackedUpdates(plugin)) {
       continue;
     }
@@ -190,7 +204,15 @@ void TrackedSeriesActivity::syncAllTracked() {
 void TrackedSeriesActivity::openSeriesDetail(int index) {
   if (index < 0 || index >= static_cast<int>(visibleIndices.size())) return;
   const auto selected = items[visibleIndices[index]];
-  const CpPluginInfo plugin = resolvePluginForTrackedItem(selected);
+  CpPluginInfo plugin;
+  if (!resolvePluginForTrackedItem(selected, plugin)) {
+    RenderLock lock(*this);
+    const std::string message =
+        OnlineSourceBridge::getLastError().empty() ? "Source unavailable" : OnlineSourceBridge::getLastError();
+    GUI.drawPopup(renderer, message.c_str());
+    requestUpdate();
+    return;
+  }
   if (!OnlineSourceBridge::supportsNativeUi(plugin)) {
     RenderLock lock(*this);
     GUI.drawPopup(renderer, "Unsupported source");
@@ -205,7 +227,9 @@ void TrackedSeriesActivity::openSeriesDetail(int index) {
   }
   if (!OnlineSourceBridge::fetchDetail(plugin, selected.seriesUrl, detail)) {
     RenderLock lock(*this);
-    GUI.drawPopup(renderer, "Failed to load series");
+    const std::string message =
+        OnlineSourceBridge::getLastError().empty() ? "Failed to load series" : OnlineSourceBridge::getLastError();
+    GUI.drawPopup(renderer, message.c_str());
     requestUpdate();
     return;
   }
@@ -413,7 +437,14 @@ void TrackedSeriesActivity::maybeLoadSelectedPreview() {
     return;
   }
 
-  const CpPluginInfo plugin = resolvePluginForTrackedItem(*selected);
+  CpPluginInfo plugin;
+  if (!resolvePluginForTrackedItem(*selected, plugin)) {
+    cached->text.clear();
+    cached->resolvedCoverUrl.clear();
+    cached->detailLoaded = true;
+    cached->failed = true;
+    return;
+  }
   if (!OnlineSourceBridge::supportsNativeUi(plugin)) {
     cached->detailLoaded = true;
     cached->failed = true;
@@ -468,7 +499,7 @@ std::string TrackedSeriesActivity::selectedResolvedCoverUrl() const {
     return "";
   }
   if (!selected->coverUrl.empty()) {
-    const CpPluginInfo plugin = resolvePluginForTrackedItem(*selected);
+    const CpPluginInfo plugin = makeProxyPluginForTrackedItem(*selected);
     return OnlineSourceBridge::buildAssetProxyUrl(plugin, selected->coverUrl);
   }
   const auto* cached = findPreviewEntry(selected->seriesUrl);
@@ -596,8 +627,6 @@ std::string TrackedSeriesActivity::confirmLabel() const {
 
   const auto* selected = selectedItem();
   if (!selected) return tr(STR_OPEN);
-  const CpPluginInfo plugin = resolvePluginForTrackedItem(*selected);
-  if (OnlineSourceBridge::supportsNativeUi(plugin)) return "Details";
   if (hasDownloadedEpub(*selected)) return tr(STR_OPEN);
   return "Details";
 }
@@ -756,13 +785,13 @@ void TrackedSeriesActivity::loop() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     const auto* selected = selectedItem();
     if (!selected) return;
-    const CpPluginInfo plugin = resolvePluginForTrackedItem(*selected);
-    if (OnlineSourceBridge::supportsNativeUi(plugin)) {
+    CpPluginInfo plugin;
+    if (resolvePluginForTrackedItem(*selected, plugin) && OnlineSourceBridge::supportsNativeUi(plugin)) {
       openSeriesDetail(selectedIndex);
     } else if (hasDownloadedEpub(*selected)) {
       activityManager.goToReader(selected->epubPath);
     } else {
-      popupMessage = "Unsupported source";
+      popupMessage = OnlineSourceBridge::getLastError().empty() ? "Unsupported source" : OnlineSourceBridge::getLastError();
       popupUntilMs = millis() + 1800;
       requestUpdate();
     }

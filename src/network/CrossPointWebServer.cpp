@@ -20,6 +20,7 @@
 #include "TrackedSeriesStore.h"
 #include "activities/ActivityManager.h"
 #include "activities/RenderLock.h"
+#include "network/BackgroundWebServerRuntime.h"
 #include "plugins/OnlineSourceBridge.h"
 #include "util/ScreenshotUtil.h"
 #include "WebDAVHandler.h"
@@ -207,6 +208,7 @@ void CrossPointWebServer::begin() {
   server->on("/api/remote/status", HTTP_GET, [this] { handleGetRemoteStatus(); });
   server->on("/api/remote/text", HTTP_POST, [this] { handlePostRemoteText(); });
   server->on("/api/remote/button", HTTP_POST, [this] { handlePostRemoteButton(); });
+  server->on("/api/remote/background", HTTP_POST, [this] { handlePostRemoteBackground(); });
   server->on("/api/remote/screen.bmp", HTTP_GET, [this] { handleRemoteScreenBmp(); });
   server->on("/api/files", HTTP_GET, [this] { handleFileListData(); });
   server->on("/download", HTTP_GET, [this] { handleDownload(); });
@@ -518,6 +520,24 @@ void CrossPointWebServer::handlePostRemoteButton() {
   JsonDocument response;
   response["accepted"] = true;
   response["button"] = name;
+  sendJsonResponse(server.get(), response);
+}
+
+void CrossPointWebServer::handlePostRemoteBackground() {
+  JsonDocument response;
+  const std::string currentActivity = activityManager.getCurrentActivityName();
+  response["currentActivity"] = currentActivity;
+
+  if (currentActivity != "CrossPointWebServer") {
+    response["accepted"] = false;
+    response["reason"] = "not_in_file_transfer";
+    sendJsonResponse(server.get(), response);
+    return;
+  }
+
+  BACKGROUND_WEB_SERVER_RUNTIME.requestHandoff();
+  response["accepted"] = true;
+  response["pending"] = true;
   sendJsonResponse(server.get(), response);
 }
 
@@ -1449,6 +1469,7 @@ void CrossPointWebServer::handlePostSettings() {
     }
   }
 
+  SETTINGS.normalizeForBuild();
   SETTINGS.saveToFile();
 
   LOG_DBG("WEB", "Applied %d setting(s)", applied);
@@ -1745,7 +1766,7 @@ void CrossPointWebServer::handleHakoPluginSearch() const {
 
   const String query = server->arg("query");
   const int page = parsePositivePageArg(server->arg("page"));
-  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeFallbackPluginInfo("hako", "hako");
+  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeCanonicalPluginInfo("hako", "hako");
 
   std::vector<HakoSearchResult> results;
   if (!OnlineSourceBridge::search(pluginInfo, query.c_str(), page, results)) {
@@ -1774,7 +1795,7 @@ void CrossPointWebServer::handleHakoPluginDetail() const {
     return;
   }
 
-  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeFallbackPluginInfo("hako", "hako");
+  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeCanonicalPluginInfo("hako", "hako");
   HakoBookDetail detail;
   if (!OnlineSourceBridge::fetchDetail(pluginInfo, server->arg("url").c_str(), detail)) {
     server->send(502, "text/plain", OnlineSourceBridge::getLastError().c_str());
@@ -1802,7 +1823,7 @@ void CrossPointWebServer::handleHakoPluginToc() const {
     return;
   }
 
-  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeFallbackPluginInfo("hako", "hako");
+  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeCanonicalPluginInfo("hako", "hako");
   std::vector<HakoChapterRef> chapters;
   if (!OnlineSourceBridge::fetchToc(pluginInfo, server->arg("url").c_str(), chapters)) {
     server->send(502, "text/plain", OnlineSourceBridge::getLastError().c_str());
@@ -1830,7 +1851,7 @@ void CrossPointWebServer::handleHakoPluginChapter() const {
   ref.title = server->hasArg("title") ? server->arg("title").c_str() : "";
   ref.index = server->hasArg("index") ? static_cast<uint32_t>(std::max<long>(0, server->arg("index").toInt())) : 0;
 
-  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeFallbackPluginInfo("hako", "hako");
+  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeCanonicalPluginInfo("hako", "hako");
   HakoChapterContent chapter;
   if (!OnlineSourceBridge::fetchChapter(pluginInfo, ref, chapter)) {
     server->send(502, "text/plain", OnlineSourceBridge::getLastError().c_str());
@@ -1855,7 +1876,7 @@ void CrossPointWebServer::handleHakoPluginUpdates() const {
 
   const std::string url = server->arg("url").c_str();
   const std::string lastChapterUrl = server->hasArg("lastChapterUrl") ? server->arg("lastChapterUrl").c_str() : "";
-  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeFallbackPluginInfo("hako", "hako");
+  const CpPluginInfo pluginInfo = OnlineSourceBridge::makeCanonicalPluginInfo("hako", "hako");
 
   HakoBookDetail detail;
   std::vector<HakoChapterRef> chapters;

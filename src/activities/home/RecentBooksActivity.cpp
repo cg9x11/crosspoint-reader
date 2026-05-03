@@ -8,7 +8,6 @@
 #include <algorithm>
 
 #include "MappedInputManager.h"
-#include "PluginStore.h"
 #include "RecentBooksStore.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/online/HakoBookDetailActivity.h"
@@ -23,26 +22,8 @@ bool isWifiReadyForOnlineRecent() {
   return WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
 }
 
-CpPluginInfo resolvePluginForRecentBook(const RecentBook& book) {
-  if (const auto* exact = PLUGIN_STORE.getPlugin(book.pluginId)) {
-    return *exact;
-  }
-
-  const std::string family = PluginStore::canonicalizeRuntimeProfile(book.pluginId, book.runtimeProfile);
-  const CpPluginInfo* best = nullptr;
-  for (const auto& plugin : PLUGIN_STORE.getPlugins()) {
-    if (PluginStore::canonicalizeRuntimeProfile(plugin.id, plugin.runtimeProfile) != family) {
-      continue;
-    }
-    if (!plugin.supportsSearch || !OnlineSourceBridge::supportsNativeUi(plugin)) {
-      continue;
-    }
-    if (!best || (best->runtimeOrigin != "server" && plugin.runtimeOrigin == "server")) {
-      best = &plugin;
-    }
-  }
-
-  return best ? *best : OnlineSourceBridge::makeFallbackPluginInfo(book.pluginId, book.runtimeProfile);
+bool resolvePluginForRecentBook(const RecentBook& book, CpPluginInfo& outPlugin) {
+  return OnlineSourceBridge::resolveCatalogPlugin(book.pluginId, book.runtimeProfile, outPlugin);
 }
 }  // namespace
 
@@ -142,7 +123,15 @@ void RecentBooksActivity::onSelectBook(const RecentBook& book) {
 }
 
 void RecentBooksActivity::openOnlineRecentBook(const RecentBook& book) {
-  const CpPluginInfo plugin = resolvePluginForRecentBook(book);
+  CpPluginInfo plugin;
+  if (!resolvePluginForRecentBook(book, plugin)) {
+    RenderLock lock(*this);
+    const std::string message =
+        OnlineSourceBridge::getLastError().empty() ? "Source unavailable" : OnlineSourceBridge::getLastError();
+    GUI.drawPopup(renderer, message.c_str());
+    requestUpdate();
+    return;
+  }
   if (!OnlineSourceBridge::supportsNativeUi(plugin)) {
     RenderLock lock(*this);
     GUI.drawPopup(renderer, "Unsupported source");

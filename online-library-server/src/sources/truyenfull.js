@@ -17,8 +17,8 @@ const SEARCH_TTL_MS = 60_000;
 const DETAIL_TTL_MS = 5 * 60_000;
 const TOC_PAGE_TTL_MS = 5 * 60_000;
 const CHAPTER_TTL_MS = 2 * 60_000;
-const MAX_HOME_ITEMS = 24;
-const MAX_SEARCH_ITEMS = 24;
+const MAX_HOME_ITEMS = 12;
+const MAX_SEARCH_ITEMS = 16;
 
 function buildTocPageUrl(inputUrl, page) {
   const base = absoluteUrl(BASE_URL, inputUrl).replace(/#.*$/, "").replace(/\/$/, "");

@@ -76,6 +76,14 @@ std::string canonicalizedRuntimeProfileFor(const std::string& pluginId, const st
   return runtimeProfile;
 }
 
+std::string canonicalizedBaseUrlFor(const std::string& runtimeOrigin, const std::string& runtimeProfile,
+                                    const std::string& baseUrl) {
+  if (runtimeOrigin == "server" && (runtimeProfile == "hako" || runtimeProfile == "truyenfull")) {
+    return DEFAULT_ONLINE_LIBRARY_BASE_URL;
+  }
+  return baseUrl;
+}
+
 bool isBundledOnlineLibraryPlugin(const std::string& pluginId) { return pluginId == "hako" || pluginId == "truyenfull"; }
 
 std::string expectedRuntimeProfileForBundledPlugin(const std::string& pluginId) {
@@ -178,7 +186,7 @@ bool parsePluginJson(const char* json, CpPluginInfo& outInfo, std::string* outEr
   }
   outInfo.version = plugin["version"] | static_cast<uint32_t>(0);
   outInfo.runtimeOrigin = adapter["origin"] | std::string("");
-  outInfo.baseUrl = source["baseUrl"] | std::string("");
+  outInfo.baseUrl = canonicalizedBaseUrlFor(outInfo.runtimeOrigin, outInfo.runtimeProfile, source["baseUrl"] | std::string(""));
   outInfo.locale = source["locale"] | std::string("");
   outInfo.contentType = source["contentType"] | std::string("");
   outInfo.supportsSearch = source["supportsSearch"] | false;

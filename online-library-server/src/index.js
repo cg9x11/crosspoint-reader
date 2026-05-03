@@ -2,7 +2,7 @@ import Fastify from "fastify";
 
 import { createCache } from "./lib/cache.js";
 import { fetchBinary } from "./lib/fetch.js";
-import { shortError } from "./lib/text.js";
+import { capText, shortError } from "./lib/text.js";
 import { getSource, sourceCatalog, sources } from "./sources/index.js";
 
 const host = process.env.HOST || "0.0.0.0";
@@ -54,6 +54,55 @@ function oneLine(value) {
   return String(value || "").replace(/\r?\n/g, " ").trim();
 }
 
+function rawField(value) {
+  return oneLine(value).replace(/\t/g, " ");
+}
+
+function cappedRawField(value, maxChars) {
+  return rawField(capText(value, maxChars));
+}
+
+function sendRawItems(reply, items) {
+  const lines = ["CPIT1", ""];
+  for (const item of items || []) {
+    lines.push(
+      [
+        rawField(item.url || ""),
+        cappedRawField(item.title || "", 120),
+        cappedRawField(item.description || "", 160),
+        rawField(item.coverUrl || ""),
+        cappedRawField(item.homeSectionLabel || "", 40),
+        cappedRawField(item.homeVolumeTitle || "", 88),
+        cappedRawField(item.homeLatestChapterTitle || "", 112),
+        cappedRawField(item.homeDisplaySubtitle || "", 160)
+      ].join("\t")
+    );
+  }
+
+  reply.header("content-type", "text/plain; charset=utf-8");
+  reply.code(200).send(lines.join("\n"));
+}
+
+function sendRawDetail(reply, detail) {
+  const genres = Array.isArray(detail.genres) ? detail.genres.map((genre) => cappedRawField(genre || "", 40)).join("\t") : "";
+  const wire = [
+    "CPDT1",
+    oneLine(detail.url || ""),
+    cappedRawField(detail.title || "", 160),
+    cappedRawField(detail.author || "", 96),
+    oneLine(detail.coverUrl || ""),
+    oneLine(detail.latestChapterUrl || ""),
+    cappedRawField(detail.latestChapterTitle || "", 120),
+    detail.ongoing ? "1" : "0",
+    genres,
+    "",
+    String(detail.descriptionHtml || "")
+  ].join("\n");
+
+  reply.header("content-type", "text/plain; charset=utf-8");
+  reply.code(200).send(wire);
+}
+
 function sendRawChapter(reply, chapter, options) {
   const mode = options.includeText ? "text" : "html";
   const payload = options.includeText ? String(chapter.text || "") : String(chapter.html || "");
@@ -62,8 +111,8 @@ function sendRawChapter(reply, chapter, options) {
     "CPCH1",
     mode,
     oneLine(ref.url || chapter.url || ""),
-    oneLine(ref.title || chapter.title || ""),
-    oneLine(ref.sectionTitle || ""),
+    cappedRawField(ref.title || chapter.title || "", 160),
+    cappedRawField(ref.sectionTitle || "", 96),
     String(Number.isFinite(ref.index) ? ref.index : 0),
     "",
     payload
@@ -71,6 +120,29 @@ function sendRawChapter(reply, chapter, options) {
 
   reply.header("content-type", "text/plain; charset=utf-8");
   reply.code(200).send(wire);
+}
+
+function sendRawTocPage(reply, result) {
+  const lines = [
+    "CPTP1",
+    String(Number(result.page || 1)),
+    String(Number(result.totalPages || 1)),
+    ""
+  ];
+
+  for (const chapter of result.chapters || []) {
+    lines.push(
+      [
+        String(Number(chapter.index || 0)),
+        rawField(chapter.url || ""),
+        cappedRawField(chapter.title || "", 128),
+        cappedRawField(chapter.sectionTitle || "", 72)
+      ].join("\t")
+    );
+  }
+
+  reply.header("content-type", "text/plain; charset=utf-8");
+  reply.code(200).send(lines.join("\n"));
 }
 
 app.get("/health", async (_request, reply) => {
@@ -109,6 +181,10 @@ app.get("/api/v1/source/:profile/home", async (request, reply) => {
   try {
     const source = requireSource(request.params.profile);
     const items = await source.home({ cache });
+    if (String(request.query.format || "").trim().toLowerCase() === "raw") {
+      sendRawItems(reply, items);
+      return;
+    }
     sendOk(reply, { items });
   } catch (error) {
     sendError(reply, error);
@@ -124,6 +200,10 @@ app.get("/api/v1/source/:profile/search", async (request, reply) => {
     }
     const page = Number(request.query.page || 1);
     const items = await source.search(query, page, { cache });
+    if (String(request.query.format || "").trim().toLowerCase() === "raw") {
+      sendRawItems(reply, items);
+      return;
+    }
     sendOk(reply, { items });
   } catch (error) {
     sendError(reply, error);
@@ -138,6 +218,10 @@ app.get("/api/v1/source/:profile/detail", async (request, reply) => {
       throw new Error("Missing url");
     }
     const detail = await source.detail(url, { cache });
+    if (String(request.query.format || "").trim().toLowerCase() === "raw") {
+      sendRawDetail(reply, detail);
+      return;
+    }
     sendOk(reply, detail);
   } catch (error) {
     sendError(reply, error);
@@ -153,6 +237,10 @@ app.get("/api/v1/source/:profile/toc-page", async (request, reply) => {
     }
     const page = Number(request.query.page || 1);
     const result = await source.tocPage(url, page, { cache });
+    if (String(request.query.format || "").trim().toLowerCase() === "raw") {
+      sendRawTocPage(reply, result);
+      return;
+    }
     sendOk(reply, result);
   } catch (error) {
     sendError(reply, error);

@@ -5,6 +5,7 @@
 
 #include <string>
 
+#include "network/WirelessCoordinator.h"
 #include "components/UITheme.h"
 
 void BluetoothActivity::onEnter() {
@@ -22,6 +23,7 @@ int BluetoothActivity::getRowCount() const { return 1 + static_cast<int>(BLUETOO
 
 void BluetoothActivity::startScan() {
   pendingInitialScan = false;
+  prepareForBluetoothUse("BTUI");
   BLUETOOTH_MANAGER.scanForDevices();
   popupMessage = BLUETOOTH_MANAGER.getStatusMessage();
   popupUntilMs = millis() + 1200;
@@ -104,6 +106,7 @@ void BluetoothActivity::loop() {
       return;
     }
 
+    prepareForBluetoothUse("BTUI");
     if (!BLUETOOTH_MANAGER.connectToIndex(static_cast<size_t>(selectedIndex - 1))) {
       popupMessage = BLUETOOTH_MANAGER.getStatusMessage();
       if (popupMessage.empty()) {

@@ -19,13 +19,15 @@ bool supportsNativeUi(const CpPluginInfo& pluginInfo);
 bool supportsBackgroundDownloads(const CpPluginInfo& pluginInfo);
 bool supportsTrackedUpdates(const CpPluginInfo& pluginInfo);
 bool supportsPagedToc(const CpPluginInfo& pluginInfo);
+int pagedTocPageSize(const CpPluginInfo& pluginInfo);
 std::string runtimeProfileFor(const CpPluginInfo& pluginInfo);
 const std::string& getLastError();
 std::string buildAssetProxyUrl(const CpPluginInfo& pluginInfo, const std::string& assetUrl,
                                const std::string& baseUrl = "");
-CpPluginInfo makeFallbackPluginInfo(const std::string& pluginId, const std::string& runtimeProfile = "");
-void buildFallbackSourceCatalog(std::vector<CpPluginInfo>& outSources);
-bool fetchSourceCatalog(std::vector<CpPluginInfo>& outSources);
+CpPluginInfo makeCanonicalPluginInfo(const std::string& pluginId, const std::string& runtimeProfile = "");
+bool fetchSourceCatalog(std::vector<CpPluginInfo>& outSources, bool forceRefresh = false);
+bool resolveCatalogPlugin(const std::string& pluginId, const std::string& runtimeProfile, CpPluginInfo& outInfo,
+                          bool forceRefresh = false);
 void clearMemoryCaches();
 
 bool fetchHomeFeed(const CpPluginInfo& pluginInfo, std::vector<HakoSearchResult>& outResults);

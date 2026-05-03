@@ -22,8 +22,6 @@
 namespace {
 constexpr unsigned long SUMMARY_MODE_SWITCH_MS = 700;
 constexpr int MAX_SUMMARY_WRAP_LINES = 128;
-constexpr int TOC_PAGE_SIZE = 50;
-
 HakoDownloadOptions makeForegroundDownloadOptions() {
   ONLINE_LIBRARY_SETTINGS_STORE.loadFromDisk();
   const auto& settings = ONLINE_LIBRARY_SETTINGS_STORE.get();
@@ -295,7 +293,8 @@ bool HakoBookDetailActivity::tryLoadPagedChapterContext(const HakoChapterRef& re
   }
 
   OnlineSourceBridge::TocPageResult pageResult;
-  const int targetPage = std::max(1, ((preferredChapterIndex - 1) / TOC_PAGE_SIZE) + 1);
+  const int pageSize = std::max(1, OnlineSourceBridge::pagedTocPageSize(pluginInfo));
+  const int targetPage = std::max(1, ((preferredChapterIndex - 1) / pageSize) + 1);
   if (!OnlineSourceBridge::fetchTocPage(pluginInfo, detail.url, targetPage, pageResult) || pageResult.chapters.empty()) {
     return false;
   }
@@ -315,7 +314,9 @@ bool HakoBookDetailActivity::tryLoadPagedChapterContext(const HakoChapterRef& re
   }
 
   if (outChapterIndex < 0) {
-    const int fallbackIndex = preferredChapterIndex - ((outCurrentPage - 1) * TOC_PAGE_SIZE) - 1;
+    const int pageBaseIndex =
+        !outChapters.empty() && outChapters.front().index > 0 ? static_cast<int>(outChapters.front().index) : ((outCurrentPage - 1) * pageSize) + 1;
+    const int fallbackIndex = preferredChapterIndex - pageBaseIndex;
     if (fallbackIndex >= 0 && fallbackIndex < static_cast<int>(outChapters.size())) {
       outChapterIndex = fallbackIndex;
     }

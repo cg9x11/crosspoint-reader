@@ -114,6 +114,7 @@ class CrossPointWebServer {
   void handleGetRemoteStatus() const;
   void handlePostRemoteText();
   void handlePostRemoteButton();
+  void handlePostRemoteBackground();
   void handleRemoteScreenBmp() const;
   void handleFileList() const;
   void handleFileListData() const;

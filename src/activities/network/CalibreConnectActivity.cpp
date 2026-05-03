@@ -10,6 +10,7 @@
 #include "WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WirelessCoordinator.h"
 
 namespace {
 constexpr const char* HOSTNAME = "crosspoint";
@@ -17,6 +18,7 @@ constexpr const char* HOSTNAME = "crosspoint";
 
 void CalibreConnectActivity::onEnter() {
   Activity::onEnter();
+  prepareForWifiUse("CAL");
 
   requestUpdate();
   state = CalibreConnectState::WIFI_SELECTION;

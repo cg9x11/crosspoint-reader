@@ -181,6 +181,10 @@ void ActivityManager::replaceCurrentActivity(std::unique_ptr<Activity>&& newActi
 }
 
 void ActivityManager::goToFileTransfer() {
+  if (currentActivity) {
+    pushActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
+    return;
+  }
   replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
 }
 

@@ -28,6 +28,7 @@ class BLERemoteCharacteristic;
 class BluetoothManager {
  public:
   bool ensureInitialized();
+  bool isInitialized() const;
   void loop();
   void shutdown();
 

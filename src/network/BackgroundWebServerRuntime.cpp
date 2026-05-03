@@ -12,10 +12,12 @@ bool BackgroundWebServerRuntime::isRunning() const { return server && server->is
 void BackgroundWebServerRuntime::activate(std::unique_ptr<CrossPointWebServer>&& newServer) {
   server = std::move(newServer);
   lastHandleClientTime = 0;
+  handoffRequested = false;
 }
 
 std::unique_ptr<CrossPointWebServer> BackgroundWebServerRuntime::takeOwnership() {
   lastHandleClientTime = 0;
+  handoffRequested = false;
   return std::move(server);
 }
 
@@ -25,6 +27,7 @@ void BackgroundWebServerRuntime::stop() {
     server.reset();
   }
   lastHandleClientTime = 0;
+  handoffRequested = false;
 }
 
 void BackgroundWebServerRuntime::loop() {
@@ -54,4 +57,12 @@ void BackgroundWebServerRuntime::loop() {
     server.reset();
     lastHandleClientTime = 0;
   }
+}
+
+void BackgroundWebServerRuntime::requestHandoff() { handoffRequested = true; }
+
+bool BackgroundWebServerRuntime::consumeHandoffRequest() {
+  const bool requested = handoffRequested;
+  handoffRequested = false;
+  return requested;
 }

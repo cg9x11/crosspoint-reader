@@ -5,6 +5,7 @@
 #include <Logging.h>
 
 #include <algorithm>
+#include <cctype>
 #include <functional>
 #include <sstream>
 
@@ -18,6 +19,7 @@ namespace {
 constexpr char MODULE[] = "BGDL";
 constexpr unsigned WORKER_IDLE_DELAY_MS = 250;
 constexpr uint32_t WORKER_TASK_STACK_WORDS = 7168;
+
 bool isActiveStatus(DownloadJobStatus status) {
   return status == DownloadJobStatus::Queued || status == DownloadJobStatus::Running || status == DownloadJobStatus::RetryWait;
 }
@@ -63,9 +65,20 @@ HakoDownloadOptions makeDownloadOptions() {
   return options;
 }
 
-CpPluginInfo resolvePluginInfo(const std::string& pluginId, const std::string& runtimeProfile) {
-  const auto* plugin = PLUGIN_STORE.getPlugin(pluginId);
-  return plugin ? *plugin : OnlineSourceBridge::makeFallbackPluginInfo(pluginId, runtimeProfile);
+bool containsAsciiCaseInsensitive(const std::string& haystack, const char* needle) {
+  return std::search(haystack.begin(), haystack.end(), needle, needle + std::char_traits<char>::length(needle),
+                     [](const char left, const char right) {
+                       return std::tolower(static_cast<unsigned char>(left)) ==
+                              std::tolower(static_cast<unsigned char>(right));
+                     }) != haystack.end();
+}
+
+bool resolvePluginInfo(const std::string& pluginId, const std::string& runtimeProfile, CpPluginInfo& outPlugin) {
+  return OnlineSourceBridge::resolveCatalogPlugin(pluginId, runtimeProfile, outPlugin);
+}
+
+bool shouldRetryPluginResolutionFailure(const std::string& message) {
+  return !containsAsciiCaseInsensitive(message, "source unavailable");
 }
 
 std::string compactBackgroundError(const std::string& message, const char* fallback) {
@@ -272,7 +285,13 @@ bool BackgroundDownloadManager::enqueueHakoDownload(const CpPluginInfo& pluginIn
 
 bool BackgroundDownloadManager::enqueueTrackedSync(const TrackedSeriesInfo& trackedItem, std::string* outMessage) {
   if (!mutex) begin();
-  const CpPluginInfo pluginInfo = resolvePluginInfo(trackedItem.pluginId, trackedItem.runtimeProfile);
+  CpPluginInfo pluginInfo;
+  if (!resolvePluginInfo(trackedItem.pluginId, trackedItem.runtimeProfile, pluginInfo)) {
+    if (outMessage) {
+      *outMessage = compactBackgroundError(OnlineSourceBridge::getLastError(), "Source unavailable");
+    }
+    return false;
+  }
   const DownloadJobKind jobKind =
       OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo) ? DownloadJobKind::HakoSync : DownloadJobKind::TrackedSync;
   if (deviceRequiresForegroundOnlyDownloads() && isForegroundOnlyEpubJob(jobKind)) {
@@ -427,7 +446,28 @@ bool BackgroundDownloadManager::runJob(const DownloadJobInfo& job) {
   const auto onlineSettings = loadOnlineLibrarySettings();
   const auto options = makeDownloadOptions();
   if (job.kind == DownloadJobKind::HakoDownload) {
-    const CpPluginInfo pluginInfo = resolvePluginInfo(job.pluginId, job.runtimeProfile);
+    CpPluginInfo pluginInfo;
+    if (!resolvePluginInfo(job.pluginId, job.runtimeProfile, pluginInfo)) {
+      const std::string loadError = compactBackgroundError(OnlineSourceBridge::getLastError(), "Source unavailable");
+      xSemaphoreTake(mutex, portMAX_DELAY);
+      if (const auto index = findJobIndexByIdLocked(job.id)) {
+        auto& current = jobs[*index];
+        current.retryCount++;
+        if (shouldRetryPluginResolutionFailure(loadError) && current.retryCount <= onlineSettings.maxJobRetries) {
+          current.status = DownloadJobStatus::RetryWait;
+          current.nextRetryAtMs = millis() + nextRetryDelayMs(current.retryCount - 1, onlineSettings);
+          current.statusMessage = loadError;
+        } else {
+          current.status = DownloadJobStatus::Failed;
+          current.statusMessage = loadError;
+        }
+        current.updatedAtMs = millis();
+        saveJobsLocked();
+      }
+      xSemaphoreGive(mutex);
+      requestUiRefresh();
+      return false;
+    }
     if (!OnlineSourceBridge::supportsBackgroundDownloads(pluginInfo)) {
       xSemaphoreTake(mutex, portMAX_DELAY);
       if (const auto index = findJobIndexByIdLocked(job.id)) {
@@ -476,7 +516,8 @@ bool BackgroundDownloadManager::runJob(const DownloadJobInfo& job) {
         current.statusMessage = "Cancelled";
       } else if (ok) {
         TRACKED_SERIES_STORE.ensureLoaded();
-        const auto resolvedPlugin = resolvePluginInfo(current.pluginId, current.runtimeProfile);
+        CpPluginInfo resolvedPlugin = pluginInfo;
+        resolvePluginInfo(current.pluginId, current.runtimeProfile, resolvedPlugin);
         auto updatedTracked = HakoEpubService::makeTrackedInfo(resolvedPlugin, detail, toc, nullptr);
         if (const auto* existing = TRACKED_SERIES_STORE.getById(current.trackedSeriesId); existing) {
           updatedTracked = HakoEpubService::makeTrackedInfo(resolvedPlugin, detail, toc, existing);
@@ -525,7 +566,28 @@ bool BackgroundDownloadManager::runJob(const DownloadJobInfo& job) {
       return false;
     }
 
-    const CpPluginInfo pluginInfo = resolvePluginInfo(job.pluginId, job.runtimeProfile);
+    CpPluginInfo pluginInfo;
+    if (!resolvePluginInfo(job.pluginId, job.runtimeProfile, pluginInfo)) {
+      const std::string loadError = compactBackgroundError(OnlineSourceBridge::getLastError(), "Source unavailable");
+      xSemaphoreTake(mutex, portMAX_DELAY);
+      if (const auto index = findJobIndexByIdLocked(job.id)) {
+        auto& current = jobs[*index];
+        current.retryCount++;
+        if (shouldRetryPluginResolutionFailure(loadError) && current.retryCount <= onlineSettings.maxJobRetries) {
+          current.status = DownloadJobStatus::RetryWait;
+          current.nextRetryAtMs = millis() + nextRetryDelayMs(current.retryCount - 1, onlineSettings);
+          current.statusMessage = loadError;
+        } else {
+          current.status = DownloadJobStatus::Failed;
+          current.statusMessage = loadError;
+        }
+        current.updatedAtMs = millis();
+        saveJobsLocked();
+      }
+      xSemaphoreGive(mutex);
+      requestUiRefresh();
+      return false;
+    }
     TrackedSeriesInfo updatedTracked;
     uint32_t newChapterCount = 0;
     std::string message;
@@ -578,7 +640,28 @@ bool BackgroundDownloadManager::runJob(const DownloadJobInfo& job) {
   }
 
   HakoTrackedSyncResult result;
-  const CpPluginInfo pluginInfo = resolvePluginInfo(job.pluginId, job.runtimeProfile);
+  CpPluginInfo pluginInfo;
+  if (!resolvePluginInfo(job.pluginId, job.runtimeProfile, pluginInfo)) {
+    const std::string loadError = compactBackgroundError(OnlineSourceBridge::getLastError(), "Source unavailable");
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    if (const auto index = findJobIndexByIdLocked(job.id)) {
+      auto& current = jobs[*index];
+      current.retryCount++;
+      if (shouldRetryPluginResolutionFailure(loadError) && current.retryCount <= onlineSettings.maxJobRetries) {
+        current.status = DownloadJobStatus::RetryWait;
+        current.nextRetryAtMs = millis() + nextRetryDelayMs(current.retryCount - 1, onlineSettings);
+        current.statusMessage = loadError;
+      } else {
+        current.status = DownloadJobStatus::Failed;
+        current.statusMessage = loadError;
+      }
+      current.updatedAtMs = millis();
+      saveJobsLocked();
+    }
+    xSemaphoreGive(mutex);
+    requestUiRefresh();
+    return false;
+  }
   const bool ok = HakoEpubService::syncTrackedSeries(pluginInfo, *trackedItem, result, &options, progress);
   xSemaphoreTake(mutex, portMAX_DELAY);
   if (const auto index = findJobIndexByIdLocked(job.id)) {

@@ -105,6 +105,7 @@ void FileBrowserActivity::onEnter() {
   Activity::onEnter();
 
   selectorIndex = 0;
+  consumeConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
 
   auto root = Storage.open(basepath.c_str());
   if (!root) {
@@ -155,6 +156,11 @@ void FileBrowserActivity::loop() {
 
   if (lockLongPressBack && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     lockLongPressBack = false;
+    return;
+  }
+
+  if (consumeConfirmRelease && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    consumeConfirmRelease = false;
     return;
   }
 

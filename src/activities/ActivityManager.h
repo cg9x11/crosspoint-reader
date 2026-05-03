@@ -102,6 +102,7 @@ class ActivityManager {
   bool preventAutoSleep() const;
   bool isReaderActivity() const;
   bool skipLoopDelay() const;
+  bool hasStackActivities() const { return !stackActivities.empty(); }
   std::string getCurrentActivityName() const;
   std::vector<std::string> getStackActivityNames() const;
   std::string getPendingActivityName() const;

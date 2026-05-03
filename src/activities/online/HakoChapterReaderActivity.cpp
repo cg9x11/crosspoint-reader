@@ -1,6 +1,7 @@
 #include "HakoChapterReaderActivity.h"
 
 #include <CrossPointSettings.h>
+#include <ESP.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -23,8 +24,8 @@
 
 namespace {
 constexpr char READER_CACHE_DIR[] = "/.crosspoint/data/online_cache";
-constexpr int TOC_PAGE_SIZE = 50;
-
+constexpr uint32_t ONLINE_READER_PREWARM_MIN_FREE_HEAP = 110 * 1024;
+constexpr uint32_t ONLINE_READER_PREWARM_MIN_LARGEST_BLOCK = 48 * 1024;
 std::string lowerAscii(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -124,10 +125,8 @@ void releaseChapterPayload(HakoChapterContent& chapter) {
     Storage.remove(chapter.textFilePath.c_str());
     chapter.textFilePath.clear();
   }
-  chapter.text.clear();
-  chapter.text.shrink_to_fit();
-  chapter.html.clear();
-  chapter.html.shrink_to_fit();
+  std::string().swap(chapter.text);
+  std::string().swap(chapter.html);
 }
 
 std::string buildReaderCachePath(const HakoChapterRef& ref) {
@@ -157,6 +156,14 @@ bool readUtf8Line(FsFile& file, std::string& outLine) {
     outLine.pop_back();
   }
   return !outLine.empty();
+}
+
+bool shouldUseOnlineReaderPrewarm() {
+  if (gpio.deviceIsX3() || gpio.deviceIsX4()) {
+    return false;
+  }
+  return ESP.getFreeHeap() >= ONLINE_READER_PREWARM_MIN_FREE_HEAP &&
+         ESP.getMaxAllocHeap() >= ONLINE_READER_PREWARM_MIN_LARGEST_BLOCK;
 }
 
 template <typename EmitFn>
@@ -293,7 +300,8 @@ int HakoChapterReaderActivity::currentAbsoluteChapterIndex() const {
     return static_cast<int>(chapter.ref.index);
   }
   if (chapterIndex >= 0 && chapterIndex < static_cast<int>(chapters.size()) && pagedCurrentPage > 0) {
-    return ((pagedCurrentPage - 1) * TOC_PAGE_SIZE) + chapterIndex + 1;
+    const int pageSize = std::max(1, OnlineSourceBridge::pagedTocPageSize(pluginInfo));
+    return ((pagedCurrentPage - 1) * pageSize) + chapterIndex + 1;
   }
   if (!pagedTocMode && chapterIndex >= 0 && chapterIndex < static_cast<int>(chapters.size())) {
     return chapterIndex + 1;
@@ -337,7 +345,8 @@ bool HakoChapterReaderActivity::loadPagedChapterContext(const int targetAbsolute
   }
 
   OnlineSourceBridge::TocPageResult pageResult;
-  const int targetPage = std::max(1, ((targetAbsoluteIndex - 1) / TOC_PAGE_SIZE) + 1);
+  const int pageSize = std::max(1, OnlineSourceBridge::pagedTocPageSize(pluginInfo));
+  const int targetPage = std::max(1, ((targetAbsoluteIndex - 1) / pageSize) + 1);
   if (!OnlineSourceBridge::fetchTocPage(pluginInfo, seriesUrl, targetPage, pageResult) || pageResult.chapters.empty()) {
     return false;
   }
@@ -353,7 +362,9 @@ bool HakoChapterReaderActivity::loadPagedChapterContext(const int targetAbsolute
   }
 
   if (outLocalIndex < 0) {
-    const int fallbackIndex = targetAbsoluteIndex - ((outPage - 1) * TOC_PAGE_SIZE) - 1;
+    const int pageBaseIndex =
+        !outChapters.empty() && outChapters.front().index > 0 ? static_cast<int>(outChapters.front().index) : ((outPage - 1) * pageSize) + 1;
+    const int fallbackIndex = targetAbsoluteIndex - pageBaseIndex;
     if (fallbackIndex >= 0 && fallbackIndex < static_cast<int>(outChapters.size())) {
       outLocalIndex = fallbackIndex;
     }
@@ -457,18 +468,19 @@ void HakoChapterReaderActivity::openChapterList() {
     return;
   }
 
+  const bool usePagedChapterList = pagedTocMode || (chapters.empty() && canUsePagedTocFallback());
+
   startActivityForResult(
       std::make_unique<HakoChapterListActivity>(
           renderer, mappedInput, pluginInfo, seriesTitle.empty() ? StringUtils::toDisplaySafeAscii(chapter.ref.title) : seriesTitle,
-          seriesAuthor, canUsePagedTocFallback() ? std::vector<HakoChapterRef>{} : chapters, false, trackedSeriesId, seriesUrl,
-          canUsePagedTocFallback(),
+          seriesAuthor, chapters, false, trackedSeriesId, seriesUrl, usePagedChapterList,
           chapter.ref.url, chapter.ref.title, currentAbsoluteChapterIndex(), true),
-      [this](const ActivityResult& result) {
+      [this, usePagedChapterList](const ActivityResult& result) {
         if (result.isCancelled || !std::holds_alternative<OnlineChapterResult>(result.data)) {
           return;
         }
         const int targetIndex = std::get<OnlineChapterResult>(result.data).chapterIndex;
-        if (canUsePagedTocFallback()) {
+        if (usePagedChapterList) {
           const int currentAbsoluteIndex = currentAbsoluteChapterIndex();
           if (targetIndex + 1 == currentAbsoluteIndex) {
             requestUpdate();
@@ -755,9 +767,11 @@ void HakoChapterReaderActivity::render(RenderLock&&) {
   };
 
   auto* fcm = renderer.getFontCacheManager();
-  auto scope = fcm->createPrewarmScope();
-  renderChapterLines();
-  scope.endScanAndPrewarm();
+  if (fcm != nullptr && shouldUseOnlineReaderPrewarm()) {
+    auto scope = fcm->createPrewarmScope();
+    renderChapterLines();
+    scope.endScanAndPrewarm();
+  }
 
   renderChapterLines();
 

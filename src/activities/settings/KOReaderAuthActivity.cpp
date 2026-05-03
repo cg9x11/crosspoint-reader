@@ -10,6 +10,7 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WirelessCoordinator.h"
 
 void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
   if (!success) {
@@ -50,6 +51,7 @@ void KOReaderAuthActivity::performAuthentication() {
 
 void KOReaderAuthActivity::onEnter() {
   Activity::onEnter();
+  prepareForWifiUse("KOSYNC");
 
   // Check if already connected
   if (WiFi.status() == WL_CONNECTED) {

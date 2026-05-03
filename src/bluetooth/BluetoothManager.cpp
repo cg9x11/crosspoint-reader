@@ -136,6 +136,8 @@ bool BluetoothManager::ensureInitialized() {
   return true;
 }
 
+bool BluetoothManager::isInitialized() const { return initialized; }
+
 void BluetoothManager::loop() {
   if (!initialized) {
     return;

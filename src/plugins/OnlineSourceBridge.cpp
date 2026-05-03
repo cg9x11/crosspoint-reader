@@ -4,7 +4,6 @@
 #include <ArduinoJson.h>
 #include <HalStorage.h>
 #include <Logging.h>
-#include <WiFi.h>
 
 #include <algorithm>
 #include <cctype>
@@ -23,6 +22,8 @@ namespace OnlineSourceBridge {
 namespace {
 std::string g_lastError;
 std::string g_preferredServerBaseUrl;
+std::vector<CpPluginInfo> g_cachedSourceCatalog;
+uint32_t g_cachedSourceCatalogAtMs = 0;
 
 void clearLastError() { g_lastError.clear(); }
 
@@ -66,7 +67,9 @@ std::string normalizeSourceError(const CpPluginInfo& pluginInfo, const std::stri
   }
 
   if (containsAsciiCaseInsensitive(message, "truncated by ram") ||
-      containsAsciiCaseInsensitive(message, "insufficient heap")) {
+      containsAsciiCaseInsensitive(message, "insufficient heap") ||
+      containsAsciiCaseInsensitive(message, "safe heap budget") ||
+      containsAsciiCaseInsensitive(message, "body exceeds safe heap")) {
     return sourceError(pluginInfo, "Not enough memory");
   }
 
@@ -129,18 +132,53 @@ std::string normalizeSourceError(const CpPluginInfo& pluginInfo, const std::stri
   return message;
 }
 
-void setLastErrorFromHttpOrFallback(const char* fallback) {
-  const std::string& httpError = HttpDownloader::getLastError();
-  if (!httpError.empty()) {
-    setLastError(httpError);
-  } else {
-    setLastError(fallback);
+std::string normalizeCatalogError(const std::string& rawError, const char* fallback) {
+  const std::string message = rawError.empty() ? std::string(fallback) : rawError;
+
+  if (containsAsciiCaseInsensitive(message, "connection refused") ||
+      containsAsciiCaseInsensitive(message, "failed to connect") ||
+      containsAsciiCaseInsensitive(message, "connection reset") ||
+      containsAsciiCaseInsensitive(message, "connection closed") ||
+      containsAsciiCaseInsensitive(message, "send header failed") ||
+      containsAsciiCaseInsensitive(message, "ssl") || containsAsciiCaseInsensitive(message, "tls")) {
+    return "Server unavailable";
   }
+
+  if (containsAsciiCaseInsensitive(message, "request timed out") ||
+      containsAsciiCaseInsensitive(message, "timed out")) {
+    return "Request timed out";
+  }
+
+  if (containsAsciiCaseInsensitive(message, "network error")) {
+    return "Network error";
+  }
+
+  if (containsAsciiCaseInsensitive(message, "invalid server response") ||
+      containsAsciiCaseInsensitive(message, "invalid upstream response")) {
+    return "Invalid server response";
+  }
+
+  if (containsAsciiCaseInsensitive(message, "http 403")) {
+    return "HTTP 403 forbidden";
+  }
+
+  if (containsAsciiCaseInsensitive(message, "http 404")) {
+    return "HTTP 404 not found";
+  }
+
+  if (containsAsciiCaseInsensitive(message, "http 5")) {
+    return "Server error";
+  }
+
+  if (containsAsciiCaseInsensitive(message, "no online sources")) {
+    return "No online sources";
+  }
+
+  return message;
 }
 
 constexpr char ONLINE_CACHE_DIR[] = "/.crosspoint/data/online_cache";
 constexpr char DEFAULT_ONLINE_LIBRARY_BASE_URL[] = "https://online-library.noe.asia";
-constexpr char LAN_ONLINE_LIBRARY_BASE_URL[] = "http://192.168.1.202:8787";
 constexpr uint32_t DETAIL_CACHE_FILE_MAGIC = 0x4F444331;   // ODC1
 constexpr uint32_t TOC_CACHE_FILE_MAGIC = 0x4F544331;      // OTC1
 constexpr uint32_t TOC_PAGE_CACHE_FILE_MAGIC = 0x4F544350; // OTCP
@@ -150,10 +188,11 @@ constexpr size_t MAX_TOC_CACHE_CHAPTERS = 192;
 constexpr size_t MAX_TOC_PAGE_CACHE_CHAPTERS = 64;
 constexpr size_t MAX_ONLINE_CACHE_FILES = 24;
 constexpr uint32_t ONLINE_CACHE_PRUNE_INTERVAL_MS = 30000;
-constexpr size_t SERVER_HOME_CAP_BYTES = 24 * 1024;
-constexpr size_t SERVER_SEARCH_CAP_BYTES = 24 * 1024;
-constexpr size_t SERVER_DETAIL_CAP_BYTES = 48 * 1024;
-constexpr size_t SERVER_TOC_PAGE_CAP_BYTES = 32 * 1024;
+constexpr uint32_t SOURCE_CATALOG_CACHE_TTL_MS = 30000;
+constexpr size_t SERVER_HOME_CAP_BYTES = 12 * 1024;
+constexpr size_t SERVER_SEARCH_CAP_BYTES = 12 * 1024;
+constexpr size_t SERVER_DETAIL_CAP_BYTES = 24 * 1024;
+constexpr size_t SERVER_TOC_PAGE_CAP_BYTES = 16 * 1024;
 constexpr size_t SERVER_TOC_CAP_BYTES = 96 * 1024;
 constexpr size_t SERVER_CHAPTER_TEXT_CAP_BYTES = 64 * 1024;
 constexpr size_t SERVER_CHAPTER_HTML_CAP_BYTES = 96 * 1024;
@@ -192,17 +231,17 @@ std::string canonicalProfileFor(const CpPluginInfo& pluginInfo) {
   return "";
 }
 
-std::string resolvedBaseUrlFor(const CpPluginInfo& pluginInfo, const char* fallback) {
-  return pluginInfo.baseUrl.empty() ? std::string(fallback) : pluginInfo.baseUrl;
-}
-
 bool isServerOrigin(const CpPluginInfo& pluginInfo) {
   return pluginInfo.runtimeMode == "adapter" && pluginInfo.runtimeOrigin == "server" && !pluginInfo.runtimeProfile.empty() &&
          !pluginInfo.baseUrl.empty();
 }
 
 bool supportsIncrementalTocFetch(const CpPluginInfo& pluginInfo) {
-  return isServerOrigin(pluginInfo) && (isHakoLike(pluginInfo) || isTruyenFullLike(pluginInfo));
+  return isServerOrigin(pluginInfo) && (isTruyenFullLike(pluginInfo) || isHakoLike(pluginInfo));
+}
+
+bool catalogCacheFresh() {
+  return !g_cachedSourceCatalog.empty() && (millis() - g_cachedSourceCatalogAtMs) <= SOURCE_CATALOG_CACHE_TTL_MS;
 }
 
 std::string trimTrailingSlash(std::string value) {
@@ -212,9 +251,14 @@ std::string trimTrailingSlash(std::string value) {
   return value;
 }
 
+bool isCanonicalOnlineLibraryBaseUrl(const std::string& baseUrl) {
+  const std::string normalized = trimTrailingSlash(baseUrl);
+  return normalized == "https://online-library.noe.asia";
+}
+
 void noteWorkingServerBaseUrl(const std::string& baseUrl) {
   const std::string normalized = trimTrailingSlash(baseUrl);
-  if (!normalized.empty()) {
+  if (isCanonicalOnlineLibraryBaseUrl(normalized)) {
     g_preferredServerBaseUrl = normalized;
   }
 }
@@ -314,42 +358,27 @@ std::string buildServerApiUrl(const CpPluginInfo& pluginInfo, const std::string&
 
 void appendServerBaseUrlCandidate(std::vector<std::string>& outCandidates, const std::string& baseUrl) {
   const std::string normalized = trimTrailingSlash(baseUrl);
-  if (normalized.empty()) {
+  if (!isCanonicalOnlineLibraryBaseUrl(normalized)) {
     return;
   }
+
   if (std::find(outCandidates.begin(), outCandidates.end(), normalized) == outCandidates.end()) {
     outCandidates.push_back(normalized);
   }
 }
 
-bool deviceAppearsOnServerLan() {
-  if (WiFi.status() != WL_CONNECTED) {
-    return false;
-  }
-  const IPAddress ip = WiFi.localIP();
-  return ip[0] == 192 && ip[1] == 168 && ip[2] == 1;
-}
-
 std::vector<std::string> buildServerBaseUrlCandidates(const CpPluginInfo& pluginInfo) {
   std::vector<std::string> out;
-  out.reserve(4);
-  if (deviceAppearsOnServerLan()) {
-    appendServerBaseUrlCandidate(out, LAN_ONLINE_LIBRARY_BASE_URL);
-    appendServerBaseUrlCandidate(out, g_preferredServerBaseUrl);
-    appendServerBaseUrlCandidate(out, pluginInfo.baseUrl);
-    appendServerBaseUrlCandidate(out, DEFAULT_ONLINE_LIBRARY_BASE_URL);
-  } else {
-    appendServerBaseUrlCandidate(out, g_preferredServerBaseUrl);
-    appendServerBaseUrlCandidate(out, pluginInfo.baseUrl);
-    appendServerBaseUrlCandidate(out, DEFAULT_ONLINE_LIBRARY_BASE_URL);
-    appendServerBaseUrlCandidate(out, LAN_ONLINE_LIBRARY_BASE_URL);
-  }
+  out.reserve(1);
+  appendServerBaseUrlCandidate(out, g_preferredServerBaseUrl);
+  appendServerBaseUrlCandidate(out, pluginInfo.baseUrl);
+  appendServerBaseUrlCandidate(out, DEFAULT_ONLINE_LIBRARY_BASE_URL);
   return out;
 }
 
 std::string preferredServerBaseUrlFor(const CpPluginInfo& pluginInfo) {
   const auto candidates = buildServerBaseUrlCandidates(pluginInfo);
-  return candidates.empty() ? trimTrailingSlash(pluginInfo.baseUrl) : candidates.front();
+  return candidates.empty() ? std::string(DEFAULT_ONLINE_LIBRARY_BASE_URL) : candidates.front();
 }
 
 bool isServerAssetProxyUrl(const std::string& url) { return url.find("/api/v1/source/") != std::string::npos && url.find("/asset?") != std::string::npos; }
@@ -402,13 +431,13 @@ CpPluginInfo makeServerPluginInfo(const std::string& id, const std::string& prof
                                   const std::string& baseUrl, const std::string& locale, const std::string& contentType,
                                   bool supportsSearch, bool supportsTrackedUpdates, bool supportsX3, bool supportsX4) {
   CpPluginInfo info;
-  info.id = id;
+  info.id = PluginStore::canonicalizePluginId(id, profile);
   info.name = name;
   info.version = 1;
   info.runtimeMode = "adapter";
-  info.runtimeProfile = profile;
+  info.runtimeProfile = PluginStore::canonicalizeRuntimeProfile(info.id.empty() ? id : info.id, profile);
   info.runtimeOrigin = "server";
-  info.baseUrl = baseUrl;
+  info.baseUrl = trimTrailingSlash(baseUrl.empty() ? std::string(DEFAULT_ONLINE_LIBRARY_BASE_URL) : baseUrl);
   info.locale = locale;
   info.contentType = contentType;
   info.supportsSearch = supportsSearch;
@@ -445,16 +474,52 @@ bool tryParseServerJsonOnce(const CpPluginInfo& pluginInfo, const std::string& u
   return true;
 }
 
+bool shouldRetryServerJsonError(const std::string& error) {
+  return containsAsciiCaseInsensitive(error, "timed out") ||
+         containsAsciiCaseInsensitive(error, "network error") ||
+         containsAsciiCaseInsensitive(error, "connection refused") ||
+         containsAsciiCaseInsensitive(error, "connection reset") ||
+         containsAsciiCaseInsensitive(error, "connection closed") ||
+         containsAsciiCaseInsensitive(error, "send header failed") ||
+         containsAsciiCaseInsensitive(error, "write to stream") ||
+         containsAsciiCaseInsensitive(error, "writetostream");
+}
+
+bool tryReadServerRawOnce(const CpPluginInfo& pluginInfo, const std::string& url, size_t maxBytes, std::string& body,
+                          std::string& outError) {
+  body.clear();
+  if (!HttpDownloader::fetchUrlCapped(url, body, maxBytes, false)) {
+    const std::string& httpError = HttpDownloader::getLastError();
+    outError = normalizeSourceError(pluginInfo, httpError.empty() ? "Server request failed" : httpError,
+                                    "Server request failed");
+    return false;
+  }
+
+  outError.clear();
+  return true;
+}
+
 bool parseServerJson(const CpPluginInfo& pluginInfo, const std::string& operation,
                      const std::vector<std::pair<std::string, std::string>>& params, size_t maxBytes, std::string& body,
                      JsonDocument& doc) {
   std::string lastError = normalizeSourceError(pluginInfo, "Server request failed", "Server request failed");
-  for (const auto& baseUrl : buildServerBaseUrlCandidates(pluginInfo)) {
-    if (tryParseServerJsonOnce(pluginInfo, buildServerApiUrlForBaseUrl(baseUrl, pluginInfo, operation, params), maxBytes, body,
-                               doc, lastError)) {
-      noteWorkingServerBaseUrl(baseUrl);
-      return true;
+  const auto candidates = buildServerBaseUrlCandidates(pluginInfo);
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    for (const auto& baseUrl : candidates) {
+      LOG_DBG("OSB", "API %s via %s (attempt %d)", operation.c_str(), baseUrl.c_str(), attempt + 1);
+      if (tryParseServerJsonOnce(pluginInfo, buildServerApiUrlForBaseUrl(baseUrl, pluginInfo, operation, params), maxBytes, body,
+                                 doc, lastError)) {
+        noteWorkingServerBaseUrl(baseUrl);
+        return true;
+      }
+      LOG_DBG("OSB", "API %s failed via %s: %s", operation.c_str(), baseUrl.c_str(), lastError.c_str());
     }
+
+    if (attempt == 0 && shouldRetryServerJsonError(lastError)) {
+      delay(150);
+      continue;
+    }
+    break;
   }
 
   setLastError(lastError);
@@ -533,6 +598,218 @@ bool readRawWireLine(const std::string& body, size_t& pos, std::string& outLine)
   if (!outLine.empty() && outLine.back() == '\r') {
     outLine.pop_back();
   }
+  return true;
+}
+
+bool parseRawWirePositiveInt(const std::string& value, int& outValue) {
+  if (value.empty()) {
+    return false;
+  }
+
+  uint32_t parsed = 0;
+  for (char ch : value) {
+    if (ch < '0' || ch > '9') {
+      return false;
+    }
+    parsed = parsed * 10U + static_cast<uint32_t>(ch - '0');
+  }
+  outValue = static_cast<int>(parsed);
+  return true;
+}
+
+bool splitRawWireFields(const std::string& line, size_t expectedFields, std::vector<std::string>& outFields) {
+  outFields.clear();
+  outFields.reserve(expectedFields);
+
+  size_t fieldStart = 0;
+  while (fieldStart <= line.size()) {
+    const size_t fieldEnd = line.find('\t', fieldStart);
+    if (fieldEnd == std::string::npos) {
+      outFields.push_back(line.substr(fieldStart));
+      break;
+    }
+    outFields.push_back(line.substr(fieldStart, fieldEnd - fieldStart));
+    fieldStart = fieldEnd + 1;
+  }
+
+  return outFields.size() == expectedFields;
+}
+
+bool tryParseWireSearchItemsBody(const CpPluginInfo& pluginInfo, const std::string& body,
+                                 std::vector<HakoSearchResult>& outResults) {
+  size_t pos = 0;
+  std::string magic;
+  std::string separator;
+  if (!readRawWireLine(body, pos, magic) || !readRawWireLine(body, pos, separator)) {
+    return false;
+  }
+  if (magic != "CPIT1" || !separator.empty()) {
+    return false;
+  }
+
+  std::vector<HakoSearchResult> parsed;
+  std::vector<std::string> fields;
+  while (pos <= body.size()) {
+    std::string line;
+    if (!readRawWireLine(body, pos, line)) {
+      break;
+    }
+    if (line.empty()) {
+      if (pos >= body.size()) {
+        break;
+      }
+      continue;
+    }
+
+    if (!splitRawWireFields(line, 8, fields)) {
+      return false;
+    }
+
+    HakoSearchResult item;
+    item.url = fields[0];
+    item.title = fields[1];
+    item.description = fields[2];
+    item.coverUrl = buildAssetProxyUrl(pluginInfo, fields[3], item.url);
+    item.homeSectionLabel = fields[4];
+    item.homeVolumeTitle = fields[5];
+    item.homeLatestChapterTitle = fields[6];
+    item.homeDisplaySubtitle = fields[7];
+    if (item.title.empty() || item.url.empty()) {
+      return false;
+    }
+    parsed.push_back(std::move(item));
+
+    if (pos >= body.size()) {
+      break;
+    }
+  }
+
+  outResults = std::move(parsed);
+  return true;
+}
+
+bool tryParseWireDetailBody(const CpPluginInfo& pluginInfo, const std::string& body, const std::string& requestedUrl,
+                            HakoBookDetail& outDetail) {
+  size_t pos = 0;
+  std::string magic;
+  std::string url;
+  std::string title;
+  std::string author;
+  std::string coverUrl;
+  std::string latestChapterUrl;
+  std::string latestChapterTitle;
+  std::string ongoingLine;
+  std::string genresLine;
+  std::string separator;
+  if (!readRawWireLine(body, pos, magic) || !readRawWireLine(body, pos, url) || !readRawWireLine(body, pos, title) ||
+      !readRawWireLine(body, pos, author) || !readRawWireLine(body, pos, coverUrl) ||
+      !readRawWireLine(body, pos, latestChapterUrl) || !readRawWireLine(body, pos, latestChapterTitle) ||
+      !readRawWireLine(body, pos, ongoingLine) || !readRawWireLine(body, pos, genresLine) ||
+      !readRawWireLine(body, pos, separator)) {
+    return false;
+  }
+
+  if (magic != "CPDT1" || !separator.empty() || title.empty()) {
+    return false;
+  }
+
+  HakoBookDetail detail;
+  detail.title = title;
+  detail.url = url.empty() ? requestedUrl : url;
+  detail.author = author;
+  detail.coverUrl = buildAssetProxyUrl(pluginInfo, coverUrl, detail.url);
+  detail.latestChapterUrl = latestChapterUrl;
+  detail.latestChapterTitle = latestChapterTitle;
+  detail.ongoing = ongoingLine != "0";
+  detail.descriptionHtml = pos <= body.size() ? body.substr(pos) : std::string{};
+
+  if (!genresLine.empty()) {
+    size_t genreStart = 0;
+    while (genreStart <= genresLine.size()) {
+      const size_t genreEnd = genresLine.find('\t', genreStart);
+      std::string genre = genreEnd == std::string::npos ? genresLine.substr(genreStart)
+                                                        : genresLine.substr(genreStart, genreEnd - genreStart);
+      if (!genre.empty()) {
+        detail.genres.push_back(std::move(genre));
+      }
+      if (genreEnd == std::string::npos) {
+        break;
+      }
+      genreStart = genreEnd + 1;
+    }
+  }
+
+  outDetail = std::move(detail);
+  return true;
+}
+
+bool tryParseWireTocPageBody(const std::string& body, TocPageResult& outPage) {
+  size_t pos = 0;
+  std::string magic;
+  std::string pageLine;
+  std::string totalPagesLine;
+  std::string separator;
+  if (!readRawWireLine(body, pos, magic) || !readRawWireLine(body, pos, pageLine) ||
+      !readRawWireLine(body, pos, totalPagesLine) || !readRawWireLine(body, pos, separator)) {
+    return false;
+  }
+
+  int page = 0;
+  int totalPages = 0;
+  if (magic != "CPTP1" || !separator.empty() || !parseRawWirePositiveInt(pageLine, page) ||
+      !parseRawWirePositiveInt(totalPagesLine, totalPages) || page < 1 || totalPages < 1) {
+    return false;
+  }
+
+  TocPageResult parsed;
+  parsed.page = page;
+  parsed.totalPages = totalPages;
+
+  while (pos <= body.size()) {
+    std::string line;
+    if (!readRawWireLine(body, pos, line)) {
+      break;
+    }
+    if (line.empty()) {
+      if (pos >= body.size()) {
+        break;
+      }
+      continue;
+    }
+
+    const size_t firstTab = line.find('\t');
+    const size_t secondTab = firstTab == std::string::npos ? std::string::npos : line.find('\t', firstTab + 1);
+    const size_t thirdTab = secondTab == std::string::npos ? std::string::npos : line.find('\t', secondTab + 1);
+    if (firstTab == std::string::npos || secondTab == std::string::npos) {
+      return false;
+    }
+
+    int chapterIndex = 0;
+    if (!parseRawWirePositiveInt(line.substr(0, firstTab), chapterIndex) || chapterIndex < 1) {
+      return false;
+    }
+
+    HakoChapterRef ref;
+    ref.index = static_cast<uint32_t>(chapterIndex);
+    ref.url = line.substr(firstTab + 1, secondTab - firstTab - 1);
+    ref.title = thirdTab == std::string::npos ? line.substr(secondTab + 1)
+                                              : line.substr(secondTab + 1, thirdTab - secondTab - 1);
+    ref.sectionTitle = thirdTab == std::string::npos ? std::string() : line.substr(thirdTab + 1);
+    if (ref.url.empty() || ref.title.empty()) {
+      return false;
+    }
+    parsed.chapters.push_back(std::move(ref));
+
+    if (pos >= body.size()) {
+      break;
+    }
+  }
+
+  if (parsed.chapters.empty()) {
+    return false;
+  }
+
+  outPage = std::move(parsed);
   return true;
 }
 
@@ -1291,6 +1568,16 @@ bool supportsPagedToc(const CpPluginInfo& pluginInfo) {
   return supportsIncrementalTocFetch(pluginInfo);
 }
 
+int pagedTocPageSize(const CpPluginInfo& pluginInfo) {
+  if (isHakoLike(pluginInfo)) {
+    return 24;
+  }
+  if (isTruyenFullLike(pluginInfo)) {
+    return 50;
+  }
+  return 50;
+}
+
 std::string runtimeProfileFor(const CpPluginInfo& pluginInfo) { return canonicalProfileFor(pluginInfo); }
 
 const std::string& getLastError() { return g_lastError; }
@@ -1325,27 +1612,101 @@ std::string buildAssetProxyUrl(const CpPluginInfo& pluginInfo, const std::string
   return buildServerApiUrlForBaseUrl(serverBaseUrl, pluginInfo, "asset", {{"url", resolvedUrl}});
 }
 
-void buildFallbackSourceCatalog(std::vector<CpPluginInfo>& outSources) {
-  outSources.clear();
-  outSources.reserve(2);
-  outSources.push_back(makeFallbackPluginInfo("hako", "hako"));
-  outSources.push_back(makeFallbackPluginInfo("truyenfull", "truyenfull"));
-}
+bool fetchSourceCatalog(std::vector<CpPluginInfo>& outSources, bool forceRefresh) {
+  clearLastError();
+  if (!forceRefresh && catalogCacheFresh()) {
+    outSources = g_cachedSourceCatalog;
+    return true;
+  }
 
-bool fetchSourceCatalog(std::vector<CpPluginInfo>& outSources) {
+  std::vector<CpPluginInfo> fetchedSources;
   std::string lastError = "Server request failed";
-  for (const auto& baseUrl : buildServerBaseUrlCandidates(makeFallbackPluginInfo("hako", "hako"))) {
-    if (tryParseSourceCatalogOnce(baseUrl, outSources, lastError)) {
+  for (const auto& baseUrl : buildServerBaseUrlCandidates(makeCanonicalPluginInfo("hako", "hako"))) {
+    if (tryParseSourceCatalogOnce(baseUrl, fetchedSources, lastError)) {
+      g_cachedSourceCatalog = fetchedSources;
+      g_cachedSourceCatalogAtMs = millis();
+      outSources = g_cachedSourceCatalog;
       return true;
     }
   }
-  setLastError(lastError);
+
+  outSources.clear();
+  setLastError(normalizeCatalogError(lastError, "Server request failed"));
   return false;
 }
 
-void clearMemoryCaches() {}
+bool canResolveWithCanonicalServerProfile(const std::string& pluginId, const std::string& runtimeProfile) {
+  const std::string canonicalPluginId = PluginStore::canonicalizePluginId(pluginId, runtimeProfile);
+  const std::string canonicalRuntimeProfile =
+      PluginStore::canonicalizeRuntimeProfile(canonicalPluginId.empty() ? pluginId : canonicalPluginId, runtimeProfile);
+  return canonicalRuntimeProfile == "hako" || canonicalRuntimeProfile == "truyenfull";
+}
 
-CpPluginInfo makeFallbackPluginInfo(const std::string& pluginId, const std::string& runtimeProfile) {
+bool resolveCatalogPlugin(const std::string& pluginId, const std::string& runtimeProfile, CpPluginInfo& outInfo,
+                          bool forceRefresh) {
+  clearLastError();
+  std::vector<CpPluginInfo> catalog;
+  if (!fetchSourceCatalog(catalog, forceRefresh)) {
+    if (canResolveWithCanonicalServerProfile(pluginId, runtimeProfile)) {
+      outInfo = makeCanonicalPluginInfo(pluginId, runtimeProfile);
+      clearLastError();
+      return true;
+    }
+    return false;
+  }
+
+  const std::string canonicalPluginId = PluginStore::canonicalizePluginId(pluginId, runtimeProfile);
+  const std::string canonicalRuntimeProfile =
+      PluginStore::canonicalizeRuntimeProfile(canonicalPluginId.empty() ? pluginId : canonicalPluginId, runtimeProfile);
+
+  const CpPluginInfo* best = nullptr;
+  for (const auto& plugin : catalog) {
+    const bool profileMatch = canonicalRuntimeProfile.empty() || plugin.runtimeProfile == canonicalRuntimeProfile;
+    const bool idMatch = canonicalPluginId.empty() || plugin.id == canonicalPluginId;
+    if (!profileMatch && !idMatch) {
+      continue;
+    }
+
+    if (plugin.id == canonicalPluginId && plugin.runtimeProfile == canonicalRuntimeProfile) {
+      outInfo = plugin;
+      return true;
+    }
+
+    if (best == nullptr) {
+      best = &plugin;
+    } else if (plugin.runtimeProfile == canonicalRuntimeProfile && best->runtimeProfile != canonicalRuntimeProfile) {
+      best = &plugin;
+    } else if (plugin.id == canonicalPluginId && best->id != canonicalPluginId) {
+      best = &plugin;
+    }
+  }
+
+  if (best != nullptr) {
+    outInfo = *best;
+    return true;
+  }
+
+  if (!forceRefresh) {
+    return resolveCatalogPlugin(pluginId, runtimeProfile, outInfo, true);
+  }
+
+  if (canResolveWithCanonicalServerProfile(pluginId, runtimeProfile)) {
+    outInfo = makeCanonicalPluginInfo(pluginId, runtimeProfile);
+    clearLastError();
+    return true;
+  }
+
+  setLastError("Source unavailable");
+  return false;
+}
+
+void clearMemoryCaches() {
+  g_cachedSourceCatalog.clear();
+  g_cachedSourceCatalogAtMs = 0;
+  g_preferredServerBaseUrl.clear();
+}
+
+CpPluginInfo makeCanonicalPluginInfo(const std::string& pluginId, const std::string& runtimeProfile) {
   CpPluginInfo info;
   info.id = PluginStore::canonicalizePluginId(pluginId, runtimeProfile);
   info.runtimeProfile = PluginStore::canonicalizeRuntimeProfile(info.id.empty() ? pluginId : info.id, runtimeProfile);
@@ -1382,6 +1743,37 @@ bool fetchHomeFeed(const CpPluginInfo& pluginInfo, std::vector<HakoSearchResult>
   }
 
   std::string body;
+  std::string rawError = normalizeSourceError(pluginInfo, "Server request failed", "Server request failed");
+  const auto candidates = buildServerBaseUrlCandidates(pluginInfo);
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    for (const auto& baseUrl : candidates) {
+      const std::string rawUrl = buildServerApiUrlForBaseUrl(baseUrl, pluginInfo, "home", {{"format", "raw"}});
+      LOG_DBG("OSB", "API home raw via %s (attempt %d)", baseUrl.c_str(), attempt + 1);
+      if (tryReadServerRawOnce(pluginInfo, rawUrl, SERVER_HOME_CAP_BYTES, body, rawError) &&
+          tryParseWireSearchItemsBody(pluginInfo, body, outResults)) {
+        if (!outResults.empty()) {
+          noteWorkingServerBaseUrl(baseUrl);
+          return true;
+        }
+        rawError = normalizeSourceError(pluginInfo, "Source feed parse failed", "Source feed parse failed");
+      }
+      if (rawError.empty()) {
+        rawError = normalizeSourceError(pluginInfo, "Invalid server response", "Invalid server response");
+      }
+      LOG_DBG("OSB", "API home raw failed via %s: %s", baseUrl.c_str(), rawError.c_str());
+    }
+
+    if (attempt == 0 && shouldRetryServerJsonError(rawError)) {
+      delay(150);
+      continue;
+    }
+    break;
+  }
+
+#ifndef CROSSPOINT_EMULATED
+  setLastError(rawError);
+  return false;
+#else
   JsonDocument doc;
   if (!parseServerJson(pluginInfo, "home", {}, SERVER_HOME_CAP_BYTES, body, doc)) {
     return false;
@@ -1391,6 +1783,7 @@ bool fetchHomeFeed(const CpPluginInfo& pluginInfo, std::vector<HakoSearchResult>
     return false;
   }
   return true;
+#endif
 }
 
 bool search(const CpPluginInfo& pluginInfo, const std::string& query, int page, std::vector<HakoSearchResult>& outResults) {
@@ -1402,6 +1795,37 @@ bool search(const CpPluginInfo& pluginInfo, const std::string& query, int page, 
 
   const int safePage = page < 1 ? 1 : page;
   std::string body;
+  std::string rawError = normalizeSourceError(pluginInfo, "Server request failed", "Server request failed");
+  const auto candidates = buildServerBaseUrlCandidates(pluginInfo);
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    for (const auto& baseUrl : candidates) {
+      const std::string rawUrl = buildServerApiUrlForBaseUrl(baseUrl, pluginInfo, "search",
+                                                             {{"query", query},
+                                                              {"page", std::to_string(safePage)},
+                                                              {"format", "raw"}});
+      LOG_DBG("OSB", "API search raw via %s (attempt %d)", baseUrl.c_str(), attempt + 1);
+      if (tryReadServerRawOnce(pluginInfo, rawUrl, SERVER_SEARCH_CAP_BYTES, body, rawError) &&
+          tryParseWireSearchItemsBody(pluginInfo, body, outResults)) {
+        noteWorkingServerBaseUrl(baseUrl);
+        return true;
+      }
+      if (rawError.empty()) {
+        rawError = normalizeSourceError(pluginInfo, "Invalid server response", "Invalid server response");
+      }
+      LOG_DBG("OSB", "API search raw failed via %s: %s", baseUrl.c_str(), rawError.c_str());
+    }
+
+    if (attempt == 0 && shouldRetryServerJsonError(rawError)) {
+      delay(150);
+      continue;
+    }
+    break;
+  }
+
+#ifndef CROSSPOINT_EMULATED
+  setLastError(rawError);
+  return false;
+#else
   JsonDocument doc;
   if (!parseServerJson(pluginInfo, "search", {{"query", query}, {"page", std::to_string(safePage)}},
                        SERVER_SEARCH_CAP_BYTES, body, doc)) {
@@ -1412,6 +1836,7 @@ bool search(const CpPluginInfo& pluginInfo, const std::string& query, int page, 
     return false;
   }
   return true;
+#endif
 }
 
 bool fetchDetail(const CpPluginInfo& pluginInfo, const std::string& url, HakoBookDetail& outDetail) {
@@ -1428,6 +1853,36 @@ bool fetchDetail(const CpPluginInfo& pluginInfo, const std::string& url, HakoBoo
   }
 
   std::string body;
+  std::string rawError = normalizeSourceError(pluginInfo, "Server request failed", "Server request failed");
+  const auto candidates = buildServerBaseUrlCandidates(pluginInfo);
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    for (const auto& baseUrl : candidates) {
+      const std::string rawUrl = buildServerApiUrlForBaseUrl(baseUrl, pluginInfo, "detail",
+                                                             {{"url", url}, {"format", "raw"}});
+      LOG_DBG("OSB", "API detail raw via %s (attempt %d)", baseUrl.c_str(), attempt + 1);
+      if (tryReadServerRawOnce(pluginInfo, rawUrl, SERVER_DETAIL_CAP_BYTES, body, rawError) &&
+          tryParseWireDetailBody(pluginInfo, body, url, outDetail)) {
+        noteWorkingServerBaseUrl(baseUrl);
+        writeCachedDetail(cacheKey, outDetail);
+        return true;
+      }
+      if (rawError.empty()) {
+        rawError = normalizeSourceError(pluginInfo, "Invalid server response", "Invalid server response");
+      }
+      LOG_DBG("OSB", "API detail raw failed via %s: %s", baseUrl.c_str(), rawError.c_str());
+    }
+
+    if (attempt == 0 && shouldRetryServerJsonError(rawError)) {
+      delay(150);
+      continue;
+    }
+    break;
+  }
+
+#ifndef CROSSPOINT_EMULATED
+  setLastError(rawError);
+  return false;
+#else
   JsonDocument doc;
   if (!parseServerJson(pluginInfo, "detail", {{"url", url}}, SERVER_DETAIL_CAP_BYTES, body, doc)) {
     return false;
@@ -1438,6 +1893,7 @@ bool fetchDetail(const CpPluginInfo& pluginInfo, const std::string& url, HakoBoo
   }
   writeCachedDetail(cacheKey, outDetail);
   return true;
+#endif
 }
 
 bool fetchTocPage(const CpPluginInfo& pluginInfo, const std::string& url, int page, TocPageResult& outPage) {
@@ -1458,6 +1914,47 @@ bool fetchTocPage(const CpPluginInfo& pluginInfo, const std::string& url, int pa
   }
 
   std::string body;
+  std::string rawError = normalizeSourceError(pluginInfo, "Server request failed", "Server request failed");
+  const auto candidates = buildServerBaseUrlCandidates(pluginInfo);
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    for (const auto& baseUrl : candidates) {
+      const std::string rawUrl = buildServerApiUrlForBaseUrl(
+          baseUrl, pluginInfo, "toc-page",
+          {{"url", url}, {"page", std::to_string(safePage)}, {"format", "raw"}});
+      LOG_DBG("OSB", "API toc-page raw via %s (attempt %d)", baseUrl.c_str(), attempt + 1);
+      if (tryReadServerRawOnce(pluginInfo, rawUrl, SERVER_TOC_PAGE_CAP_BYTES, body, rawError) &&
+          tryParseWireTocPageBody(body, outPage)) {
+        noteWorkingServerBaseUrl(baseUrl);
+        const int pageBaseIndex = (std::max(1, outPage.page) - 1) * pagedTocPageSize(pluginInfo);
+        for (size_t index = 0; index < outPage.chapters.size(); ++index) {
+          if (outPage.chapters[index].index == 0) {
+            outPage.chapters[index].index = static_cast<uint32_t>(pageBaseIndex + static_cast<int>(index) + 1);
+          }
+        }
+        writeCachedTocPage(cacheKey, outPage);
+        return true;
+      }
+
+      if (rawError.empty()) {
+        rawError = normalizeSourceError(pluginInfo, "Invalid server response", "Invalid server response");
+      }
+      LOG_DBG("OSB", "API toc-page raw failed via %s: %s", baseUrl.c_str(), rawError.c_str());
+    }
+
+    if (attempt == 0 && shouldRetryServerJsonError(rawError)) {
+      delay(150);
+      continue;
+    }
+    break;
+  }
+
+#ifndef CROSSPOINT_EMULATED
+  if (rawError.empty()) {
+    rawError = normalizeSourceError(pluginInfo, "Invalid server response", "Invalid server response");
+  }
+  setLastError(rawError);
+  return false;
+#else
   JsonDocument doc;
   if (!parseServerJson(pluginInfo, "toc-page", {{"url", url}, {"page", std::to_string(safePage)}},
                        SERVER_TOC_PAGE_CAP_BYTES, body, doc)) {
@@ -1472,8 +1969,15 @@ bool fetchTocPage(const CpPluginInfo& pluginInfo, const std::string& url, int pa
   if (outPage.totalPages < 1) {
     outPage.totalPages = 1;
   }
+  const int pageBaseIndex = (std::max(1, outPage.page) - 1) * pagedTocPageSize(pluginInfo);
+  for (size_t index = 0; index < outPage.chapters.size(); ++index) {
+    if (outPage.chapters[index].index == 0) {
+      outPage.chapters[index].index = static_cast<uint32_t>(pageBaseIndex + static_cast<int>(index) + 1);
+    }
+  }
   writeCachedTocPage(cacheKey, outPage);
   return true;
+#endif
 }
 
 bool fetchToc(const CpPluginInfo& pluginInfo, const std::string& url, std::vector<HakoChapterRef>& outToc) {
@@ -1494,6 +1998,14 @@ bool fetchToc(const CpPluginInfo& pluginInfo, const std::string& url, std::vecto
   }
 
   const std::string incrementalError = g_lastError;
+#ifndef CROSSPOINT_EMULATED
+  if (supportsIncrementalTocFetch(pluginInfo)) {
+    if (incrementalError.empty()) {
+      setLastError(sourceError(pluginInfo, "Chapter list error"));
+    }
+    return false;
+  }
+#endif
   std::string body;
   JsonDocument doc;
   if (!parseServerJson(pluginInfo, "toc", {{"url", url}}, SERVER_TOC_CAP_BYTES, body, doc)) {
@@ -1522,6 +2034,50 @@ bool fetchChapter(const CpPluginInfo& pluginInfo, const HakoChapterRef& ref, Hak
   if (!isServerOrigin(pluginInfo)) {
     setLastError(sourceError(pluginInfo, "Server source required"));
     return false;
+  }
+
+  if (includePlainText) {
+    std::string rawError;
+    const std::string wireUrl = buildServerApiUrl(pluginInfo, "chapter",
+                                                  {{"url", ref.url},
+                                                   {"title", ref.title},
+                                                   {"index", std::to_string(ref.index)},
+                                                   {"sectionTitle", ref.sectionTitle},
+                                                   {"text", "1"},
+                                                   {"html", "0"},
+                                                   {"format", "raw"}});
+    const std::string rawCachePath = cachePathFor(canonicalProfileFor(pluginInfo) + "|" + ref.url + "|chapter", "cht");
+    RawChapterTextFileStream rawStream(ref, SERVER_CHAPTER_TEXT_FILE_CAP_BYTES, rawCachePath);
+    if (rawStream.begin()) {
+      if (HttpDownloader::fetchUrl(wireUrl, rawStream) && rawStream.finish(outContent)) {
+        outContent.html = rewriteHtmlAssetUrls(pluginInfo, outContent.ref.url, outContent.html);
+        return true;
+      }
+
+      rawError = rawStream.error();
+      if (rawError.empty()) {
+        rawError = HttpDownloader::getLastError();
+      }
+      rawStream.discard();
+      if (rawStream.capacityExceeded()) {
+        setLastError(normalizeSourceError(pluginInfo, rawError, "Chapter parse failed"));
+        return false;
+      }
+      if (!rawError.empty() && rawError != "Invalid raw chapter response") {
+        setLastError(normalizeSourceError(pluginInfo, rawError, "Chapter parse failed"));
+        return false;
+      }
+    } else {
+      rawError = rawStream.error();
+    }
+
+#ifndef CROSSPOINT_EMULATED
+    if (rawError.empty()) {
+      rawError = "Invalid raw chapter response";
+    }
+    setLastError(normalizeSourceError(pluginInfo, rawError, "Chapter parse failed"));
+    return false;
+#endif
   }
 
   const size_t capBytes = includePlainText ? SERVER_CHAPTER_TEXT_CAP_BYTES : SERVER_CHAPTER_HTML_CAP_BYTES;
@@ -1559,41 +2115,6 @@ bool fetchChapter(const CpPluginInfo& pluginInfo, const HakoChapterRef& ref, Hak
     return false;
   }
 
-  const std::string jsonError = g_lastError;
-  const std::string wireUrl = buildServerApiUrl(pluginInfo, "chapter",
-                                                {{"url", ref.url},
-                                                 {"title", ref.title},
-                                                 {"index", std::to_string(ref.index)},
-                                                 {"sectionTitle", ref.sectionTitle},
-                                                 {"text", "1"},
-                                                 {"html", "0"},
-                                                 {"format", "raw"}});
-  const std::string rawCachePath = cachePathFor(canonicalProfileFor(pluginInfo) + "|" + ref.url + "|chapter", "cht");
-  RawChapterTextFileStream rawStream(ref, SERVER_CHAPTER_TEXT_FILE_CAP_BYTES, rawCachePath);
-  if (!rawStream.begin()) {
-    if (!jsonError.empty()) {
-      setLastError(jsonError);
-    }
-    return false;
-  }
-
-  if (HttpDownloader::fetchUrl(wireUrl, rawStream) && rawStream.finish(outContent)) {
-    outContent.html = rewriteHtmlAssetUrls(pluginInfo, outContent.ref.url, outContent.html);
-    return true;
-  }
-
-  const std::string rawError = rawStream.error();
-  rawStream.discard();
-  if (rawStream.capacityExceeded()) {
-    setLastError(normalizeSourceError(pluginInfo, rawError, "Chapter parse failed"));
-    return false;
-  }
-
-  if (!jsonError.empty()) {
-    setLastError(jsonError);
-  } else {
-    setLastError(normalizeSourceError(pluginInfo, rawError, "Chapter parse failed"));
-  }
   return false;
 }
 

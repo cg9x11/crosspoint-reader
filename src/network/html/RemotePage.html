@@ -147,6 +147,9 @@
         font-size: 14px;
         margin-top: 8px;
       }
+      .hint strong {
+        color: var(--text);
+      }
       @media (max-width: 760px) {
         .controls {
           grid-template-columns: 1fr;
@@ -191,6 +194,13 @@
         <div class="toolbar">
           <button type="button" onclick="refreshScreen()">Refresh Screen</button>
           <button type="button" onclick="refreshStatus()">Refresh Status</button>
+          <button type="button" id="leave-file-transfer-button" onclick="leaveFileTransfer()" style="display: none">
+            Leave File Transfer
+          </button>
+        </div>
+        <div class="hint" id="leave-file-transfer-hint" style="display: none">
+          File Transfer is only needed to start WiFi and the web server. Use
+          <strong>Leave File Transfer</strong> to keep remote alive and return to the previous screen.
         </div>
       </section>
 
@@ -235,6 +245,12 @@
       let screenTimer = null;
       let canAcceptText = false;
 
+      function updateLeaveFileTransferUi(currentActivity) {
+        const isInFileTransfer = currentActivity === 'CrossPointWebServer';
+        document.getElementById('leave-file-transfer-button').style.display = isInFileTransfer ? '' : 'none';
+        document.getElementById('leave-file-transfer-hint').style.display = isInFileTransfer ? '' : 'none';
+      }
+
       async function postJson(url, payload) {
         const response = await fetch(url, {
           method: 'POST',
@@ -259,6 +275,7 @@
           document.getElementById('ip').textContent = data.ip || '-';
           document.getElementById('heap').textContent = data.freeHeap ? data.freeHeap.toLocaleString() + ' B' : '-';
           canAcceptText = !!data.canAcceptText;
+          updateLeaveFileTransferUi(data.currentActivity || '');
           document.getElementById('text-input').disabled = !canAcceptText;
           document.getElementById('send-text-button').disabled = !canAcceptText;
         } catch (error) {
@@ -274,6 +291,15 @@
         try {
           await postJson('/api/remote/button', { button });
           queueRefresh();
+        } catch (error) {
+          alert(error.message);
+        }
+      }
+
+      async function leaveFileTransfer() {
+        try {
+          await postJson('/api/remote/background', {});
+          queueRefresh(260);
         } catch (error) {
           alert(error.message);
         }
