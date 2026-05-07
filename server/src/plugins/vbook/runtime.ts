@@ -99,6 +99,11 @@ interface RuntimeResponseShape {
   message?: string;
 }
 
+interface RuntimeScriptResult {
+  data: unknown;
+  meta?: unknown;
+}
+
 interface RuntimeExecutionState {
   localStorage: Record<string, unknown>;
   cacheStorage: Record<string, unknown>;
@@ -179,6 +184,10 @@ function normalizeUrl(rawUrl: string, baseUrl?: string) {
   } catch {
     return url;
   }
+}
+
+function normalizeConfigBaseUrl(rawUrl: string) {
+  return rawUrl.replace(/\/+$/, "");
 }
 
 function defaultAcceptLanguage(locale?: string) {
@@ -470,6 +479,10 @@ function normalizeChapterUrl(rawItem: Record<string, unknown>, sourceBaseUrl: st
 }
 
 function toRuntimeData(result: unknown) {
+  return unwrapRuntimeResult(result).data;
+}
+
+function unwrapRuntimeResult(result: unknown): RuntimeScriptResult {
   if (result == null) {
     throw new Error("Extension returned no data");
   }
@@ -478,7 +491,10 @@ function toRuntimeData(result: unknown) {
     const response = result as RuntimeResponseShape;
     if (typeof response.code === "number") {
       if (response.code === 0) {
-        return response.data;
+        return {
+          data: response.data,
+          meta: response.data2
+        };
       }
 
       throw new Error(
@@ -491,7 +507,45 @@ function toRuntimeData(result: unknown) {
     }
   }
 
-  return result;
+  return {
+    data: result
+  };
+}
+
+function coerceNextPageToken(value: unknown): string | null {
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    return normalized ? normalized : null;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of ["nextPage", "next", "page", "cursor"]) {
+      const normalized: string | null = coerceNextPageToken(record[key]);
+      if (normalized) {
+        return normalized;
+      }
+    }
+  }
+
+  return null;
+}
+
+function inferNextPageFromItemCount(currentPage: string | undefined, itemCount: number) {
+  if (itemCount < SEARCH_PAGE_SIZE_HINT) {
+    return null;
+  }
+
+  const current = Number(currentPage ?? "1");
+  if (!Number.isFinite(current) || current < 1) {
+    return null;
+  }
+
+  return String(current + 1);
 }
 
 function collectScriptFiles(contentRoot: string, entries: string[] = []) {
@@ -1258,7 +1312,7 @@ class VbookRuntimeSession {
       },
       Html: htmlBridge,
       Blob: VbookBlob,
-      CONFIG_URL: this.baseUrl,
+      CONFIG_URL: normalizeConfigBaseUrl(this.baseUrl),
       UserAgent: {
         system: () => "xteinkreader-server/0.1",
         android: () => RUNTIME_MOBILE_USER_AGENT,
@@ -1293,7 +1347,7 @@ class VbookRuntimeSession {
     return context;
   }
 
-  async runScript(scriptName: string, args: unknown[]) {
+  async runScriptResult(scriptName: string, args: unknown[]): Promise<RuntimeScriptResult> {
     const absoluteScriptPath = resolveScriptPathSync(this.packageDir, scriptName);
     if (!absoluteScriptPath) {
       throw new Error(`Script not found: ${scriptName}`);
@@ -1311,7 +1365,11 @@ class VbookRuntimeSession {
     }
 
     const result = await (execute as (...params: unknown[]) => unknown)(...args);
-    return toRuntimeData(result);
+    return unwrapRuntimeResult(result);
+  }
+
+  async runScript(scriptName: string, args: unknown[]) {
+    return (await this.runScriptResult(scriptName, args)).data;
   }
 
   async flush() {
@@ -1489,12 +1547,25 @@ export async function createVbookSourceRuntime(options: {
       session.runScript(scriptName, args)
     );
 
+  const executeScriptResult = async (scriptName: string, args: unknown[]) =>
+    runWithSession(options.packageDir, options.stateDir, manifest, options.source, (session) =>
+      session.runScriptResult(scriptName, args)
+    );
+
   const executeNamedScript = async (key: string, args: unknown[]) => {
     const scriptName = scriptMap[key];
     if (!scriptName) {
       throw new Error(`Extension does not provide ${key}.js`);
     }
     return executeScript(scriptName, args);
+  };
+
+  const executeNamedScriptResult = async (key: string, args: unknown[]) => {
+    const scriptName = scriptMap[key];
+    if (!scriptName) {
+      throw new Error(`Extension does not provide ${key}.js`);
+    }
+    return executeScriptResult(scriptName, args);
   };
 
   const mapHomeItems = (rawItems: unknown) =>
@@ -1578,13 +1649,12 @@ export async function createVbookSourceRuntime(options: {
     },
 
     async search(query: string, page?: string): Promise<SourceSearchPayload> {
-      const rawSearchData = await executeNamedScript("search", [query, page ?? "1"]);
-      const items = mapHomeItems(rawSearchData);
-      const currentPage = page ?? null;
+      const runtimeSearchResult = await executeNamedScriptResult("search", [query, page ?? "1"]);
+      const items = mapHomeItems(runtimeSearchResult.data);
+      const currentPage = page ?? "1";
       const nextPage =
-        options.source.supportsPagination && items.length >= SEARCH_PAGE_SIZE_HINT
-          ? String(Number(page ?? "1") + 1)
-          : null;
+        coerceNextPageToken(runtimeSearchResult.meta) ??
+        (options.source.supportsPagination ? inferNextPageFromItemCount(currentPage, items.length) : null);
 
       return {
         source: {
