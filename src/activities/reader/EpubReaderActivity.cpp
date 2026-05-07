@@ -10,7 +10,6 @@
 #include <Logging.h>
 #include <esp_system.h>
 
-#include <iterator>
 #include <limits>
 
 #include "CrossPointSettings.h"
@@ -23,6 +22,9 @@
 #include "MappedInputManager.h"
 #include "QrDisplayActivity.h"
 #include "ReaderUtils.h"
+#include "SeriesManifest.h"
+#include "SeriesChapterSelectionActivity.h"
+#include "SeriesReadingContext.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -30,8 +32,9 @@
 
 namespace {
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
+constexpr unsigned long skipChapterMs = 700;
 // pages per minute, first item is 1 to prevent division by zero if accessed
-constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
+const std::vector<int> PAGE_TURN_LABELS = {1, 1, 3, 6, 12};
 
 int clampPercent(int percent) {
   if (percent < 0) {
@@ -43,6 +46,27 @@ int clampPercent(int percent) {
   return percent;
 }
 
+RecentBook buildRecentBookEntry(const Epub& epub, const std::optional<SeriesReadingContext>& seriesContext) {
+  RecentBook recent{seriesContext.has_value() ? seriesContext->seriesId : "", epub.getPath(), epub.getTitle(),
+                    epub.getAuthor(), epub.getThumbBmpPath()};
+  if (!seriesContext.has_value()) {
+    return recent;
+  }
+
+  SeriesManifest manifest;
+  if (!SeriesManifestStore::tryLoadForChapterPath(epub.getPath(), manifest)) {
+    return recent;
+  }
+
+  recent.seriesId = manifest.seriesId;
+  if (!manifest.title.empty()) {
+    recent.title = manifest.title;
+  }
+  if (!manifest.author.empty()) {
+    recent.author = manifest.author;
+  }
+  return recent;
+}
 }  // namespace
 
 void EpubReaderActivity::onEnter() {
@@ -50,6 +74,11 @@ void EpubReaderActivity::onEnter() {
 
   if (!epub) {
     return;
+  }
+
+  if (openAtLastPage) {
+    pendingPageJump = std::numeric_limits<uint16_t>::max();
+    openAtLastPage = false;
   }
 
   // Configure screen orientation based on settings
@@ -91,8 +120,9 @@ void EpubReaderActivity::onEnter() {
 
   // Save current epub as last opened epub and add to recent books
   APP_STATE.openEpubPath = epub->getPath();
+  persistSeriesReadingState();
   APP_STATE.saveToFile();
-  RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
+  RECENT_BOOKS.addBook(buildRecentBookEntry(*epub, seriesContext));
 
   // Trigger first update
   requestUpdate();
@@ -184,7 +214,43 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  if (consumeLeftRelease && mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    consumeLeftRelease = false;
+    return;
+  }
+  if (consumeRightRelease && mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    consumeRightRelease = false;
+    return;
+  }
+
+  const bool longPressChapterSkip =
+      SETTINGS.longPressButtonBehavior == CrossPointSettings::LONG_PRESS_BUTTON_BEHAVIOR::CHAPTER_SKIP;
+
+  if (longPressChapterSkip && section && section->pageCount > 0) {
+    if (!consumeLeftRelease && mappedInput.isPressed(MappedInputManager::Button::Left) &&
+        mappedInput.getHeldTime() > skipChapterMs) {
+      consumeLeftRelease = true;
+      if (section->currentPage != 0) {
+        section->currentPage = 0;
+        lastPageTurnTime = millis();
+        requestUpdate();
+      }
+      return;
+    }
+    if (!consumeRightRelease && mappedInput.isPressed(MappedInputManager::Button::Right) &&
+        mappedInput.getHeldTime() > skipChapterMs) {
+      consumeRightRelease = true;
+      const int lastPage = section->pageCount - 1;
+      if (section->currentPage != lastPage) {
+        section->currentPage = lastPage;
+        lastPageTurnTime = millis();
+        requestUpdate();
+      }
+      return;
+    }
+  }
+
+  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
     return;
   }
@@ -192,7 +258,13 @@ void EpubReaderActivity::loop() {
   // At end of the book, forward button goes home and back button returns to last page
   if (currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
     if (nextTriggered) {
-      onGoHome();
+      if (seriesContext.has_value()) {
+        if (!tryNavigateAdjacentSeriesChapter(1, false)) {
+          requestUpdate();
+        }
+      } else {
+        onGoHome();
+      }
     } else {
       currentSpineIndex = epub->getSpineItemsCount() - 1;
       nextPageNumber = 0;
@@ -202,31 +274,14 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  const bool longPress = !fromTilt && mappedInput.getHeldTime() > ReaderUtils::SKIP_HOLD_MS;
+  const bool skipChapter = !fromTilt && longPressChapterSkip && mappedInput.getHeldTime() > skipChapterMs;
 
   // Don't skip chapter after screenshot
   if (gpio.wasReleased(HalGPIO::BTN_POWER) && gpio.wasReleased(HalGPIO::BTN_DOWN)) {
     return;
   }
 
-  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
-    // We don't want to delete the section mid-render, so grab the semaphore
-    {
-      RenderLock lock(*this);
-      nextPageNumber = 0;
-      currentSpineIndex = nextTriggered ? currentSpineIndex + 1 : currentSpineIndex - 1;
-      section.reset();
-    }
-    requestUpdate();
-    return;
-  }
-
-  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_CHANGE) {
-    const uint8_t newOrientation =
-        nextTriggered ? (SETTINGS.orientation - 1 + SETTINGS.ORIENTATION_COUNT) % SETTINGS.ORIENTATION_COUNT
-                      : (SETTINGS.orientation + 1) % SETTINGS.ORIENTATION_COUNT;
-    applyOrientation(newOrientation);
-    requestUpdate();
+  if (skipChapter) {
     return;
   }
 
@@ -309,6 +364,30 @@ void EpubReaderActivity::jumpToPercent(int percent) {
 void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
   switch (action) {
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
+      if (seriesContext.has_value() && seriesContext->hasSeriesIdentity()) {
+        SeriesManifest manifest;
+        if (SeriesManifestStore::loadFromSeriesDir(seriesContext->seriesDir, manifest)) {
+          const int currentChapterIndex = getCurrentSeriesChapterIndex();
+          startActivityForResult(
+              std::make_unique<SeriesChapterSelectionActivity>(renderer, mappedInput, std::move(manifest),
+                                                               currentChapterIndex),
+              [this](const ActivityResult& result) {
+                if (result.isCancelled || !seriesContext.has_value()) {
+                  return;
+                }
+
+                const auto& seriesChapter = std::get<SeriesChapterResult>(result.data);
+                SeriesReadingContext context = *seriesContext;
+                context.chapterPath = seriesChapter.chapterPath;
+                context.chapterIndex = seriesChapter.chapterIndex;
+                if (context.chapterPath != epub->getPath()) {
+                  activityManager.goToReader(std::move(context));
+                }
+              });
+          break;
+        }
+      }
+
       const int spineIdx = currentSpineIndex;
       const std::string path = epub->getPath();
       startActivityForResult(
@@ -469,14 +548,14 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
 }
 
 void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
-  if (selectedPageTurnOption == 0 || selectedPageTurnOption >= std::size(PAGE_TURN_RATES)) {
+  if (selectedPageTurnOption == 0 || selectedPageTurnOption >= PAGE_TURN_LABELS.size()) {
     automaticPageTurnActive = false;
     return;
   }
 
   lastPageTurnTime = millis();
   // calculates page turn duration by dividing by number of pages
-  pageTurnDuration = (1UL * 60 * 1000) / PAGE_TURN_RATES[selectedPageTurnOption];
+  pageTurnDuration = (1UL * 60 * 1000) / PAGE_TURN_LABELS[selectedPageTurnOption];
   automaticPageTurnActive = true;
 
   const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
@@ -498,6 +577,9 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
     if (section->currentPage < section->pageCount - 1) {
       section->currentPage++;
     } else {
+      if (currentSpineIndex >= epub->getSpineItemsCount() - 1 && tryNavigateAdjacentSeriesChapter(1, false)) {
+        return;
+      }
       // We don't want to delete the section mid-render, so grab the semaphore
       {
         RenderLock lock(*this);
@@ -518,10 +600,85 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
         currentSpineIndex--;
         section.reset();
       }
+    } else if (tryNavigateAdjacentSeriesChapter(-1, true)) {
+      return;
     }
   }
   lastPageTurnTime = millis();
   requestUpdate();
+}
+
+int EpubReaderActivity::getCurrentSeriesChapterIndex() const {
+  if (seriesContext.has_value() && seriesContext->chapterIndex > 0) {
+    return seriesContext->chapterIndex;
+  }
+  if (!epub) {
+    return 0;
+  }
+  SeriesManifest manifest;
+  if (!SeriesManifestStore::tryLoadForChapterPath(epub->getPath(), manifest)) {
+    return 0;
+  }
+  const auto chapter = SeriesManifestStore::findByPath(manifest, epub->getPath());
+  return chapter.has_value() ? chapter->chapterIndex : 0;
+}
+
+void EpubReaderActivity::persistSeriesReadingState() const {
+  if (!seriesContext.has_value()) {
+    return;
+  }
+
+  SeriesReadingContext context = *seriesContext;
+  context.chapterPath = epub ? epub->getPath() : context.chapterPath;
+  if (context.chapterIndex <= 0) {
+    context.chapterIndex = getCurrentSeriesChapterIndex();
+  }
+  APP_STATE.setOpenReadingState(context);
+}
+
+bool EpubReaderActivity::shouldAutoSkipLeadingBlankPage() const {
+  return section && section->currentPage == 0 && nextPageNumber == 0 && !pendingPageJump && pendingAnchor.empty() &&
+         !pendingPercentJump;
+}
+
+bool EpubReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta, const bool openChapterAtLastPage) {
+  if (!epub || !seriesContext.has_value()) {
+    return false;
+  }
+
+  SeriesManifest manifest;
+  if (!SeriesManifestStore::tryLoadForChapterPath(epub->getPath(), manifest)) {
+    LOG_DBG("ERS", "No valid series manifest for: %s", epub->getPath().c_str());
+    return false;
+  }
+
+  int currentChapterIndex = seriesContext->chapterIndex > 0 ? seriesContext->chapterIndex : getCurrentSeriesChapterIndex();
+  if (currentChapterIndex <= 0) {
+    LOG_DBG("ERS", "Cannot resolve current series chapter index");
+    return false;
+  }
+
+  const int targetChapterIndex = currentChapterIndex + chapterDelta;
+  std::string targetChapterPath;
+  if (!SeriesManifestStore::resolveChapterPath(manifest, targetChapterIndex, targetChapterPath)) {
+    LOG_DBG("ERS", "Series chapter %d not found", targetChapterIndex);
+    return false;
+  }
+
+  if (!Storage.exists(targetChapterPath.c_str())) {
+    LOG_ERR("ERS", "Series chapter file missing: %s", targetChapterPath.c_str());
+    return false;
+  }
+
+  SeriesReadingContext nextContext;
+  nextContext.seriesId = manifest.seriesId;
+  nextContext.seriesDir = manifest.seriesDir;
+  nextContext.chapterPath = targetChapterPath;
+  nextContext.chapterIndex = targetChapterIndex;
+  APP_STATE.setOpenReadingState(nextContext);
+  APP_STATE.saveToFile();
+  activityManager.goToReader(nextContext, openChapterAtLastPage);
+  return true;
 }
 
 // TODO: Failure handling
@@ -677,6 +834,24 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       return;
     }
 
+    if (shouldAutoSkipLeadingBlankPage() && p->elements.empty() && p->footnotes.empty()) {
+      if (section->currentPage < section->pageCount - 1) {
+        ++section->currentPage;
+        LOG_DBG("ERS", "Skipping blank opening page within spine %d -> page %d", currentSpineIndex,
+                section->currentPage);
+      } else if (currentSpineIndex < epub->getSpineItemsCount() - 1) {
+        LOG_DBG("ERS", "Skipping blank opening spine %d -> spine %d", currentSpineIndex, currentSpineIndex + 1);
+        ++currentSpineIndex;
+        nextPageNumber = 0;
+        section.reset();
+      } else {
+        LOG_DBG("ERS", "Blank opening page has no later content to skip to");
+      }
+
+      requestUpdate();
+      return;
+    }
+
     // Collect footnotes from the loaded page
     currentPageFootnotes = std::move(p->footnotes);
 
@@ -729,8 +904,8 @@ void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
   FsFile f;
   if (Storage.openFileForWrite("ERS", epub->getCachePath() + "/progress.bin", f)) {
     uint8_t data[6];
-    data[0] = currentSpineIndex & 0xFF;
-    data[1] = (currentSpineIndex >> 8) & 0xFF;
+    data[0] = spineIndex & 0xFF;
+    data[1] = (spineIndex >> 8) & 0xFF;
     data[2] = currentPage & 0xFF;
     data[3] = (currentPage >> 8) & 0xFF;
     data[4] = pageCount & 0xFF;

@@ -1,5 +1,7 @@
 #include "GfxRenderer.h"
 
+#include <cassert>
+
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
 #include <Logging.h>
@@ -8,6 +10,7 @@
 #include <algorithm>
 
 #include "FontCacheManager.h"
+#include "../../src/util/ScreenDebugState.h"
 
 const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) const {
   if (fontData->groups != nullptr) {
@@ -923,6 +926,7 @@ void GfxRenderer::invertScreen() const {
 void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const {
   auto elapsed = millis() - start_ms;
   LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
+  SCREEN_DEBUG.presentFrame();
   display.displayBuffer(refreshMode, fadingFix);
 }
 

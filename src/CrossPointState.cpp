@@ -16,6 +16,36 @@ constexpr char STATE_FILE_BAK[] = "/.crosspoint/state.bin.bak";
 
 CrossPointState CrossPointState::instance;
 
+void CrossPointState::setOpenReadingState(const SeriesReadingContext& context) {
+  openSeriesId = context.seriesId;
+  openSeriesDir = context.seriesDir;
+  openChapterPath = context.chapterPath;
+  openChapterIndex = context.chapterIndex;
+  // Keep legacy field in sync so existing consumers continue to function.
+  openEpubPath = context.chapterPath;
+}
+
+void CrossPointState::clearOpenReadingState() {
+  openEpubPath.clear();
+  openSeriesId.clear();
+  openSeriesDir.clear();
+  openChapterPath.clear();
+  openChapterIndex = 0;
+}
+
+SeriesReadingContext CrossPointState::getSeriesContext() const {
+  SeriesReadingContext context;
+  context.seriesId = openSeriesId;
+  context.seriesDir = openSeriesDir;
+  context.chapterPath = !openChapterPath.empty() ? openChapterPath : openEpubPath;
+  context.chapterIndex = openChapterIndex;
+  return context;
+}
+
+bool CrossPointState::hasSeriesContext() const {
+  return !openSeriesId.empty() && !openSeriesDir.empty() && !openChapterPath.empty() && openChapterIndex > 0;
+}
+
 bool CrossPointState::isRecentSleep(uint16_t idx, uint8_t checkCount) const {
   const uint8_t effectiveCount = std::min(checkCount, recentSleepFill);
   for (uint8_t i = 0; i < effectiveCount; i++) {
@@ -76,6 +106,7 @@ bool CrossPointState::loadFromBinaryFile() {
   }
 
   serialization::readString(inputFile, openEpubPath);
+  openChapterPath = openEpubPath;
   if (version >= 2) {
     uint8_t legacyLastSleep = UINT8_MAX;
     serialization::readPod(inputFile, legacyLastSleep);

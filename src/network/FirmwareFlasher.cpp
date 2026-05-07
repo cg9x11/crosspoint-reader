@@ -1,5 +1,61 @@
 #include "FirmwareFlasher.h"
 
+#ifdef CROSSPOINT_EMULATED
+
+#include <Logging.h>
+
+namespace firmware_flash {
+
+const char* resultName(Result r) {
+  switch (r) {
+    case Result::OK:
+      return "OK";
+    case Result::OPEN_FAIL:
+      return "OPEN_FAIL";
+    case Result::TOO_SMALL:
+      return "TOO_SMALL";
+    case Result::TOO_LARGE:
+      return "TOO_LARGE";
+    case Result::BAD_MAGIC:
+      return "BAD_MAGIC";
+    case Result::BAD_SEGMENTS:
+      return "BAD_SEGMENTS";
+    case Result::BAD_CHECKSUM:
+      return "BAD_CHECKSUM";
+    case Result::BAD_SHA:
+      return "BAD_SHA";
+    case Result::BAD_SIZE:
+      return "BAD_SIZE";
+    case Result::NO_PARTITION:
+      return "NO_PARTITION";
+    case Result::OOM:
+      return "OOM";
+    case Result::READ_FAIL:
+      return "READ_FAIL";
+    case Result::ERASE_FAIL:
+      return "ERASE_FAIL";
+    case Result::WRITE_FAIL:
+      return "WRITE_FAIL";
+    case Result::OTADATA_FAIL:
+      return "OTADATA_FAIL";
+  }
+  return "?";
+}
+
+Result validateImageFile(const char*, size_t) {
+  LOG_ERR("FLASH", "Firmware validation is not supported in emulator");
+  return Result::NO_PARTITION;
+}
+
+Result flashFromSdPath(const char*, ProgressCb, void*, bool) {
+  LOG_ERR("FLASH", "Firmware flashing is not supported in emulator");
+  return Result::NO_PARTITION;
+}
+
+}  // namespace firmware_flash
+
+#else
+
 #include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -309,3 +365,5 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
 }
 
 }  // namespace firmware_flash
+
+#endif

@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
+  <id>http://192.168.1.202:8787/opds</id>
+  <title>CrossPoint Reader OPDS</title>
+  <updated>2026-05-07T09:18:18.773Z</updated>
+  <link href="http://192.168.1.202:8787/opds" rel="self" type="application/atom+xml;profile=opds-catalog;kind=navigation" />
+  <entry>
+  <id>http://192.168.1.202:8787/opds/library</id>
+  <title>Thu vien</title>
+  <updated>2026-05-07T09:18:18.773Z</updated>
+  
+  <summary>Danh sach series da publish</summary>
+  
+  <link href="http://192.168.1.202:8787/opds/library" type="application/atom+xml;profile=opds-catalog;kind=navigation" />
+</entry>
+</feed>

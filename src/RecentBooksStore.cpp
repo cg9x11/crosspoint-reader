@@ -21,16 +21,20 @@ constexpr int MAX_RECENT_BOOKS = 10;
 RecentBooksStore RecentBooksStore::instance;
 
 void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
-                               const std::string& coverBmpPath) {
+                               const std::string& coverBmpPath, const std::string& seriesId) {
+  addBook(RecentBook{seriesId, path, title, author, coverBmpPath});
+}
+
+void RecentBooksStore::addBook(const RecentBook& newBook) {
   // Remove existing entry if present
-  auto it =
-      std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
+  auto it = std::find_if(recentBooks.begin(), recentBooks.end(),
+                         [&](const RecentBook& book) { return book == newBook; });
   if (it != recentBooks.end()) {
     recentBooks.erase(it);
   }
 
   // Add to front
-  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath});
+  recentBooks.insert(recentBooks.begin(), newBook);
 
   // Trim to max size
   if (recentBooks.size() > MAX_RECENT_BOOKS) {
@@ -41,14 +45,20 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
 }
 
 void RecentBooksStore::updateBook(const std::string& path, const std::string& title, const std::string& author,
-                                  const std::string& coverBmpPath) {
-  auto it =
-      std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
+                                  const std::string& coverBmpPath, const std::string& seriesId) {
+  updateBook(RecentBook{seriesId, path, title, author, coverBmpPath});
+}
+
+void RecentBooksStore::updateBook(const RecentBook& updatedBook) {
+  auto it = std::find_if(recentBooks.begin(), recentBooks.end(),
+                         [&](const RecentBook& book) { return book == updatedBook; });
   if (it != recentBooks.end()) {
     RecentBook& book = *it;
-    book.title = title;
-    book.author = author;
-    book.coverBmpPath = coverBmpPath;
+    book.seriesId = updatedBook.seriesId;
+    book.path = updatedBook.path;
+    book.title = updatedBook.title;
+    book.author = updatedBook.author;
+    book.coverBmpPath = updatedBook.coverBmpPath;
     saveToFile();
   }
 }
@@ -73,17 +83,17 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   if (FsHelpers::hasEpubExtension(lastBookFileName)) {
     Epub epub(path, "/.crosspoint");
     epub.load(false, true);
-    return RecentBook{path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
+    return RecentBook{"", path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
   } else if (FsHelpers::hasXtcExtension(lastBookFileName)) {
     // Handle XTC file
     Xtc xtc(path, "/.crosspoint");
     if (xtc.load()) {
-      return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
+      return RecentBook{"", path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
     }
   } else if (FsHelpers::hasTxtExtension(lastBookFileName) || FsHelpers::hasMarkdownExtension(lastBookFileName)) {
-    return RecentBook{path, lastBookFileName, "", ""};
+    return RecentBook{"", path, lastBookFileName, "", ""};
   }
-  return RecentBook{path, "", "", ""};
+  return RecentBook{"", path, "", "", ""};
 }
 
 bool RecentBooksStore::loadFromFile() {
@@ -133,7 +143,7 @@ bool RecentBooksStore::loadFromBinaryFile() {
         std::string title, author;
         serialization::readString(inputFile, title);
         serialization::readString(inputFile, author);
-        recentBooks.push_back({path, title, author, ""});
+        recentBooks.push_back({"", path, title, author, ""});
       } else {
         recentBooks.push_back(book);
       }
@@ -159,7 +169,7 @@ bool RecentBooksStore::loadFromBinaryFile() {
         continue;
       }
 
-      recentBooks.push_back({path, title, author, coverBmpPath});
+      recentBooks.push_back({"", path, title, author, coverBmpPath});
     }
 
     if (omitted > 0) {

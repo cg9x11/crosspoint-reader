@@ -16,6 +16,7 @@
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
+#include "util/ScreenDebugRecorder.h"
 #include "util/FullScreenMessageActivity.h"
 
 void ActivityManager::begin() {
@@ -41,7 +42,9 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+      ScreenDebugRecorder::beginFrame(currentActivity->name);
       currentActivity->render(std::move(lock));
+      ScreenDebugRecorder::applyScreenshotInfo(currentActivity->getScreenshotInfo());
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;
@@ -196,6 +199,12 @@ void ActivityManager::goToReader(std::string path) {
   replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
 }
 
+void ActivityManager::goToReader(SeriesReadingContext context, const bool openAtLastPage) {
+  std::string chapterPath = context.chapterPath;
+  replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(chapterPath), std::move(context),
+                                                   openAtLastPage));
+}
+
 void ActivityManager::goToSleep() {
   replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput));
   loop();  // Important: sleep screen must be rendered immediately, the caller will go to sleep right after this returns
@@ -245,6 +254,38 @@ ScreenshotInfo ActivityManager::getScreenshotInfo() const {
     return currentActivity->getScreenshotInfo();
   }
   return {};
+}
+
+std::string ActivityManager::getCurrentActivityName() const {
+  return currentActivity ? currentActivity->name : std::string{};
+}
+
+std::string ActivityManager::getPendingActivityName() const {
+  return pendingActivity ? pendingActivity->name : std::string{};
+}
+
+std::vector<std::string> ActivityManager::getStackActivityNames() const {
+  std::vector<std::string> names;
+  names.reserve(stackActivities.size());
+  for (const auto& activity : stackActivities) {
+    names.push_back(activity ? activity->name : std::string{});
+  }
+  return names;
+}
+
+const char* ActivityManager::getPendingActionName() const {
+  switch (pendingAction) {
+    case PendingAction::None: return "none";
+    case PendingAction::Push: return "push";
+    case PendingAction::Pop: return "pop";
+    case PendingAction::Replace: return "replace";
+  }
+  return "unknown";
+}
+
+bool ActivityManager::injectAutomationText(const std::string& text) {
+  (void)text;
+  return false;
 }
 
 void ActivityManager::requestUpdate(bool immediate) {

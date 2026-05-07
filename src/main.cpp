@@ -321,18 +321,23 @@ void setup() {
   } else if (HalSystem::isRebootFromPanic()) {
     // If we rebooted from a panic, go to crash report screen to show the panic info
     activityManager.goToCrashReport();
-  } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
+  } else if ((APP_STATE.openEpubPath.empty() && APP_STATE.openChapterPath.empty()) || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
     // crashed (indicated by readerActivityLoadCount > 0)
     activityManager.goHome();
   } else {
     // Clear app state to avoid getting into a boot loop if the epub doesn't load
-    const auto path = APP_STATE.openEpubPath;
-    APP_STATE.openEpubPath = "";
+    const auto context = APP_STATE.getSeriesContext();
+    const auto path = !context.chapterPath.empty() ? context.chapterPath : APP_STATE.openEpubPath;
+    APP_STATE.clearOpenReadingState();
     APP_STATE.readerActivityLoadCount++;
     APP_STATE.saveToFile();
-    activityManager.goToReader(path);
+    if (context.hasSeriesIdentity()) {
+      activityManager.goToReader(context);
+    } else {
+      activityManager.goToReader(path);
+    }
   }
 
   // Ensure we're not still holding the power button before leaving setup

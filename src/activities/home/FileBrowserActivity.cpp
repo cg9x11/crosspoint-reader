@@ -1,22 +1,345 @@
 #include "FileBrowserActivity.h"
 
+#include <Bitmap.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Xtc.h>
 
 #include <algorithm>
 
+#include "../ActivityManager.h"
 #include "../util/ConfirmationActivity.h"
+#include "CrossPointState.h"
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "SeriesManifest.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ScreenDebugState.h"
 
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
+constexpr const char* SERIES_VALUE = "SER";
+constexpr int PREVIEW_COVER_HEIGHT = 120;
+constexpr const char* NO_DESCRIPTION_TEXT = "No description";
+constexpr const char* CURRENT_READING_TEXT = "Current";
+
+std::string normalizePreviewText(const std::string& input) {
+  std::string output;
+  output.reserve(input.size());
+
+  bool inTag = false;
+  bool lastWasSpace = false;
+  for (unsigned char ch : input) {
+    if (ch == '<') {
+      inTag = true;
+      continue;
+    }
+    if (inTag) {
+      if (ch == '>') {
+        inTag = false;
+      }
+      continue;
+    }
+
+    const bool isSpace = isspace(ch) != 0;
+    if (isSpace) {
+      if (!output.empty() && !lastWasSpace) {
+        output.push_back(' ');
+      }
+      lastWasSpace = true;
+      continue;
+    }
+
+    output.push_back(static_cast<char>(ch));
+    lastWasSpace = false;
+  }
+
+  while (!output.empty() && output.back() == ' ') {
+    output.pop_back();
+  }
+  return output;
+}
+
+std::string joinPath(std::string base, const std::string& child) {
+  if (base.empty()) {
+    base = "/";
+  }
+  if (base.back() != '/') {
+    base.push_back('/');
+  }
+  return base + child;
+}
+
+std::string getDirectoryTitle(std::string directoryName) {
+  if (!directoryName.empty() && directoryName.back() == '/') {
+    directoryName.pop_back();
+  }
+  if (!UITheme::getInstance().getTheme().showsFileIcons()) {
+    return "[" + directoryName + "]";
+  }
+  return directoryName;
+}
+
+std::string getFileTitle(const std::string& filename) {
+  const auto pos = filename.rfind('.');
+  return filename.substr(0, pos);
+}
+
+std::string getFileExtension(const std::string& filename) {
+  const auto pos = filename.rfind('.');
+  return pos == std::string::npos ? "" : filename.substr(pos);
+}
+
+bool compareFileBrowserNames(const std::string& str1, const std::string& str2) {
+  // Directories first
+  bool isDir1 = str1.back() == '/';
+  bool isDir2 = str2.back() == '/';
+  if (isDir1 != isDir2) return isDir1;
+
+  // Start naive natural sort
+  const char* s1 = str1.c_str();
+  const char* s2 = str2.c_str();
+
+  // Iterate while both strings have characters
+  while (*s1 && *s2) {
+    // Check if both are at the start of a number
+    if (isdigit(*s1) && isdigit(*s2)) {
+      while (*s1 == '0') s1++;
+      while (*s2 == '0') s2++;
+
+      int len1 = 0;
+      int len2 = 0;
+      while (isdigit(s1[len1])) len1++;
+      while (isdigit(s2[len2])) len2++;
+
+      if (len1 != len2) return len1 < len2;
+
+      for (int i = 0; i < len1; i++) {
+        if (s1[i] != s2[i]) return s1[i] < s2[i];
+      }
+
+      s1 += len1;
+      s2 += len2;
+    } else {
+      char c1 = tolower(*s1);
+      char c2 = tolower(*s2);
+      if (c1 != c2) return c1 < c2;
+      s1++;
+      s2++;
+    }
+  }
+
+  return *s1 == '\0' && *s2 != '\0';
+}
+
+bool loadEpubForPreview(Epub& epub) {
+  if (epub.load(false, true)) {
+    return true;
+  }
+  // Preview should still work for first-time selections that have no cache yet.
+  return epub.load(true, true);
+}
 }  // namespace
+
+const RecentBook* FileBrowserActivity::findRecentBookForPath(const std::string& path, const std::string& seriesId) const {
+  for (const auto& book : RECENT_BOOKS.getBooks()) {
+    if (!seriesId.empty() && book.seriesId == seriesId) {
+      return &book;
+    }
+    if (book.path == path) {
+      return &book;
+    }
+  }
+  return nullptr;
+}
+
+bool FileBrowserActivity::tryBuildSeriesEntry(const std::string& directoryName, FileBrowserEntry& entry) const {
+  SeriesManifest manifest;
+  const std::string seriesDir = joinPath(basepath, directoryName);
+  if (!SeriesManifestStore::loadFromSeriesDir(seriesDir, manifest)) {
+    return false;
+  }
+
+  entry = {};
+  entry.kind = EntryKind::SeriesDirectory;
+  entry.rawName = directoryName + "/";
+  entry.title = manifest.title.empty() ? getDirectoryTitle(entry.rawName) : manifest.title;
+  entry.value = SERIES_VALUE;
+
+  const RecentBook* recent = nullptr;
+  for (const auto& book : RECENT_BOOKS.getBooks()) {
+    if (book.seriesId == manifest.seriesId) {
+      recent = &book;
+      break;
+    }
+  }
+
+  SeriesChapter activeChapter = manifest.chapters.front();
+  std::string resumePath = SeriesManifestStore::buildChapterPath(manifest.seriesDir, activeChapter.file);
+  if (recent && !recent->path.empty() && Storage.exists(recent->path.c_str())) {
+    const auto chapter = SeriesManifestStore::findByPath(manifest, recent->path);
+    if (chapter.has_value()) {
+      activeChapter = *chapter;
+      resumePath = recent->path;
+    }
+  }
+
+  if (!Storage.exists(resumePath.c_str())) {
+    LOG_ERR("FBA", "Series chapter missing: %s", resumePath.c_str());
+    return false;
+  }
+
+  entry.resumePath = resumePath;
+  entry.subtitle = activeChapter.title.empty() ? getFileTitle(activeChapter.file) : activeChapter.title;
+  entry.value = std::to_string(activeChapter.chapterIndex) + "/" + std::to_string(manifest.chapters.size());
+  entry.seriesContext.seriesId = manifest.seriesId;
+  entry.seriesContext.seriesDir = manifest.seriesDir;
+  entry.seriesContext.chapterPath = resumePath;
+  entry.seriesContext.chapterIndex = activeChapter.chapterIndex;
+  return true;
+}
+
+bool FileBrowserActivity::isPreviewable(const FileBrowserEntry& entry) const {
+  if (entry.kind == EntryKind::SeriesDirectory) {
+    return true;
+  }
+  if (entry.kind != EntryKind::File) {
+    return false;
+  }
+
+  std::string_view filename{entry.rawName};
+  return FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
+         FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename);
+}
+
+std::string FileBrowserActivity::getEntryFullPath(const FileBrowserEntry& entry) const { return joinPath(basepath, entry.rawName); }
+
+void FileBrowserActivity::loadSeriesPreview(const FileBrowserEntry& entry, PreviewData& preview) const {
+  SeriesManifest manifest;
+  if (!SeriesManifestStore::loadFromSeriesDir(entry.seriesContext.seriesDir, manifest)) {
+    return;
+  }
+
+  preview.available = true;
+  preview.title = entry.title;
+  preview.author = manifest.author;
+  preview.summary = manifest.description.empty() ? NO_DESCRIPTION_TEXT : manifest.description;
+
+  if (!manifest.coverPath.empty()) {
+    const std::string manifestCoverPath = SeriesManifestStore::buildChapterPath(manifest.seriesDir, manifest.coverPath);
+    if (Storage.exists(manifestCoverPath.c_str())) {
+      preview.coverBmpPath = manifestCoverPath;
+    }
+  }
+
+  const RecentBook* recent = findRecentBookForPath(entry.resumePath, manifest.seriesId);
+  if (recent && !recent->coverBmpPath.empty()) {
+    preview.coverBmpPath = recent->coverBmpPath;
+  }
+
+  if (preview.coverBmpPath.empty() && Storage.exists(entry.resumePath.c_str())) {
+    Epub epub(entry.resumePath, "/.crosspoint");
+    if (loadEpubForPreview(epub)) {
+      preview.coverBmpPath = epub.getThumbBmpPath();
+      const std::string thumbPath = UITheme::getCoverThumbPath(preview.coverBmpPath, PREVIEW_COVER_HEIGHT);
+      if (!Storage.exists(thumbPath.c_str())) {
+        epub.generateThumbBmp(PREVIEW_COVER_HEIGHT);
+      }
+    }
+  }
+
+  if (entry.seriesContext.chapterIndex > 0) {
+    preview.status = tr(STR_CONTINUE_READING) + std::string(": ") + std::to_string(entry.seriesContext.chapterIndex) +
+                     "/" + std::to_string(manifest.chapters.size());
+  } else {
+    preview.status = tr(STR_START_READING);
+  }
+
+  if (APP_STATE.openSeriesId == manifest.seriesId && !APP_STATE.openChapterPath.empty()) {
+    preview.status = std::string(tr(STR_CONTINUE_READING)) + " (" + CURRENT_READING_TEXT + ")";
+  }
+}
+
+void FileBrowserActivity::loadFilePreview(const FileBrowserEntry& entry, const std::string& fullPath, PreviewData& preview) const {
+  preview.available = true;
+  preview.title = entry.title;
+  preview.summary = NO_DESCRIPTION_TEXT;
+
+  std::string_view filename{entry.rawName};
+  const RecentBook* recent = findRecentBookForPath(fullPath);
+
+  if (FsHelpers::hasEpubExtension(filename)) {
+    Epub epub(fullPath, "/.crosspoint");
+    if (loadEpubForPreview(epub)) {
+      preview.title = epub.getTitle().empty() ? entry.title : epub.getTitle();
+      preview.author = epub.getAuthor();
+      preview.coverBmpPath = epub.getThumbBmpPath();
+      const std::string thumbPath = UITheme::getCoverThumbPath(preview.coverBmpPath, PREVIEW_COVER_HEIGHT);
+      if (!preview.coverBmpPath.empty() && !Storage.exists(thumbPath.c_str())) {
+        epub.generateThumbBmp(PREVIEW_COVER_HEIGHT);
+      }
+      if (epub.getTocItemsCount() > 0) {
+        preview.summary = epub.getTocItem(0).title;
+      }
+    }
+  } else if (FsHelpers::hasXtcExtension(filename)) {
+    Xtc xtc(fullPath, "/.crosspoint");
+    if (xtc.load()) {
+      preview.title = xtc.getTitle().empty() ? entry.title : xtc.getTitle();
+      preview.author = xtc.getAuthor();
+      preview.coverBmpPath = xtc.getThumbBmpPath();
+      const std::string thumbPath = UITheme::getCoverThumbPath(preview.coverBmpPath, PREVIEW_COVER_HEIGHT);
+      if (!preview.coverBmpPath.empty() && !Storage.exists(thumbPath.c_str())) {
+        xtc.generateThumbBmp(PREVIEW_COVER_HEIGHT);
+      }
+      preview.summary = "XTC";
+    }
+  } else if (FsHelpers::hasMarkdownExtension(filename)) {
+    preview.summary = "Markdown";
+  } else {
+    preview.summary = "Text";
+  }
+
+  if (recent) {
+    if (preview.author.empty()) {
+      preview.author = recent->author;
+    }
+    if (preview.coverBmpPath.empty()) {
+      preview.coverBmpPath = recent->coverBmpPath;
+    }
+  }
+
+  if (APP_STATE.openEpubPath == fullPath) {
+    preview.status = std::string(tr(STR_CONTINUE_READING)) + " (" + CURRENT_READING_TEXT + ")";
+  } else if (recent) {
+    preview.status = tr(STR_CONTINUE_READING);
+  } else {
+    preview.status = tr(STR_START_READING);
+  }
+}
+
+void FileBrowserActivity::loadPreviewForSelection() {
+  currentPreview = {};
+  if (files.empty() || selectorIndex >= files.size()) {
+    return;
+  }
+
+  const FileBrowserEntry& entry = files[selectorIndex];
+  if (!isPreviewable(entry)) {
+    return;
+  }
+
+  currentPreview.key = getEntryFullPath(entry);
+  if (entry.kind == EntryKind::SeriesDirectory) {
+    loadSeriesPreview(entry, currentPreview);
+  } else {
+    loadFilePreview(entry, currentPreview.key, currentPreview);
+  }
+}
 
 void FileBrowserActivity::loadFiles() {
   files.clear();
@@ -36,33 +359,53 @@ void FileBrowserActivity::loadFiles() {
     }
 
     if (file.isDirectory()) {
-      files.emplace_back(std::string(name) + "/");
+      FileBrowserEntry entry;
+      if (tryBuildSeriesEntry(name, entry)) {
+        files.push_back(std::move(entry));
+        continue;
+      }
+
+      entry.rawName = std::string(name) + "/";
+      entry.title = getDirectoryTitle(entry.rawName);
+      entry.kind = EntryKind::Directory;
+      files.push_back(std::move(entry));
     } else {
       std::string_view filename{name};
       if (mode == Mode::PickFirmware) {
-        // Firmware picker: only show .bin files.
-        if (FsHelpers::checkFileExtension(filename, ".bin")) {
-          files.emplace_back(filename);
+        if (getFileExtension(std::string(filename)) != ".bin") {
+          continue;
         }
-      } else if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
-                 FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
-                 FsHelpers::hasBmpExtension(filename)) {
-        files.emplace_back(filename);
+        FileBrowserEntry entry;
+        entry.rawName = std::string(filename);
+        entry.title = getFileTitle(entry.rawName);
+        entry.value = getFileExtension(entry.rawName);
+        entry.kind = EntryKind::File;
+        files.push_back(std::move(entry));
+        continue;
+      }
+
+      if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
+          FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
+          FsHelpers::hasBmpExtension(filename)) {
+        FileBrowserEntry entry;
+        entry.rawName = std::string(filename);
+        entry.title = getFileTitle(entry.rawName);
+        entry.value = getFileExtension(entry.rawName);
+        entry.kind = EntryKind::File;
+        files.push_back(std::move(entry));
       }
     }
   }
-  root.close();
-  FsHelpers::sortFileList(files);
+  std::sort(files.begin(), files.end(),
+            [](const FileBrowserEntry& left, const FileBrowserEntry& right) {
+              return compareFileBrowserNames(left.rawName, right.rawName);
+            });
 }
 
 void FileBrowserActivity::onEnter() {
   Activity::onEnter();
 
   selectorIndex = 0;
-
-  // If Confirm was held while this activity opened (typical when launched from a menu), ignore
-  // its release — otherwise we'd immediately auto-open whatever is at index 0.
-  lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
 
   auto root = Storage.open(basepath.c_str());
   if (!root) {
@@ -82,6 +425,7 @@ void FileBrowserActivity::onEnter() {
     loadFiles();
   }
 
+  loadPreviewForSelection();
   requestUpdate();
 }
 
@@ -98,11 +442,34 @@ void FileBrowserActivity::clearFileMetadata(const std::string& fullPath) {
   }
 }
 
+void FileBrowserActivity::openDirectory(const std::string& rawName) {
+  basepath = joinPath(basepath, rawName.substr(0, rawName.length() - 1));
+  loadFiles();
+  selectorIndex = 0;
+  loadPreviewForSelection();
+  requestUpdate();
+}
+
+void FileBrowserActivity::openSeriesChapterList(const FileBrowserEntry& entry) { openDirectory(entry.rawName); }
+
+void FileBrowserActivity::resumeSeriesDirectory(const FileBrowserEntry& entry) {
+  if (entry.seriesContext.isValid()) {
+    activityManager.goToReader(entry.seriesContext);
+    return;
+  }
+  if (!entry.resumePath.empty()) {
+    onSelectBook(entry.resumePath);
+    return;
+  }
+  openSeriesChapterList(entry);
+}
+
 void FileBrowserActivity::loop() {
-  // Long press BACK (1s+) goes to root folder (Books mode only).
-  // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
-  if (mode == Mode::Books && mappedInput.isPressed(MappedInputManager::Button::Back) &&
-      mappedInput.getHeldTime() >= GO_HOME_MS && basepath != "/" && !lockLongPressBack) {
+  // Long press BACK (1s+) goes to root folder
+  // but Long press BACK (1s+) from ReaderActivity sends us here with the MappedInput already set.
+  // So ignore it the first time.
+  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS &&
+      basepath != "/" && !lockLongPressBack) {
     basepath = "/";
     loadFiles();
     selectorIndex = 0;
@@ -119,32 +486,31 @@ void FileBrowserActivity::loop() {
   const int pageItems = UITheme::getNumberOfItemsPerPage(renderer, true, false, true, false, pathReserved);
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (lockNextConfirmRelease) {
-      lockNextConfirmRelease = false;
-      return;
-    }
     if (files.empty()) return;
 
-    const std::string& entry = files[selectorIndex];
-    bool isDirectory = (entry.back() == '/');
+    const FileBrowserEntry& entry = files[selectorIndex];
+    const bool isLongPress = mappedInput.getHeldTime() >= GO_HOME_MS;
+    const std::string fullPath = joinPath(basepath, entry.rawName);
 
-    // Firmware picker: select file -> return path; navigate into directories normally.
-    if (mode == Mode::PickFirmware && !isDirectory) {
-      std::string cleanBasePath = basepath;
-      if (cleanBasePath.back() != '/') cleanBasePath += "/";
-      ActivityResult res{FilePathResult{cleanBasePath + entry}};
-      res.isCancelled = false;
-      setResult(std::move(res));
-      finish();
+    if (mode == Mode::PickFirmware) {
+      if (entry.kind == EntryKind::Directory) {
+        openDirectory(entry.rawName);
+      } else {
+        ActivityResult result;
+        result.data = FilePathResult{fullPath};
+        setResult(std::move(result));
+        finish();
+      }
       return;
     }
 
-    if (mode == Mode::Books && mappedInput.getHeldTime() >= GO_HOME_MS && !isDirectory) {
-      // --- LONG PRESS ACTION: DELETE FILE ---
-      std::string cleanBasePath = basepath;
-      if (cleanBasePath.back() != '/') cleanBasePath += "/";
-      const std::string fullPath = cleanBasePath + entry;
+    if (isLongPress && entry.kind == EntryKind::SeriesDirectory) {
+      openSeriesChapterList(entry);
+      return;
+    }
 
+    if (isLongPress && entry.kind == EntryKind::File) {
+      // --- LONG PRESS ACTION: DELETE FILE ---
       auto handler = [this, fullPath](const ActivityResult& res) {
         if (!res.isCancelled) {
           LOG_DBG("FileBrowser", "Attempting to delete: %s", fullPath.c_str());
@@ -159,6 +525,7 @@ void FileBrowserActivity::loop() {
               selectorIndex = files.size() - 1;
             }
 
+            loadPreviewForSelection();
             requestUpdate(true);
           } else {
             LOG_ERR("FileBrowser", "Failed to delete file: %s", fullPath.c_str());
@@ -169,21 +536,22 @@ void FileBrowserActivity::loop() {
       };
 
       std::string heading = tr(STR_DELETE) + std::string("? ");
-
-      startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, entry), handler);
+      startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, entry.title),
+                             handler);
       return;
-    } else {
-      // --- SHORT PRESS ACTION: OPEN/NAVIGATE ---
-      if (basepath.back() != '/') basepath += "/";
+    }
 
-      if (isDirectory) {
-        basepath += entry.substr(0, entry.length() - 1);
-        loadFiles();
-        selectorIndex = 0;
-        requestUpdate();
-      } else {
-        onSelectBook(basepath + entry);
-      }
+    // --- SHORT PRESS ACTION: OPEN/NAVIGATE ---
+    switch (entry.kind) {
+      case EntryKind::Directory:
+        openDirectory(entry.rawName);
+        break;
+      case EntryKind::SeriesDirectory:
+        resumeSeriesDirectory(entry);
+        break;
+      case EntryKind::File:
+        onSelectBook(fullPath);
+        break;
     }
     return;
   }
@@ -202,13 +570,8 @@ void FileBrowserActivity::loop() {
         const std::string dirName = oldPath.substr(pos + 1) + "/";
         selectorIndex = findEntry(dirName);
 
+        loadPreviewForSelection();
         requestUpdate();
-      } else if (mode == Mode::PickFirmware) {
-        // Firmware picker at root: cancel back to caller instead of going home.
-        ActivityResult res;
-        res.isCancelled = true;
-        setResult(std::move(res));
-        finish();
       } else {
         onGoHome();
       }
@@ -218,43 +581,112 @@ void FileBrowserActivity::loop() {
   int listSize = static_cast<int>(files.size());
   buttonNavigator.onNextRelease([this, listSize] {
     selectorIndex = ButtonNavigator::nextIndex(static_cast<int>(selectorIndex), listSize);
+    loadPreviewForSelection();
     requestUpdate();
   });
 
   buttonNavigator.onPreviousRelease([this, listSize] {
     selectorIndex = ButtonNavigator::previousIndex(static_cast<int>(selectorIndex), listSize);
+    loadPreviewForSelection();
     requestUpdate();
   });
 
   buttonNavigator.onNextContinuous([this, listSize, pageItems] {
     selectorIndex = ButtonNavigator::nextPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
+    loadPreviewForSelection();
     requestUpdate();
   });
 
   buttonNavigator.onPreviousContinuous([this, listSize, pageItems] {
     selectorIndex = ButtonNavigator::previousPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
+    loadPreviewForSelection();
     requestUpdate();
   });
 }
 
-std::string getFileName(std::string filename) {
-  if (filename.back() == '/') {
-    filename.pop_back();
-    if (!UITheme::getInstance().getTheme().showsFileIcons()) {
-      return "[" + filename + "]";
-    }
-    return filename;
-  }
-  const auto pos = filename.rfind('.');
-  return filename.substr(0, pos);
-}
+void FileBrowserActivity::drawPreviewPanel(const Rect& rect, const PreviewData& preview) {
+  constexpr int panelPadding = 8;
+  constexpr int columnGap = 10;
 
-std::string getFileExtension(std::string filename) {
-  if (filename.back() == '/') {
-    return "";
+  renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
+  renderer.drawRect(rect.x, rect.y, rect.width, rect.height, true);
+
+  const int coverHeight = rect.height - panelPadding * 2;
+  const int idealCoverWidth = (coverHeight * 2) / 3;
+  const int coverWidth = std::min((rect.width * 36) / 100, idealCoverWidth);
+  const int coverX = rect.x + panelPadding;
+  const int coverY = rect.y + panelPadding;
+  const int dividerX = coverX + coverWidth + panelPadding;
+
+  renderer.drawLine(dividerX, rect.y + 1, dividerX, rect.y + rect.height - 2, 1, true);
+
+  bool coverDrawn = false;
+  if (!preview.coverBmpPath.empty()) {
+    const std::string coverPath = UITheme::getCoverThumbPath(preview.coverBmpPath, PREVIEW_COVER_HEIGHT);
+    LOG_DBG("FBA", "Preview cover candidate: %s", coverPath.c_str());
+    FsFile file;
+    if (Storage.openFileForRead("FBA", coverPath, file)) {
+      Bitmap bitmap(file);
+      const BmpReaderError parseError = bitmap.parseHeaders();
+      LOG_DBG("FBA", "Preview cover parse result: %s", Bitmap::errorToString(parseError));
+      if (parseError == BmpReaderError::Ok) {
+        renderer.drawBitmap(bitmap, coverX, coverY, coverWidth, coverHeight);
+        coverDrawn = true;
+        LOG_DBG("FBA", "Preview cover drawn at %d,%d size %dx%d", coverX, coverY, coverWidth, coverHeight);
+      }
+      file.close();
+    } else {
+      LOG_DBG("FBA", "Preview cover open failed: %s", coverPath.c_str());
+    }
   }
-  const auto pos = filename.rfind('.');
-  return filename.substr(pos);
+  if (!coverDrawn) {
+    LOG_DBG("FBA", "Preview cover fallback used for %s", preview.title.c_str());
+    const char* noCoverText = "No cover";
+    const int noCoverWidth = renderer.getTextWidth(UI_10_FONT_ID, noCoverText);
+    const int noCoverX = coverX + std::max(0, (coverWidth - noCoverWidth) / 2);
+    renderer.drawText(UI_10_FONT_ID, noCoverX,
+                      coverY + coverHeight / 2 - renderer.getLineHeight(UI_10_FONT_ID) / 2, noCoverText, true);
+  }
+
+  const int textX = dividerX + columnGap;
+  const int textWidth = rect.x + rect.width - panelPadding - textX;
+  int textY = rect.y + panelPadding;
+
+  auto titleLines = renderer.wrappedText(UI_12_FONT_ID, preview.title.c_str(), textWidth, 2, EpdFontFamily::BOLD);
+  for (const auto& line : titleLines) {
+    renderer.drawText(UI_12_FONT_ID, textX, textY, line.c_str(), true, EpdFontFamily::BOLD);
+    textY += renderer.getLineHeight(UI_12_FONT_ID);
+  }
+
+  if (!preview.author.empty()) {
+    textY += 2;
+    std::string author = renderer.truncatedText(UI_10_FONT_ID, preview.author.c_str(), textWidth);
+    renderer.drawText(UI_10_FONT_ID, textX, textY, author.c_str(), true);
+    textY += renderer.getLineHeight(UI_10_FONT_ID) + 6;
+  }
+
+  if (!preview.status.empty()) {
+    const std::string meta = renderer.truncatedText(SMALL_FONT_ID, preview.status.c_str(), textWidth);
+    renderer.drawText(SMALL_FONT_ID, textX, textY, meta.c_str(), true);
+    textY += renderer.getLineHeight(SMALL_FONT_ID) + 8;
+    renderer.drawLine(textX, textY - 4, textX + textWidth, textY - 4, true);
+  }
+
+  renderer.drawText(UI_10_FONT_ID, textX, textY, "Summary", true, EpdFontFamily::BOLD);
+  textY += renderer.getLineHeight(UI_10_FONT_ID) + 4;
+
+  const int availableHeight = rect.y + rect.height - panelPadding - textY;
+  const int maxSummaryLines = std::max(0, std::min(7, availableHeight / renderer.getLineHeight(SMALL_FONT_ID)));
+  if (maxSummaryLines <= 0) {
+    return;
+  }
+
+  const std::string summaryText = normalizePreviewText(preview.summary);
+  auto summaryLines = renderer.wrappedText(SMALL_FONT_ID, summaryText.c_str(), textWidth, maxSummaryLines);
+  for (const auto& line : summaryLines) {
+    renderer.drawText(SMALL_FONT_ID, textX, textY, line.c_str(), true);
+    textY += renderer.getLineHeight(SMALL_FONT_ID);
+  }
 }
 
 void FileBrowserActivity::render(RenderLock&&) {
@@ -264,26 +696,37 @@ void FileBrowserActivity::render(RenderLock&&) {
   const auto pageHeight = renderer.getScreenHeight();
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  std::string folderName =
-      (mode == Mode::PickFirmware)
-          ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
-          : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
+  std::string folderName = (basepath == "/") ? tr(STR_SD_CARD) : basepath.substr(basepath.rfind('/') + 1);
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());
 
   const int pathLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int pathReserved = pathLineHeight + metrics.verticalSpacing;
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight =
-      pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
+  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
+  const bool showPreview = currentPreview.available;
+  const int previewSpacing = showPreview ? std::max(2, metrics.verticalSpacing / 2) : 0;
+  const int previewHeight = showPreview ? std::min(210, (contentHeight * 11) / 20) : 0;
+  const int listHeight = showPreview ? (contentHeight - previewHeight - previewSpacing) : contentHeight;
   if (files.empty()) {
-    const char* emptyMsg = (mode == Mode::PickFirmware) ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);
-    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, emptyMsg);
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_NO_FILES_FOUND));
   } else {
     GUI.drawList(
-        renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
-        [this](int index) { return getFileName(files[index]); }, nullptr,
-        [this](int index) { return UITheme::getFileIcon(files[index]); },
-        [this](int index) { return getFileExtension(files[index]); }, false);
+        renderer, Rect{0, contentTop, pageWidth, listHeight}, files.size(), selectorIndex,
+        [this](int index) { return files[index].title; },
+        [this](int index) { return files[index].subtitle; },
+        [this](int index) { return files[index].kind == EntryKind::SeriesDirectory ? UIIcon::Book : UITheme::getFileIcon(files[index].rawName); },
+        [this](int index) { return files[index].value; }, false);
+  }
+
+  if (showPreview) {
+    drawPreviewPanel(Rect{0, contentTop + listHeight + previewSpacing, pageWidth, previewHeight},
+                     currentPreview);
+
+    const std::string previewSecondary =
+        currentPreview.status.empty()
+            ? currentPreview.author
+            : (currentPreview.author.empty() ? currentPreview.status : currentPreview.author + " | " + currentPreview.status);
+    SCREEN_DEBUG.setBodyText(currentPreview.title.c_str(), previewSecondary.c_str(), currentPreview.summary.c_str());
   }
 
   // Full path display
@@ -314,13 +757,9 @@ void FileBrowserActivity::render(RenderLock&&) {
   }
 
   // Help text
-  const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
-  // In PickFirmware mode, Confirm on a .bin returns the path to the caller (not "open"); show
-  // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.
-  const bool selectingFirmwareFile = mode == Mode::PickFirmware && !files.empty() && files[selectorIndex].back() != '/';
-  const char* confirmLabel = files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN));
-  const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),
-                                            files.empty() ? "" : tr(STR_DIR_DOWN));
+  const auto labels =
+      mappedInput.mapLabels(basepath == "/" ? tr(STR_HOME) : tr(STR_BACK), files.empty() ? "" : tr(STR_OPEN),
+                            files.empty() ? "" : tr(STR_DIR_UP), files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();
@@ -328,6 +767,6 @@ void FileBrowserActivity::render(RenderLock&&) {
 
 size_t FileBrowserActivity::findEntry(const std::string& name) const {
   for (size_t i = 0; i < files.size(); i++)
-    if (files[i] == name) return i;
+    if (files[i].rawName == name) return i;
   return 0;
 }

@@ -1,9 +1,18 @@
 #pragma once
 
-#include <esp_partition.h>
-
 #include <cstddef>
 #include <cstdint>
+
+#ifdef CROSSPOINT_EMULATED
+struct esp_partition_t {
+  uint32_t address;
+  uint32_t size;
+  uint8_t subtype;
+  const char* label;
+};
+#else
+#include <esp_partition.h>
+#endif
 
 // X4 (and X3) factory bootloaders accept our patch_firmware_image.py-patched
 // firmware.bin (web flasher proves this), but the running ESP-IDF's
@@ -16,6 +25,14 @@
 
 namespace ota_boot {
 
+#ifdef CROSSPOINT_EMULATED
+struct SelectEntry {
+  uint32_t ota_seq;
+  uint8_t seq_label[20];
+  uint32_t ota_state;
+  uint32_t crc;
+};
+#else
 struct __attribute__((packed)) SelectEntry {
   uint32_t ota_seq;
   uint8_t seq_label[20];
@@ -23,6 +40,7 @@ struct __attribute__((packed)) SelectEntry {
   uint32_t crc;
 };
 static_assert(sizeof(SelectEntry) == 32, "SelectEntry must be 32 bytes");
+#endif
 
 constexpr uint32_t kOtaImgNew = 0;      // ESP_OTA_IMG_NEW
 constexpr uint32_t kOtaImgInvalid = 3;  // ESP_OTA_IMG_INVALID

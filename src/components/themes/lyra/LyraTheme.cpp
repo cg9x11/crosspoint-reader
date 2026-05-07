@@ -27,6 +27,7 @@
 #include "components/icons/transfer.h"
 #include "components/icons/wifi.h"
 #include "fontIds.h"
+#include "util/ScreenDebugRecorder.h"
 
 // Internal constants
 namespace {
@@ -139,6 +140,7 @@ void LyraTheme::drawBatteryRight(const GfxRenderer& renderer, Rect rect, const b
 }
 
 void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle) const {
+  ScreenDebugRecorder::setHeader(title, subtitle);
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
 
   const bool showBatteryPercentage =
@@ -189,6 +191,7 @@ void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
 }
 
 void LyraTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label, const char* rightLabel) const {
+  ScreenDebugRecorder::setSubHeader(label, rightLabel);
   int currentX = rect.x + LyraMetrics::values.contentSidePadding;
   int rightSpace = LyraMetrics::values.contentSidePadding;
   if (rightLabel) {
@@ -283,6 +286,7 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
   // Draw all items
   const auto pageStartIndex = selectedIndex / pageItems * pageItems;
+  ScreenDebugRecorder::setList(itemCount, selectedIndex, pageStartIndex, pageItems, rowTitle, rowSubtitle, rowValue);
   int iconY = (rowSubtitle != nullptr) ? 16 : 10;
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
     const int itemY = rect.y + (i % pageItems) * rowHeight;
@@ -334,6 +338,7 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
 void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                 const char* btn4) const {
+  ScreenDebugRecorder::setButtonHints(btn1, btn2, btn3, btn4);
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
@@ -527,6 +532,7 @@ void LyraTheme::drawEmptyRecents(const GfxRenderer& renderer, const Rect rect) c
 void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
+  ScreenDebugRecorder::setButtonMenu(buttonCount, selectedIndex, buttonLabel);
   for (int i = 0; i < buttonCount; ++i) {
     int tileWidth = rect.width - LyraMetrics::values.contentSidePadding * 2;
     Rect tileRect = Rect{rect.x + LyraMetrics::values.contentSidePadding,
@@ -559,6 +565,7 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
 }
 
 Rect LyraTheme::drawPopup(const GfxRenderer& renderer, const char* message) const {
+  ScreenDebugRecorder::setPopup(message);
   // Scale y position proportionally to screen height (16.5% from top)
   const int y = static_cast<int>(renderer.getScreenHeight() * 0.165f);
   constexpr int outline = 2;

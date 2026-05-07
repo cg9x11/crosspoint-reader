@@ -5,6 +5,19 @@
 
 #include <cstring>
 
+namespace {
+constexpr size_t MAX_OPDS_TEXT_LEN = 1024;
+
+void appendCapped(std::string& target, const XML_Char* s, const int len) {
+  if (len <= 0 || target.size() >= MAX_OPDS_TEXT_LEN) {
+    return;
+  }
+  const size_t remaining = MAX_OPDS_TEXT_LEN - target.size();
+  const size_t appendLen = std::min(static_cast<size_t>(len), remaining);
+  target.append(s, appendLen);
+}
+}  // namespace
+
 OpdsParser::OpdsParser() {
   parser = XML_ParserCreate(nullptr);
   if (!parser) {
@@ -67,9 +80,10 @@ void OpdsParser::clear() {
   searchTemplate.clear();
   nextPageUrl.clear();
   prevPageUrl.clear();
+  feedTitle.clear();
   currentEntry = OpdsEntry{};
   currentText.clear();
-  inEntry = inTitle = inAuthor = inAuthorName = inId = false;
+  inEntry = inTitle = inFeedTitle = inAuthor = inAuthorName = inId = inSummary = inContent = false;
 }
 
 std::vector<OpdsEntry> OpdsParser::getBooks() const {
@@ -112,6 +126,16 @@ void XMLCALL OpdsParser::startElement(void* userData, const XML_Char* name, cons
             strcmp(type, "application/epub+zip") == 0) {
           self->currentEntry.type = OpdsEntryType::BOOK;
           self->currentEntry.href = href;
+        } else if (type && strstr(type, "application/atom+xml") != nullptr && strstr(type, "kind=acquisition") != nullptr) {
+          if (self->currentEntry.type != OpdsEntryType::BOOK) {
+            self->currentEntry.type = OpdsEntryType::SERIES;
+            self->currentEntry.href = href;
+          }
+        } else if (rel && (strcmp(rel, "http://opds-spec.org/image") == 0 ||
+                           strcmp(rel, "http://opds-spec.org/image/thumbnail") == 0)) {
+          if (self->currentEntry.imageHref.empty()) {
+            self->currentEntry.imageHref = href;
+          }
         } else if (type && strstr(type, "application/atom+xml") != nullptr) {
           if (self->currentEntry.type != OpdsEntryType::BOOK) {
             self->currentEntry.type = OpdsEntryType::NAVIGATION;
@@ -128,7 +152,13 @@ void XMLCALL OpdsParser::startElement(void* userData, const XML_Char* name, cons
     return;
   }
 
-  if (!self->inEntry) return;
+  if (!self->inEntry) {
+    if (strcmp(name, "title") == 0 || strstr(name, ":title") != nullptr) {
+      self->inFeedTitle = true;
+      self->currentText.clear();
+    }
+    return;
+  }
 
   if (strcmp(name, "title") == 0 || strstr(name, ":title") != nullptr) {
     self->inTitle = true;
@@ -141,6 +171,12 @@ void XMLCALL OpdsParser::startElement(void* userData, const XML_Char* name, cons
   } else if (strcmp(name, "id") == 0 || strstr(name, ":id") != nullptr) {
     self->inId = true;
     self->currentText.clear();
+  } else if (strcmp(name, "summary") == 0 || strstr(name, ":summary") != nullptr) {
+    self->inSummary = true;
+    self->currentText.clear();
+  } else if (strcmp(name, "content") == 0 || strstr(name, ":content") != nullptr) {
+    self->inContent = true;
+    self->currentText.clear();
   }
 }
 
@@ -152,6 +188,11 @@ void XMLCALL OpdsParser::endElement(void* userData, const XML_Char* name) {
       self->entries.push_back(self->currentEntry);
     }
     self->inEntry = false;
+  } else if (!self->inEntry) {
+    if (strcmp(name, "title") == 0 || strstr(name, ":title") != nullptr) {
+      if (self->inFeedTitle && self->feedTitle.empty()) self->feedTitle = self->currentText;
+      self->inFeedTitle = false;
+    }
   } else if (self->inEntry) {
     if (strcmp(name, "title") == 0 || strstr(name, ":title") != nullptr) {
       if (self->inTitle) self->currentEntry.title = self->currentText;
@@ -164,13 +205,19 @@ void XMLCALL OpdsParser::endElement(void* userData, const XML_Char* name) {
     } else if (strcmp(name, "id") == 0 || strstr(name, ":id") != nullptr) {
       if (self->inId) self->currentEntry.id = self->currentText;
       self->inId = false;
+    } else if (strcmp(name, "summary") == 0 || strstr(name, ":summary") != nullptr) {
+      if (self->inSummary) self->currentEntry.summary = self->currentText;
+      self->inSummary = false;
+    } else if (strcmp(name, "content") == 0 || strstr(name, ":content") != nullptr) {
+      if (self->inContent && self->currentEntry.summary.empty()) self->currentEntry.summary = self->currentText;
+      self->inContent = false;
     }
   }
 }
 
 void XMLCALL OpdsParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<OpdsParser*>(userData);
-  if (self->inTitle || self->inAuthorName || self->inId) {
-    self->currentText.append(s, len);
+  if (self->inTitle || self->inFeedTitle || self->inAuthorName || self->inId || self->inSummary || self->inContent) {
+    appendCapped(self->currentText, s, len);
   }
 }

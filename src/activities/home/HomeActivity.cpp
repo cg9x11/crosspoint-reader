@@ -20,11 +20,25 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+bool HomeActivity::hasStandaloneContinueReadingTile() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  return !metrics.homeContinueReadingInMenu && !recentBooks.empty();
+}
+
+bool HomeActivity::isContinueReadingMenuEnabled() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  return metrics.homeContinueReadingInMenu && !recentBooks.empty();
+}
+
+int HomeActivity::getContinueReadingSelectorCount() const {
+  return (isContinueReadingMenuEnabled() || hasStandaloneContinueReadingTile()) ? 1 : 0;
+}
+
+int HomeActivity::getMenuSelectionOffset() const { return hasStandaloneContinueReadingTile() ? 1 : 0; }
+
 int HomeActivity::getMenuItemCount() const {
   int count = 4;  // File Browser, Recents, File transfer, Settings
-  if (!recentBooks.empty()) {
-    count += recentBooks.size();
-  }
+  count += getContinueReadingSelectorCount();
   if (hasOpdsServers) {
     count++;
   }
@@ -173,29 +187,20 @@ void HomeActivity::freeCoverBuffer() {
 
 void HomeActivity::loop() {
   const int menuCount = getMenuItemCount();
-
-  buttonNavigator.onNext([this, menuCount] {
-    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
-    requestUpdate();
-  });
-
-  buttonNavigator.onPrevious([this, menuCount] {
-    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
-    requestUpdate();
-  });
+  const int continueReadingSelectorCount = getContinueReadingSelectorCount();
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     // Calculate dynamic indices based on which options are available
     int idx = 0;
-    int menuSelectedIndex = selectorIndex - static_cast<int>(recentBooks.size());
+    const int menuSelectedIndex = selectorIndex - getMenuSelectionOffset();
     const int fileBrowserIdx = idx++;
     const int recentsIdx = idx++;
     const int opdsLibraryIdx = hasOpdsServers ? idx++ : -1;
     const int fileTransferIdx = idx++;
     const int settingsIdx = idx;
 
-    if (selectorIndex < recentBooks.size()) {
-      onSelectBook(recentBooks[selectorIndex].path);
+    if (continueReadingSelectorCount > 0 && selectorIndex == 0) {
+      onSelectBook(recentBooks[0].path);
     } else if (menuSelectedIndex == fileBrowserIdx) {
       onFileBrowserOpen();
     } else if (menuSelectedIndex == recentsIdx) {
@@ -207,19 +212,42 @@ void HomeActivity::loop() {
     } else if (menuSelectedIndex == settingsIdx) {
       onSettingsOpen();
     }
+    return;
   }
+
+  buttonNavigator.onNextRelease([this, menuCount] {
+    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
+    requestUpdate();
+  });
+
+  buttonNavigator.onPreviousRelease([this, menuCount] {
+    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
+    requestUpdate();
+  });
+
+  buttonNavigator.onNextContinuous([this, menuCount] {
+    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
+    requestUpdate();
+  });
+
+  buttonNavigator.onPreviousContinuous([this, menuCount] {
+    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
+    requestUpdate();
+  });
 }
 
 void HomeActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
+  const bool showContinueReadingMenu = isContinueReadingMenuEnabled();
+  const int menuSelectionOffset = getMenuSelectionOffset();
 
   renderer.clearScreen();
   bool bufferRestored = coverBufferStored && restoreCoverBuffer();
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding},
-                 metrics.homeContinueReadingInMenu && !recentBooks.empty() ? recentBooks[0].title.c_str() : nullptr);
+                 showContinueReadingMenu ? recentBooks[0].title.c_str() : nullptr);
 
   GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, metrics.homeCoverTileHeight},
                           recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
@@ -235,7 +263,7 @@ void HomeActivity::render(RenderLock&&) {
     menuIcons.insert(menuIcons.begin() + 2, Library);
   }
 
-  if (metrics.homeContinueReadingInMenu) {
+  if (showContinueReadingMenu) {
     // Insert Continue Reading at the top if enabled in theme
     menuItems.insert(menuItems.begin(), tr(STR_CONTINUE_READING));
     menuIcons.insert(menuIcons.begin(), Book);
@@ -247,7 +275,7 @@ void HomeActivity::render(RenderLock&&) {
            pageHeight - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing +
                          metrics.homeMenuTopOffset + metrics.buttonHintsHeight)},
       static_cast<int>(menuItems.size()),
-      metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size(),
+      selectorIndex - menuSelectionOffset,
       [&menuItems](int index) { return std::string(menuItems[index]); },
       [&menuIcons](int index) { return menuIcons[index]; });
 

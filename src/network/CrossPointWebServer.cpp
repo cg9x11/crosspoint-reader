@@ -1009,7 +1009,7 @@ void CrossPointWebServer::handleDelete() const {
   String failedItems;
 
   for (const auto& p : paths) {
-    auto itemPath = p.as<String>();
+    String itemPath = p.as<const char*>();
 
     // Validate path
     if (itemPath.isEmpty() || itemPath == "/") {
@@ -1183,7 +1183,7 @@ void CrossPointWebServer::handlePostSettings() {
     return;
   }
 
-  const String body = server->arg("plain");
+  String body = server->arg("plain");
   JsonDocument doc;
   const DeserializationError err = deserializeJson(doc, body);
   if (err) {
@@ -1293,7 +1293,7 @@ void CrossPointWebServer::handlePostOpdsServer() {
     return;
   }
 
-  const String body = server->arg("plain");
+  String body = server->arg("plain");
   JsonDocument doc;
   const DeserializationError err = deserializeJson(doc, body);
   if (err) {
@@ -1344,7 +1344,7 @@ void CrossPointWebServer::handleDeleteOpdsServer() {
     return;
   }
 
-  const String body = server->arg("plain");
+  String body = server->arg("plain");
   JsonDocument doc;
   const DeserializationError err = deserializeJson(doc, body);
   if (err) {

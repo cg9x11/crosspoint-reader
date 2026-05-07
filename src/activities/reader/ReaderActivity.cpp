@@ -3,15 +3,38 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 
+#include "CrossPointState.h"
 #include "CrossPointSettings.h"
 #include "Epub.h"
 #include "EpubReaderActivity.h"
+#include "SeriesManifest.h"
 #include "Txt.h"
 #include "TxtReaderActivity.h"
 #include "Xtc.h"
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
+
+namespace {
+std::optional<SeriesReadingContext> inferSeriesContextForEpub(const std::string& epubPath) {
+  SeriesManifest manifest;
+  if (!SeriesManifestStore::tryLoadForChapterPath(epubPath, manifest)) {
+    return std::nullopt;
+  }
+
+  const auto chapter = SeriesManifestStore::findByPath(manifest, epubPath);
+  if (!chapter.has_value()) {
+    return std::nullopt;
+  }
+
+  SeriesReadingContext context;
+  context.seriesId = manifest.seriesId;
+  context.seriesDir = manifest.seriesDir;
+  context.chapterPath = epubPath;
+  context.chapterIndex = chapter->chapterIndex;
+  return context;
+}
+}  // namespace
 
 bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
 
@@ -76,7 +99,18 @@ void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
 void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
   const auto epubPath = epub->getPath();
   currentBookPath = epubPath;
-  activityManager.replaceActivity(std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub)));
+  if (!seriesContext.has_value()) {
+    seriesContext = inferSeriesContextForEpub(epubPath);
+  }
+  if (seriesContext.has_value()) {
+    SeriesReadingContext context = *seriesContext;
+    context.chapterPath = epubPath;
+    APP_STATE.setOpenReadingState(context);
+    activityManager.replaceActivity(
+        std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub), context, openAtLastPage));
+  } else {
+    activityManager.replaceActivity(std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub)));
+  }
 }
 
 void ReaderActivity::onGoToBmpViewer(const std::string& path) {
@@ -97,6 +131,15 @@ void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
 
 void ReaderActivity::onEnter() {
   Activity::onEnter();
+
+  if (initialBookPath.empty()) {
+    if (seriesContext.has_value() && !seriesContext->chapterPath.empty()) {
+      initialBookPath = seriesContext->chapterPath;
+    } else if (APP_STATE.hasSeriesContext()) {
+      seriesContext = APP_STATE.getSeriesContext();
+      initialBookPath = seriesContext->chapterPath;
+    }
+  }
 
   if (initialBookPath.empty()) {
     goToLibrary();  // Start from root when entering via Browse

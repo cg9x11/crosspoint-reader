@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
+  <id>http://192.168.1.202:8787/opds/library</id>
+  <title>Thu vien OPDS</title>
+  <updated>2026-05-07T09:18:36.127Z</updated>
+  <link href="http://192.168.1.202:8787/opds/library" rel="self" type="application/atom+xml;profile=opds-catalog;kind=navigation" /><link href="http://192.168.1.202:8787/opds" rel="start" type="application/atom+xml;profile=opds-catalog;kind=navigation" />
+  <entry>
+  <id>urn:novel:de2a0154-c526-4b55-a411-6828c9730ea2</id>
+  <title>Tôi Trở Thành Hung Thần Trong Trò Chơi Thủ Thành</title>
+  <updated>2026-05-07T08:49:37.391Z</updated>
+  <author><name>Ryueun Garam, Ha Jung</name></author>
+  <summary>&lt;p&gt;Một tựa game nhập vai thủ thành cực kỳ Hardcore, sau hơn vô số lần chơi đi và chơi lại thì cuối cùng tôi cũng đã phá đảo được độ khó cao nhất của nó.&lt;/p&gt;&lt;p&gt;Nhưng sau khi đột ngột bất tỉnh và tỉnh dậy thì tôi đã bị đưa vào trò chơi dưới danh nghĩa Tam Hoàng Tử Ash.&lt;/p&gt;&lt;p&gt;Chưa kể, tôi thức dậy ngay màn Tutorial mà game bắt buộc phải thua.&lt;/p&gt;&lt;p&gt;&quot;Chết tiệt, cứ chờ đó đi, tôi sẽ phá đảo thứ này cho xem!&quot;&lt;/p&gt;</summary>
+  
+  <link href="http://192.168.1.202:8787/opds/series/de2a0154-c526-4b55-a411-6828c9730ea2" type="application/atom+xml;profile=opds-catalog;kind=acquisition" /><link href="http://192.168.1.202:8787/opds/download/de2a0154-c526-4b55-a411-6828c9730ea2/cover.bmp" rel="http://opds-spec.org/image" type="image/bmp" /><link href="http://192.168.1.202:8787/opds/download/de2a0154-c526-4b55-a411-6828c9730ea2/cover.bmp" rel="http://opds-spec.org/image/thumbnail" type="image/bmp" />
+</entry>
+</feed>

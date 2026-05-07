@@ -2,6 +2,7 @@
 #include <OpdsParser.h>
 
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -9,10 +10,8 @@
 #include "OpdsServerStore.h"
 #include "util/ButtonNavigator.h"
 
-/**
- * Activity for browsing and downloading books from an OPDS server.
- * Supports navigation through catalog hierarchy and downloading EPUBs.
- */
+struct Rect;
+
 class OpdsBookBrowserActivity final : public Activity {
  public:
   enum class BrowserState { CHECK_WIFI, WIFI_SELECTION, LOADING, BROWSING, DOWNLOADING, ERROR, SEARCH_INPUT };
@@ -26,30 +25,60 @@ class OpdsBookBrowserActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
+  struct PreviewData {
+    bool available = false;
+    std::string key;
+    std::string title;
+    std::string author;
+    std::string status;
+    std::string summary;
+    std::string coverBmpPath;
+  };
+
+  struct SeriesStatusSnapshot {
+    std::string resolvedTitle;
+    std::string status;
+  };
+
   ButtonNavigator buttonNavigator;
   BrowserState state = BrowserState::LOADING;
   std::vector<OpdsEntry> entries;
   std::vector<std::string> navigationHistory;
   std::string currentPath;
   std::string searchTemplate;
+  std::string currentFeedTitle;
   bool consumeConfirm = false;
-  bool consumeBack = false;  // Added missing member
+  bool consumeBack = false;
   int selectorIndex = 0;
   std::string errorMessage;
   std::string statusMessage;
   size_t downloadProgress = 0;
   size_t downloadTotal = 0;
+  PreviewData currentPreview;
+  std::unordered_map<std::string, SeriesStatusSnapshot> seriesStatusCache;
 
-  OpdsServer server;  // Copied at construction — safe even if the store changes during browsing
+  OpdsServer server;  // Copied at construction - safe even if the store changes during browsing
 
   void checkAndConnectWifi();
   void launchWifiSelection();
   void onWifiSelectionComplete(bool connected);
   void fetchFeed(const std::string& path);
+  bool fetchFeedData(const std::string& url, std::vector<OpdsEntry>& outEntries, std::string* outFeedTitle = nullptr,
+                     std::string* outSearchTemplate = nullptr, std::string* outNextUrl = nullptr,
+                     std::string* outPrevUrl = nullptr) const;
   void navigateToEntry(const OpdsEntry& entry);
   void navigateBack();
   void downloadBook(const OpdsEntry& book);
+  void downloadSeries(const OpdsEntry& entry);
   void launchSearch();
   void performSearch(const std::string& query);
+  bool ensureSeriesArtifacts(const OpdsEntry& seriesEntry, const std::string& feedUrl,
+                             const std::vector<OpdsEntry>& seriesEntries, const std::string& firstDownloadUrl,
+                             const std::string& localSeriesDir);
+  bool synthesizeSeriesManifest(const std::string& feedUrl, const std::vector<OpdsEntry>& seriesEntries,
+                                const std::string& localSeriesDir, const OpdsEntry& seriesEntry) const;
+  void updatePreviewForSelection();
+  std::string getPreviewCoverPath(const OpdsEntry& entry, const std::string& baseUrl);
+  void drawPreviewPanel(const Rect& rect, const PreviewData& preview);
   bool preventAutoSleep() override { return true; }
 };

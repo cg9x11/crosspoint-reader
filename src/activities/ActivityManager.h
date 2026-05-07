@@ -11,6 +11,7 @@
 
 #include "GfxRenderer.h"
 #include "MappedInputManager.h"
+#include "SeriesReadingContext.h"
 #include "util/ScreenshotInfo.h"
 
 class Activity;    // forward declaration
@@ -84,6 +85,7 @@ class ActivityManager {
   void goToRecentBooks();
   void goToBrowser();
   void goToReader(std::string path);
+  void goToReader(SeriesReadingContext context, bool openAtLastPage = false);
   void goToSleep();
   void goToBoot();
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
@@ -101,6 +103,11 @@ class ActivityManager {
   bool isReaderActivity() const;
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;
+  std::string getCurrentActivityName() const;
+  std::string getPendingActivityName() const;
+  std::vector<std::string> getStackActivityNames() const;
+  const char* getPendingActionName() const;
+  bool injectAutomationText(const std::string& text);
 
   // If immediate is true, the update will be triggered immediately.
   // Otherwise, it will be deferred until the end of the current loop iteration.

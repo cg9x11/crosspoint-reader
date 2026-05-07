@@ -5,6 +5,55 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+
+#ifdef CROSSPOINT_EMULATED
+
+#include "MappedInputManager.h"
+#include "components/UITheme.h"
+#include "fontIds.h"
+
+void SdFirmwareUpdateActivity::onEnter() {
+  Activity::onEnter();
+  state = State::FAILED;
+  errorMessage = "Not supported in emulator";
+  requestUpdate();
+}
+
+bool SdFirmwareUpdateActivity::validateFirmware() { return false; }
+
+void SdFirmwareUpdateActivity::launchPicker() {}
+
+void SdFirmwareUpdateActivity::onPickerResult(const ActivityResult&) {}
+
+void SdFirmwareUpdateActivity::promptConfirmation() {}
+
+void SdFirmwareUpdateActivity::onConfirmationResult(const ActivityResult&) {}
+
+void SdFirmwareUpdateActivity::performUpdate() {}
+
+void SdFirmwareUpdateActivity::loop() {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back) ||
+      mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    finish();
+  }
+}
+
+void SdFirmwareUpdateActivity::render(RenderLock&&) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+
+  renderer.clearScreen();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_SD_FIRMWARE_UPDATE));
+  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - renderer.getLineHeight(UI_10_FONT_ID), "Not supported");
+  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + metrics.verticalSpacing, "in emulator");
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  renderer.displayBuffer();
+}
+
+#else
+
 #include <esp_ota_ops.h>
 
 #include "MappedInputManager.h"
@@ -252,3 +301,5 @@ void SdFirmwareUpdateActivity::render(RenderLock&&) {
 
   renderer.displayBuffer();
 }
+
+#endif

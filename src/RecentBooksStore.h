@@ -3,12 +3,18 @@
 #include <vector>
 
 struct RecentBook {
+  std::string seriesId;
   std::string path;
   std::string title;
   std::string author;
   std::string coverBmpPath;
 
-  bool operator==(const RecentBook& other) const { return path == other.path; }
+  bool operator==(const RecentBook& other) const {
+    if (!seriesId.empty() && !other.seriesId.empty()) {
+      return seriesId == other.seriesId;
+    }
+    return path == other.path;
+  }
 };
 
 class RecentBooksStore;
@@ -32,10 +38,14 @@ class RecentBooksStore {
 
   // Add a book to the recent list (moves to front if already exists)
   void addBook(const std::string& path, const std::string& title, const std::string& author,
-               const std::string& coverBmpPath);
+               const std::string& coverBmpPath, const std::string& seriesId = "");
+
+  void addBook(const RecentBook& book);
 
   void updateBook(const std::string& path, const std::string& title, const std::string& author,
-                  const std::string& coverBmpPath);
+                  const std::string& coverBmpPath, const std::string& seriesId = "");
+
+  void updateBook(const RecentBook& book);
 
   // Get the list of recent books (most recent first)
   const std::vector<RecentBook>& getBooks() const { return recentBooks; }

@@ -9,6 +9,8 @@ import {
   getPublishedCoverBmpPath,
   getPublishedManifestPath
 } from "../library/service.js";
+import { fileExists, writeJsonFileAtomic } from "../lib/filesystem.js";
+import { repairJsonStringsDeep } from "../lib/text.js";
 
 function absoluteUrl(baseUrl: string, routePath: string) {
   return new URL(routePath, `${baseUrl}/`).toString();
@@ -29,6 +31,22 @@ function parseChapterIndex(input: string) {
 
 function buildCoverDownloadPath(novelId: string) {
   return `/opds/download/${encodeURIComponent(novelId)}/cover.bmp`;
+}
+
+function repairSeriesManifestPayload(payload: unknown, hasCoverBmp: boolean) {
+  const repaired = repairJsonStringsDeep(payload as Record<string, unknown>);
+  if (!repaired || typeof repaired !== "object" || Array.isArray(repaired)) {
+    return repaired;
+  }
+
+  if (hasCoverBmp) {
+    const coverPath = typeof repaired.coverPath === "string" ? repaired.coverPath : "";
+    if (!coverPath || /\.epub$/i.test(coverPath)) {
+      repaired.coverPath = "cover.bmp";
+    }
+  }
+
+  return repaired;
 }
 
 export async function registerOpdsRoutes(app: FastifyInstance) {
@@ -185,11 +203,20 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
   app.get("/opds/download/:novelId/_series.json", async (request, reply) => {
     const novelId = (request.params as { novelId: string }).novelId;
     const manifestPath = getPublishedManifestPath(app.storagePaths, novelId);
+    const coverPath = getPublishedCoverBmpPath(app.storagePaths, novelId);
 
     try {
       const raw = await fs.readFile(manifestPath, "utf8");
+      const parsed = JSON.parse(raw) as unknown;
+      const repaired = repairSeriesManifestPayload(parsed, await fileExists(coverPath));
+      const normalized = `${JSON.stringify(repaired, null, 2)}\n`;
+
+      if (normalized !== raw) {
+        await writeJsonFileAtomic(manifestPath, repaired);
+      }
+
       reply.type("application/json; charset=utf-8");
-      return raw;
+      return normalized;
     } catch {
       reply.code(404);
       return {

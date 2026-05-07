@@ -10,7 +10,8 @@
  */
 enum class OpdsEntryType {
   NAVIGATION,  // Link to another catalog
-  BOOK         // Downloadable book
+  BOOK,        // Downloadable book/chapter file
+  SERIES       // Story-level acquisition feed that contains many chapters
 };
 
 /**
@@ -20,6 +21,8 @@ struct OpdsEntry {
   OpdsEntryType type = OpdsEntryType::NAVIGATION;
   std::string title;
   std::string author;  // Only for books
+  std::string summary;
+  std::string imageHref;
   std::string href;    // Navigation URL or epub download URL
   std::string id;
 };
@@ -52,6 +55,7 @@ class OpdsParser final : public Print {
   const std::string& getSearchTemplate() const { return searchTemplate; }
   const std::string& getNextPageUrl() const { return nextPageUrl; }
   const std::string& getPrevPageUrl() const { return prevPageUrl; }
+  const std::string& getFeedTitle() const { return feedTitle; }
   OpdsParser(const OpdsParser&) = delete;
   OpdsParser& operator=(const OpdsParser&) = delete;
 
@@ -91,6 +95,7 @@ class OpdsParser final : public Print {
   std::string searchTemplate;
   std::string nextPageUrl;
   std::string prevPageUrl;
+  std::string feedTitle;
   // Helper to find attribute value
   static const char* findAttribute(const XML_Char** atts, const char* name);
 
@@ -102,9 +107,12 @@ class OpdsParser final : public Print {
   // Parser state
   bool inEntry = false;
   bool inTitle = false;
+  bool inFeedTitle = false;
   bool inAuthor = false;
   bool inAuthorName = false;
   bool inId = false;
+  bool inSummary = false;
+  bool inContent = false;
 
   bool errorOccured = false;
 };

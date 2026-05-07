@@ -14,6 +14,7 @@
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
 #include "fontIds.h"
+#include "util/ScreenDebugRecorder.h"
 
 namespace {
 constexpr int kCoverRadius = 18;
@@ -100,6 +101,7 @@ int coverWidth = 0;
 void RoundedRaffTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,
                                   const char* subtitle) const {
   (void)subtitle;
+  ScreenDebugRecorder::setHeader(title, subtitle);
   // Home screen header is custom-rendered in drawRecentBookCover.
   if (title == nullptr) {
     return;
@@ -247,6 +249,7 @@ void RoundedRaffTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int butt
                                       const std::function<std::string(int index)>& buttonLabel,
                                       const std::function<UIIcon(int index)>& rowIcon) const {
   (void)rowIcon;
+  ScreenDebugRecorder::setButtonMenu(buttonCount, selectedIndex, buttonLabel);
   const int sidePadding = RoundedRaffMetrics::values.contentSidePadding;
   const int rowX = rect.x + sidePadding;
   const int rowHeight = renderer.getLineHeight(kTitleFontId) + 20;  // 10px top + 10px bottom
@@ -301,6 +304,7 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
   const int rowStep = rowHeight + kSelectableRowGap;
   const int pageItems = std::max(1, rect.height / rowStep);
   const int pageStartIndex = std::max(0, selectedIndex / pageItems) * pageItems;
+  ScreenDebugRecorder::setList(itemCount, selectedIndex, pageStartIndex, pageItems, rowTitle, rowSubtitle, rowValue);
 
   const int sidePadding = RoundedRaffMetrics::values.contentSidePadding;
   const int rowX = rect.x + sidePadding;
@@ -362,6 +366,7 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
 
 void RoundedRaffTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                        const char* btn4) const {
+  ScreenDebugRecorder::setButtonHints(btn1, btn2, btn3, btn4);
   const GfxRenderer::Orientation origOrientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 

@@ -1,6 +1,22 @@
 #include "OtaBootSwitch.h"
 
 #include <Logging.h>
+
+#ifdef CROSSPOINT_EMULATED
+
+namespace ota_boot {
+
+uint32_t computeSeqCrc(uint32_t) { return 0; }
+
+bool switchTo(const esp_partition_t*) {
+  LOG_ERR("BOOT", "OTA boot switch is not supported in emulator");
+  return false;
+}
+
+}  // namespace ota_boot
+
+#else
+
 #include <esp_rom_crc.h>
 #include <spi_flash_mmap.h>
 #include <string.h>
@@ -84,3 +100,5 @@ bool switchTo(const esp_partition_t* dest) {
 }
 
 }  // namespace ota_boot
+
+#endif

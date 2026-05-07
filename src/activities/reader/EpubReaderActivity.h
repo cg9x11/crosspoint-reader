@@ -5,6 +5,8 @@
 
 #include <optional>
 
+#include "SeriesManifest.h"
+#include "SeriesReadingContext.h"
 #include "EpubReaderMenuActivity.h"
 #include "activities/Activity.h"
 
@@ -30,6 +32,10 @@ class EpubReaderActivity final : public Activity {
   bool pendingScreenshot = false;
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool automaticPageTurnActive = false;
+  bool consumeLeftRelease = false;
+  bool consumeRightRelease = false;
+  std::optional<SeriesReadingContext> seriesContext;
+  bool openAtLastPage = false;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
@@ -52,14 +58,23 @@ class EpubReaderActivity final : public Activity {
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);
+  bool tryNavigateAdjacentSeriesChapter(int chapterDelta, bool openChapterAtLastPage);
+  int getCurrentSeriesChapterIndex() const;
+  void persistSeriesReadingState() const;
+  bool shouldAutoSkipLeadingBlankPage() const;
 
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void restoreSavedPosition();
 
  public:
-  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub)
-      : Activity("EpubReader", renderer, mappedInput), epub(std::move(epub)) {}
+  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub,
+                              std::optional<SeriesReadingContext> seriesContext = std::nullopt,
+                              bool openAtLastPage = false)
+      : Activity("EpubReader", renderer, mappedInput),
+        epub(std::move(epub)),
+        seriesContext(std::move(seriesContext)),
+        openAtLastPage(openAtLastPage) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

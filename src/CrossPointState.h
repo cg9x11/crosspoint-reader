@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <string>
 
+#include "SeriesReadingContext.h"
+
 class CrossPointState {
   // Static instance
   static CrossPointState instance;
@@ -10,6 +12,10 @@ class CrossPointState {
   static constexpr uint8_t SLEEP_RECENT_COUNT = 16;
 
   std::string openEpubPath;
+  std::string openSeriesId;
+  std::string openSeriesDir;
+  std::string openChapterPath;
+  int openChapterIndex = 0;
   uint16_t recentSleepImages[SLEEP_RECENT_COUNT] = {};  // circular buffer of recent wallpaper indices
   uint8_t recentSleepPos = 0;                           // next write slot
   uint8_t recentSleepFill = 0;                          // valid entries (0..SLEEP_RECENT_COUNT)
@@ -21,6 +27,10 @@ class CrossPointState {
   bool isRecentSleep(uint16_t idx, uint8_t checkCount) const;
 
   void pushRecentSleep(uint16_t idx);
+  void setOpenReadingState(const SeriesReadingContext& context);
+  void clearOpenReadingState();
+  SeriesReadingContext getSeriesContext() const;
+  bool hasSeriesContext() const;
   ~CrossPointState() = default;
 
   // Get singleton instance

@@ -295,7 +295,9 @@ bool BookMetadataCache::cleanupTmpFiles() const {
 uint32_t BookMetadataCache::writeSpineEntry(FsFile& file, const SpineEntry& entry) const {
   const uint32_t pos = file.position();
   serialization::writeString(file, entry.href);
-  serialization::writePod(file, entry.cumulativeSize);
+  const uint32_t cumulativeSize =
+      entry.cumulativeSize > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(entry.cumulativeSize);
+  serialization::writePod(file, cumulativeSize);
   serialization::writePod(file, entry.tocIndex);
   return pos;
 }
@@ -441,7 +443,9 @@ BookMetadataCache::TocEntry BookMetadataCache::getTocEntry(const int index) {
 BookMetadataCache::SpineEntry BookMetadataCache::readSpineEntry(FsFile& file) const {
   SpineEntry entry;
   serialization::readString(file, entry.href);
-  serialization::readPod(file, entry.cumulativeSize);
+  uint32_t cumulativeSize = 0;
+  serialization::readPod(file, cumulativeSize);
+  entry.cumulativeSize = cumulativeSize;
   serialization::readPod(file, entry.tocIndex);
   return entry;
 }

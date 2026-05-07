@@ -4,6 +4,13 @@
 #pragma once
 #include <cstdint>
 
+#ifdef _MSC_VER
+#define EPD_PACKED_STRUCT(definition) \
+  __pragma(pack(push, 1)) definition __pragma(pack(pop))
+#else
+#define EPD_PACKED_STRUCT(definition) definition __attribute__((packed))
+#endif
+
 /// Font metrics use "fixed-point 4" (4 fractional bits, i.e. 1/16-pixel
 /// resolution).  Both the 12.4 glyph advances (uint16_t) and the 4.4 kern
 /// values (int8_t) share the same 4 fractional bits, so they can be freely
@@ -95,17 +102,17 @@ typedef struct {
 
 /// Maps a codepoint to a kerning class ID, sorted by codepoint for binary search.
 /// Class IDs are 1-based; codepoints not in the table have implicit class 0 (no kerning).
-typedef struct {
+EPD_PACKED_STRUCT(typedef struct {
   uint16_t codepoint;  ///< Unicode codepoint
   uint8_t classId;     ///< 1-based kerning class ID
-} __attribute__((packed)) EpdKernClassEntry;
+} EpdKernClassEntry);
 
 /// Ligature substitution for a specific glyph pair, sorted by `pair` for binary search.
 /// `pair` encodes (leftCodepoint << 16 | rightCodepoint) for single-key lookup.
-typedef struct {
+EPD_PACKED_STRUCT(typedef struct {
   uint32_t pair;        ///< Packed codepoint pair (left << 16 | right)
   uint32_t ligatureCp;  ///< Codepoint of the replacement ligature glyph
-} __attribute__((packed)) EpdLigaturePair;
+} EpdLigaturePair);
 
 /// Data stored for FONT AS A WHOLE
 typedef struct {
@@ -130,3 +137,5 @@ typedef struct {
   const EpdLigaturePair* ligaturePairs;  ///< Sorted ligature pair table (nullptr if none)
   uint32_t ligaturePairCount;            ///< Number of entries in ligaturePairs
 } EpdFontData;
+
+#undef EPD_PACKED_STRUCT

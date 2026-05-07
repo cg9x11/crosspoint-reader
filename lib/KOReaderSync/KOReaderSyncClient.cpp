@@ -1,14 +1,52 @@
 #include "KOReaderSyncClient.h"
 
+#ifdef CROSSPOINT_EMULATED
+
+int KOReaderSyncClient::lastHttpCode = 0;
+
+KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
+  lastHttpCode = 0;
+  return NETWORK_ERROR;
+}
+
+KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& documentHash, KOReaderProgress& outProgress) {
+  (void)documentHash;
+  outProgress = {};
+  lastHttpCode = 0;
+  return NETWORK_ERROR;
+}
+
+KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgress& progress) {
+  (void)progress;
+  lastHttpCode = 0;
+  return NETWORK_ERROR;
+}
+
+const char* KOReaderSyncClient::errorString(const Error error) {
+  switch (error) {
+    case OK: return "Success";
+    case NO_CREDENTIALS: return "No credentials configured";
+    case NETWORK_ERROR: return "Network unavailable in emulator";
+    case AUTH_FAILED: return "Authentication failed";
+    case SERVER_ERROR: return "Server error (try again later)";
+    case JSON_ERROR: return "JSON parse error";
+    case NOT_FOUND: return "No progress found";
+    default: return "Unknown error";
+  }
+}
+
+#else
+
 #include <ArduinoJson.h>
 #include <Logging.h>
-#include <base64.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
 
 #include <ctime>
 
 #include "KOReaderCredentialStore.h"
+
+#include <base64.h>
 
 int KOReaderSyncClient::lastHttpCode = 0;
 
@@ -237,3 +275,5 @@ const char* KOReaderSyncClient::errorString(Error error) {
       return "Unknown error";
   }
 }
+
+#endif

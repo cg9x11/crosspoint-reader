@@ -35,6 +35,7 @@ import {
   getChapterFetchJobId,
   getNovelSyncJobId
 } from "../queues/jobs.js";
+import { repairJsonStringsDeep } from "../lib/text.js";
 
 interface WorkerContext {
   config: AppConfig;
@@ -138,7 +139,7 @@ async function buildSeriesManifestFromDatabase(
   await ensureDir(seriesDir);
   const coverAssets = await getNovelCoverAssets(storagePaths, novelId);
 
-  return {
+  return repairJsonStringsDeep({
     version: 1,
     seriesId: buildSeriesId(novel),
     title: novel.title,
@@ -154,7 +155,7 @@ async function buildSeriesManifestFromDatabase(
       title: chapter.title,
       file: path.basename(chapter.epubPath ?? getPublishedChapterRelativePath(novelId, chapter.chapterIndex))
     }))
-  };
+  } satisfies SeriesManifestShape);
 }
 
 async function writeSeriesManifest(
@@ -195,7 +196,9 @@ async function writeSeriesManifest(
         .concat(chapterEntry)
         .sort((left, right) => left.chapterIndex - right.chapterIndex);
 
-      await writeJsonFileAtomic(manifestPath, {
+      await writeJsonFileAtomic(
+        manifestPath,
+        repairJsonStringsDeep({
         version: 1,
         seriesId: buildSeriesId(options.novel),
         title: options.novel.title,
@@ -207,7 +210,8 @@ async function writeSeriesManifest(
         status: options.novel.status,
         updatedAt: new Date().toISOString(),
         chapters
-      } satisfies SeriesManifestShape);
+      } satisfies SeriesManifestShape)
+      );
       return;
     }
   }

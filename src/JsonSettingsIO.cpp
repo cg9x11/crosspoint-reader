@@ -70,6 +70,10 @@ void applyLegacyStatusBarSettings(CrossPointSettings& settings) {
 bool JsonSettingsIO::saveState(const CrossPointState& s, const char* path) {
   JsonDocument doc;
   doc["openEpubPath"] = s.openEpubPath;
+  doc["openSeriesId"] = s.openSeriesId;
+  doc["openSeriesDir"] = s.openSeriesDir;
+  doc["openChapterPath"] = s.openChapterPath;
+  doc["openChapterIndex"] = s.openChapterIndex;
   JsonArray recentArr = doc["recentSleepImages"].to<JsonArray>();
   for (int i = 0; i < CrossPointState::SLEEP_RECENT_COUNT; i++) recentArr.add(s.recentSleepImages[i]);
   doc["recentSleepPos"] = s.recentSleepPos;
@@ -91,6 +95,13 @@ bool JsonSettingsIO::loadState(CrossPointState& s, const char* json) {
   }
 
   s.openEpubPath = doc["openEpubPath"] | std::string("");
+  s.openSeriesId = doc["openSeriesId"] | std::string("");
+  s.openSeriesDir = doc["openSeriesDir"] | std::string("");
+  s.openChapterPath = doc["openChapterPath"] | std::string("");
+  s.openChapterIndex = doc["openChapterIndex"] | 0;
+  if (s.openChapterPath.empty()) {
+    s.openChapterPath = s.openEpubPath;
+  }
   memset(s.recentSleepImages, 0, sizeof(s.recentSleepImages));
   JsonArrayConst recentArr = doc["recentSleepImages"];
   const int actualCount = recentArr.isNull() ? 0
@@ -327,6 +338,7 @@ bool JsonSettingsIO::saveRecentBooks(const RecentBooksStore& store, const char* 
   JsonArray arr = doc["books"].to<JsonArray>();
   for (const auto& book : store.getBooks()) {
     JsonObject obj = arr.add<JsonObject>();
+    obj["seriesId"] = book.seriesId;
     obj["path"] = book.path;
     obj["title"] = book.title;
     obj["author"] = book.author;
@@ -351,6 +363,7 @@ bool JsonSettingsIO::loadRecentBooks(RecentBooksStore& store, const char* json) 
   for (JsonObject obj : arr) {
     if (store.getCount() >= 10) break;
     RecentBook book;
+    book.seriesId = obj["seriesId"] | std::string("");
     book.path = obj["path"] | std::string("");
     book.title = obj["title"] | std::string("");
     book.author = obj["author"] | std::string("");
