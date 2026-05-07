@@ -6,6 +6,7 @@ import { z } from "zod";
 import { retryNovelPipeline } from "../../worker/handlers.js";
 
 const ACTIVE_JOB_STATES = ["active", "waiting", "waiting-children", "delayed", "prioritized"] as const;
+const FAILED_CHAPTER_STATES = ["fetch_failed", "build_failed"] as const;
 
 interface QueueNovelActivity {
   queues: Set<string>;
@@ -18,6 +19,21 @@ interface QueueNovelActivity {
 interface QueueJobsByState {
   state: (typeof ACTIVE_JOB_STATES)[number];
   jobs: Awaited<ReturnType<Queue["getJobs"]>>;
+}
+
+interface FailedChapterSnapshot {
+  chapterIndex: number;
+  title: string;
+  status: (typeof FAILED_CHAPTER_STATES)[number];
+  lastError: string | null;
+  retryCount: number;
+  updatedAt: Date;
+}
+
+interface ChapterTaskStats {
+  failed: number;
+  pending: number;
+  lastFailedChapter: FailedChapterSnapshot | null;
 }
 
 function updateLatestTimestamp(current: string | null, next: string | null) {
@@ -164,23 +180,39 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
           },
           select: {
             novelId: true,
-            status: true
+            chapterIndex: true,
+            title: true,
+            status: true,
+            lastError: true,
+            retryCount: true,
+            updatedAt: true
           }
         })
       : [];
-    const chapterStats = new Map<
-      string,
-      {
-        failed: number;
-        pending: number;
-      }
-    >();
+    const chapterStats = new Map<string, ChapterTaskStats>();
 
     for (const chapter of chapterStates) {
-      const entry = chapterStats.get(chapter.novelId) ?? { failed: 0, pending: 0 };
+      const entry = chapterStats.get(chapter.novelId) ?? {
+        failed: 0,
+        pending: 0,
+        lastFailedChapter: null
+      };
       entry.pending += 1;
       if (chapter.status === "fetch_failed" || chapter.status === "build_failed") {
         entry.failed += 1;
+        if (
+          !entry.lastFailedChapter ||
+          chapter.updatedAt.getTime() >= entry.lastFailedChapter.updatedAt.getTime()
+        ) {
+          entry.lastFailedChapter = {
+            chapterIndex: chapter.chapterIndex,
+            title: chapter.title,
+            status: chapter.status,
+            lastError: chapter.lastError,
+            retryCount: chapter.retryCount,
+            updatedAt: chapter.updatedAt
+          };
+        }
       }
       chapterStats.set(chapter.novelId, entry);
     }
@@ -195,7 +227,11 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
 
     const items = novels
       .map((novel) => {
-        const stats = chapterStats.get(novel.id) ?? { failed: 0, pending: 0 };
+        const stats = chapterStats.get(novel.id) ?? {
+          failed: 0,
+          pending: 0,
+          lastFailedChapter: null
+        };
         const queue = queueActivity.get(novel.id);
         const remainingChapters = Math.max(
           stats.pending,
@@ -208,6 +244,18 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
           remainingChapters
         });
         const latestRun = novel.syncRuns[0] ?? null;
+        const lastFailedChapter = stats.lastFailedChapter;
+        const lastError =
+          lastFailedChapter?.lastError || novel.lastError || latestRun?.errorMessage || null;
+        const lastErrorSource = lastFailedChapter
+          ? lastFailedChapter.status === "build_failed"
+            ? "chapter_build"
+            : "chapter_fetch"
+          : novel.lastError
+            ? "novel"
+            : latestRun?.errorMessage
+              ? "sync_run"
+              : null;
         const lastActivityAt =
           queue?.latestCreatedAt ||
           novel.lastSyncEndedAt?.toISOString() ||
@@ -231,7 +279,22 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
           waitingJobs: queue?.waitingJobs ?? 0,
           activeQueues: queue ? Array.from(queue.queues) : [],
           retryable: state === "stopped",
-          lastError: novel.lastError || latestRun?.errorMessage || null,
+          lastError,
+          lastErrorSource,
+          lastErrorAt:
+            lastFailedChapter?.updatedAt.toISOString() ||
+            latestRun?.endedAt?.toISOString() ||
+            novel.lastSyncEndedAt?.toISOString() ||
+            null,
+          lastErrorChapter: lastFailedChapter
+            ? {
+                chapterIndex: lastFailedChapter.chapterIndex,
+                title: lastFailedChapter.title,
+                status: lastFailedChapter.status,
+                retryCount: lastFailedChapter.retryCount,
+                updatedAt: lastFailedChapter.updatedAt.toISOString()
+              }
+            : null,
           triggerType: latestRun?.triggerType || null,
           lastRunStatus: latestRun?.status || null,
           lastRunFound: latestRun?.totalFound ?? null,

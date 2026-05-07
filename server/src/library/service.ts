@@ -144,6 +144,7 @@ export async function updateNovelAggregateState(prisma: PrismaClient, novelId: s
       totalChapters,
       downloadedChapters,
       syncStatus,
+      lastError: failedChapters > 0 ? undefined : null,
       lastSyncEndedAt: syncStatus === "ready" ? new Date() : undefined
     }
   });

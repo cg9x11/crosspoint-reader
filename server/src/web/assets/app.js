@@ -39,6 +39,7 @@
   const state = {
     auth: { ...FALLBACK_AUTH, ...(boot.auth || {}) },
     routeToken: 0,
+    routeLoadingToken: 0,
     browseRequestToken: 0,
     activeFilter: "all",
     activeSourceId: null,
@@ -97,6 +98,82 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#39;");
+  }
+
+  function buildRouteLoadingCopy(route) {
+    if (route.page === "library") {
+      return {
+        title: "\u0110ang t\u1ea3i th\u01b0 vi\u1ec7n",
+        subtitle: "\u0110\u1ed3ng b\u1ed9 danh s\u00e1ch truy\u1ec7n, ti\u1ebfn \u0111\u1ed9 t\u1ea3i v\u00e0 tr\u1ea1ng th\u00e1i \u0111\u1ecdc..."
+      };
+    }
+
+    if (route.page === "sources") {
+      return {
+        title: "\u0110ang t\u1ea3i ngu\u1ed3n",
+        subtitle: "Chu\u1ea9n b\u1ecb danh s\u00e1ch ngu\u1ed3n, runtime v\u00e0 policy hi\u1ec3n th\u1ecb..."
+      };
+    }
+
+    if (route.page === "browse") {
+      return {
+        title: "\u0110ang chu\u1ea9n b\u1ecb ngu\u1ed3n",
+        subtitle: "L\u1ea5y home, t\u00ecm ki\u1ebfm v\u00e0 b\u1ed9 m\u1ee5c c\u1ee7a ngu\u1ed3n truy\u1ec7n..."
+      };
+    }
+
+    if (route.page === "detail") {
+      return {
+        title: "\u0110ang m\u1edf truy\u1ec7n",
+        subtitle:
+          route.detailContext === "library"
+            ? "L\u1ea5y metadata th\u01b0 vi\u1ec7n v\u00e0 danh s\u00e1ch ch\u01b0\u01a1ng \u0111\u00e3 t\u1ea3i..."
+            : "L\u1ea5y chi ti\u1ebft truy\u1ec7n, m\u00f4 t\u1ea3 v\u00e0 t\u00ecnh tr\u1ea1ng ch\u01b0\u01a1ng t\u1eeb ngu\u1ed3n..."
+      };
+    }
+
+    if (route.page === "server") {
+      const subtitleMap = {
+        tasks: "N\u1ea1p runtime, h\u00e0ng \u0111\u1ee3i v\u00e0 l\u1ecbch s\u1eed t\u00e1c v\u1ee5 g\u1ea7n \u0111\u00e2y...",
+        extensions: "\u0110\u1ed3ng b\u1ed9 extension \u0111\u00e3 c\u00e0i, catalog v\u00e0 registry ngu\u1ed3n...",
+        settings: "T\u1ea3i c\u1ea5u h\u00ecnh h\u1ec7 th\u1ed1ng, storage v\u00e0 ch\u00ednh s\u00e1ch ngu\u1ed3n..."
+      };
+      return {
+        title: "\u0110ang t\u1ea3i b\u1ea3ng \u0111i\u1ec1u khi\u1ec3n",
+        subtitle: subtitleMap[route.section] || "Chu\u1ea9n b\u1ecb d\u1eef li\u1ec7u qu\u1ea3n tr\u1ecb server..."
+      };
+    }
+
+    return {
+      title: "\u0110ang t\u1ea3i d\u1eef li\u1ec7u",
+      subtitle: "Chu\u1ea9n b\u1ecb n\u1ed9i dung trang..."
+    };
+  }
+
+  function showRouteLoadingOverlay(route, token) {
+    const overlay = $id("route-loading-overlay");
+    if (!overlay) {
+      return;
+    }
+
+    state.routeLoadingToken = token;
+    const copy = buildRouteLoadingCopy(route);
+    $id("route-loading-title").textContent = copy.title;
+    $id("route-loading-subtitle").textContent = copy.subtitle;
+    overlay.classList.remove("is-hidden");
+  }
+
+  function hideRouteLoadingOverlay(token, force = false) {
+    const overlay = $id("route-loading-overlay");
+    if (!overlay) {
+      return;
+    }
+
+    if (!force && token !== state.routeLoadingToken) {
+      return;
+    }
+
+    overlay.classList.add("is-hidden");
   }
 
   function stripHtml(value) {
@@ -656,6 +733,47 @@
       parts.push(`${formatCount(task.activeJobs)} đang chạy`);
     } else if (task.waitingJobs > 0) {
       parts.push(`${formatCount(task.waitingJobs)} đang chờ`);
+    }
+    return parts.join(" • ");
+  }
+
+  function formatTaskChapterLabel(chapter) {
+    if (!chapter) {
+      return "";
+    }
+
+    const chapterLabel = `Chương ${String(chapter.chapterIndex ?? 0).padStart(3, "0")}`;
+    const title = truncate(stripHtml(chapter.title || ""), 56);
+    return title ? `${chapterLabel} • ${title}` : chapterLabel;
+  }
+
+  function buildTaskErrorMeta(task) {
+    const parts = [];
+    const chapterLabel = formatTaskChapterLabel(task?.lastErrorChapter);
+    if (task?.lastErrorSource === "chapter_fetch") {
+      parts.push("Lỗi tải chương");
+      if (chapterLabel) {
+        parts.push(chapterLabel);
+      }
+    } else if (task?.lastErrorSource === "chapter_build") {
+      parts.push("Lỗi dựng EPUB");
+      if (chapterLabel) {
+        parts.push(chapterLabel);
+      }
+    } else if (task?.lastErrorSource === "sync_run") {
+      parts.push("Lỗi đồng bộ nguồn");
+    } else if (task?.lastErrorSource === "novel") {
+      parts.push("Lỗi tác vụ");
+    } else if (chapterLabel) {
+      parts.push(chapterLabel);
+    }
+
+    const retryCount = Number(task?.lastErrorChapter?.retryCount) || 0;
+    if (retryCount > 0) {
+      parts.push(`đã thử ${formatCount(retryCount)} lần`);
+    }
+    if (task?.lastErrorAt) {
+      parts.push(formatRelative(task.lastErrorAt));
     }
     return parts.join(" • ");
   }
@@ -2054,18 +2172,52 @@
     } else {
       jobs.forEach((job) => {
         const row = document.createElement("div");
-        row.className = "log-row";
+        const errorMeta = buildTaskErrorMeta(job);
+        row.className = `log-row log-row-actionable${job.lastError ? " has-error" : ""}`;
+        row.tabIndex = 0;
+        row.setAttribute("role", "button");
+        row.setAttribute("aria-label", `Mở chi tiết ${job.title || String(job.id)}`);
         row.innerHTML = `
           <div class="log-dot${taskStateTone(job.state) === "error" ? " error" : ""}"></div>
           <div class="log-content">
             <div class="log-title">${escapeHtml(job.title || String(job.id))}</div>
             <div class="log-time">${escapeHtml(
-              `${taskStateLabel(job.state)} â€¢ ${buildTaskSummary(job)} â€¢ ${formatRelative(job.lastActivityAt || job.createdAt)}`
+              `${taskStateLabel(job.state)} • ${buildTaskSummary(job)} • ${formatRelative(job.lastActivityAt || job.createdAt)}`
             )}</div>
+            ${
+              job.lastError
+                ? `
+                  ${errorMeta ? `<div class="log-error-context">${escapeHtml(errorMeta)}</div>` : ""}
+                  <p class="log-error" title="${escapeHtml(job.lastError)}">${escapeHtml(job.lastError)}</p>
+                `
+                : ""
+            }
           </div>
-          ${job.retryable ? `<button class="source-browse-btn" type="button">Thử lại</button>` : ""}
+          <div class="log-actions">
+            ${job.retryable ? `<button class="source-browse-btn" type="button">Thử lại</button>` : ""}
+          </div>
         `;
-        row.querySelector("button")?.addEventListener("click", () => void retryJob(job.id));
+        const openDetail = () => navigateTo(libraryDetailPath(job.novelId || job.id));
+        row.addEventListener("click", (event) => {
+          if (event.target.closest("button")) {
+            return;
+          }
+          openDetail();
+        });
+        row.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") {
+            return;
+          }
+          if (event.target.closest("button")) {
+            return;
+          }
+          event.preventDefault();
+          openDetail();
+        });
+        row.querySelector(".source-browse-btn")?.addEventListener("click", (event) => {
+          event.stopPropagation();
+          void retryJob(job.id);
+        });
         taskList.appendChild(row);
       });
     }
@@ -3381,6 +3533,7 @@
       }
       activatePage("server", "server");
       renderLockedServerState();
+      hideRouteLoadingOverlay(state.routeLoadingToken, true);
       openChangePasswordModal(true);
       return;
     }
@@ -3391,8 +3544,10 @@
   async function handleRoute() {
     const token = ++state.routeToken;
     const route = parseRoute();
+    showRouteLoadingOverlay(route, token);
 
-    if (route.page === "library") {
+    try {
+      if (route.page === "library") {
       activatePage("library", "library");
       showNovelSkeleton("library-grid", 10);
       $id("library-empty").style.display = "none";
@@ -3402,9 +3557,9 @@
       }
       renderLibrary();
       return;
-    }
+      }
 
-    if (route.page === "sources") {
+      if (route.page === "sources") {
       activatePage("sources", "sources");
       renderSourcesLoading();
       await Promise.all([loadExtensions(), loadSystem().catch(() => state.system)]);
@@ -3413,9 +3568,9 @@
       }
       renderSources();
       return;
-    }
+      }
 
-    if (route.page === "browse") {
+      if (route.page === "browse") {
       activatePage("browse", "browse");
       await Promise.all([loadEnabledSources(), loadExtensions().catch(() => ({ installed: [], catalog: [] }))]);
       if (token !== state.routeToken) {
@@ -3444,9 +3599,9 @@
       renderBrowseLoading();
       await refreshBrowseContent({ append: false });
       return;
-    }
+      }
 
-    if (route.page === "detail" && route.detailContext === "library") {
+      if (route.page === "detail" && route.detailContext === "library") {
       activatePage("detail", "library");
       renderDetailLoading();
       await loadLibrary();
@@ -3457,9 +3612,9 @@
       state.detailChapterLimit = 150;
       renderDetail(detail);
       return;
-    }
+      }
 
-    if (route.page === "detail" && route.detailContext === "browse") {
+      if (route.page === "detail" && route.detailContext === "browse") {
       activatePage("detail", "browse");
       renderDetailLoading();
       await Promise.all([loadEnabledSources(), loadExtensions().catch(() => ({ installed: [], catalog: [] }))]);
@@ -3509,9 +3664,9 @@
       state.detailChapterLimit = 150;
       renderDetail(detail);
       return;
-    }
+      }
 
-    if (route.page === "server") {
+      if (route.page === "server") {
       activatePage("server", "server");
       renderServerLoading(route.section);
 
@@ -3552,6 +3707,9 @@
       }
       renderServerSettingsSection();
       return;
+      }
+    } finally {
+      hideRouteLoadingOverlay(token);
     }
   }
 
