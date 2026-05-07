@@ -284,6 +284,21 @@
     }
   }
 
+  function resolveDetailTitle(title, sourceUrl) {
+    const cleanedTitle = firstText(title);
+    if (cleanedTitle && !isUrlLikeText(cleanedTitle)) {
+      return cleanedTitle;
+    }
+    return readableTitleFromUrl(sourceUrl || cleanedTitle || "Khong ro");
+  }
+
+  function buildLibraryCoverUrl(item) {
+    if (item?.id && item?.coverLocalPath) {
+      return `/api/library/novels/${encodeURIComponent(item.id)}/cover`;
+    }
+    return item?.coverUrl || "";
+  }
+
   function isSourceUpstreamBlockedPayload(payload) {
     return Boolean(payload && typeof payload === "object" && payload.blocked);
   }
@@ -1321,8 +1336,9 @@
           : hasDownloadedChapters(item)
             ? "Đang tải dở"
             : "Chưa tải";
-    const coverMarkup = item.coverUrl
-      ? `<img class="novel-card-cover" src="${escapeHtml(item.coverUrl)}" alt="${escapeHtml(
+    const preferredCoverUrl = firstText(buildLibraryCoverUrl(item), item.coverUrl);
+    const coverMarkup = preferredCoverUrl
+      ? `<img class="novel-card-cover" src="${escapeHtml(preferredCoverUrl)}" alt="${escapeHtml(
           item.title || ""
         )}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
       : createCoverPlaceholderHtml(item.id || item.sourceUrl || item.title, item.title);
@@ -1684,8 +1700,11 @@
   }
 
   function renderDetailLoading() {
-    $id("detail-title").textContent = "Đang tải…";
+    const detailTitleLink = $id("detail-title-link");
+    detailTitleLink.textContent = "Đang tải…";
+    detailTitleLink.removeAttribute("href");
     $id("detail-author").textContent = "";
+    $id("detail-origin-link").classList.add("is-hidden");
     $id("detail-badges").innerHTML = "";
     $id("detail-summary").textContent = "Đang lấy thông tin truyện và danh sách chương.";
     $id("stat-chapters").textContent = "—";
@@ -1738,6 +1757,8 @@
     const coverWrap = $("#detail-hero .detail-cover-wrap");
     const cover = $id("detail-cover");
     const blur = $id("detail-cover-blur");
+    const detailTitleLink = $id("detail-title-link");
+    const detailOriginLink = $id("detail-origin-link");
     const badges = $id("detail-badges");
     const summary = $id("detail-summary");
     const chapterList = $id("chapter-list");
@@ -1748,8 +1769,9 @@
     const sourceBlocked = Boolean(detail.upstreamBlocked);
 
     coverWrap.style.background = coverGradient(detail.title || detail.sourceUrl || detail.requestUrl);
-    if (detail.coverUrl) {
-      cover.src = detail.coverUrl;
+    const preferredCoverUrl = firstText(buildLibraryCoverUrl(detail.libraryItem), detail.coverUrl);
+    if (preferredCoverUrl) {
+      cover.src = preferredCoverUrl;
       cover.alt = detail.title || "";
       cover.style.display = "block";
       blur.style.backgroundImage = "none";
@@ -1761,7 +1783,18 @@
       blur.style.opacity = "0";
     }
 
-    $id("detail-title").textContent = detail.title || "Không có tiêu đề";
+    const originalUrl = detail.sourceUrl || detail.requestUrl || "";
+    const displayTitle = resolveDetailTitle(detail.title, originalUrl);
+    detailTitleLink.textContent = displayTitle;
+    if (originalUrl) {
+      detailTitleLink.href = originalUrl;
+      detailOriginLink.href = originalUrl;
+      detailOriginLink.classList.remove("is-hidden");
+    } else {
+      detailTitleLink.removeAttribute("href");
+      detailOriginLink.removeAttribute("href");
+      detailOriginLink.classList.add("is-hidden");
+    }
     $id("detail-author").textContent = detail.author || sourceRecord?.name || "";
 
     badges.innerHTML = "";
@@ -2677,9 +2710,9 @@
     return {
       kind: "library",
       sourceId: novel.sourceId,
-      title: enriched?.title || novel.title,
+      title: resolveDetailTitle(enriched?.title || novel.title, novel.sourceUrl),
       author: enriched?.author || novel.author,
-      coverUrl: enriched?.coverUrl || novel.coverUrl,
+      coverUrl: firstText(buildLibraryCoverUrl(novel), enriched?.coverUrl, novel.coverUrl) || null,
       description: enriched?.description || novel.description,
       status: novel.status,
       genres: Array.isArray(enriched?.genres) ? enriched.genres : [],
@@ -2691,7 +2724,8 @@
         name: getReadableSourceLabel(novel) || novel.sourceId
       },
       libraryItem: novel,
-      requestUrl: novel.sourceUrl
+      requestUrl: novel.sourceUrl,
+      sourceUrl: novel.sourceUrl
     };
   }
 
@@ -2770,7 +2804,7 @@
     return {
       kind: "source",
       sourceId,
-      title: resolvedTitle || readableTitleFromUrl(sourceUrl),
+      title: resolveDetailTitle(resolvedTitle, sourceUrl),
       author: firstText(
         upstreamBlocked ? preview?.author : detailPayload?.author,
         detailPayload?.author,
@@ -2779,6 +2813,7 @@
       coverUrl: firstText(
         upstreamBlocked ? preview?.coverUrl : detailPayload?.coverUrl,
         detailPayload?.coverUrl,
+        buildLibraryCoverUrl(libraryItem),
         libraryItem?.coverUrl
       ) || null,
       description: resolvedDescription || null,

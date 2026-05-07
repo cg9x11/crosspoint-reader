@@ -6,6 +6,7 @@ import path from "node:path";
 import { buildOpdsFeed } from "../opds/feed.js";
 import {
   getPublishedChapterPath,
+  getPublishedCoverBmpPath,
   getPublishedManifestPath
 } from "../library/service.js";
 
@@ -24,6 +25,10 @@ function parseChapterIndex(input: string) {
 
   const match = /^ch_(\d+)\.epub$/i.exec(input);
   return match ? Number(match[1]) : 0;
+}
+
+function buildCoverDownloadPath(novelId: string) {
+  return `/opds/download/${encodeURIComponent(novelId)}/cover.bmp`;
 }
 
 export async function registerOpdsRoutes(app: FastifyInstance) {
@@ -98,7 +103,21 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
           {
             href: absoluteUrl(app.appConfig.APP_BASE_URL, `/opds/series/${novel.id}`),
             type: "application/atom+xml;profile=opds-catalog;kind=acquisition"
-          }
+          },
+          ...(novel.coverLocalPath
+            ? [
+                {
+                  href: absoluteUrl(app.appConfig.APP_BASE_URL, buildCoverDownloadPath(novel.id)),
+                  rel: "http://opds-spec.org/image",
+                  type: "image/bmp"
+                },
+                {
+                  href: absoluteUrl(app.appConfig.APP_BASE_URL, buildCoverDownloadPath(novel.id)),
+                  rel: "http://opds-spec.org/image/thumbnail",
+                  type: "image/bmp"
+                }
+              ]
+            : [])
         ]
       }))
     });
@@ -176,6 +195,24 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
       return {
         ok: false,
         error: "MANIFEST_NOT_FOUND"
+      };
+    }
+  });
+
+  app.get("/opds/download/:novelId/cover.bmp", async (request, reply) => {
+    const novelId = (request.params as { novelId: string }).novelId;
+    const coverPath = getPublishedCoverBmpPath(app.storagePaths, novelId);
+
+    try {
+      const file = await fs.readFile(coverPath);
+      reply.header("Content-Disposition", 'attachment; filename="cover.bmp"');
+      reply.type("image/bmp");
+      return file;
+    } catch {
+      reply.code(404);
+      return {
+        ok: false,
+        error: "COVER_NOT_FOUND"
       };
     }
   });

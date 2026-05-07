@@ -7,7 +7,9 @@ import { z } from "zod";
 import {
   deleteLibraryNovel,
   getChapterHtmlPath,
+  getCachedCoverPngPath,
   getLibraryNovel,
+  getPublishedCoverBmpPath,
   getPublishedChapterPath,
   listLibraryNovels,
   purgeLibraryNovelArtifacts,
@@ -41,6 +43,27 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
 
     return {
       items: await listLibraryNovels(app.prisma, query)
+    };
+  });
+
+  app.get("/api/library/novels/:novelId/cover", async (request, reply) => {
+    const params = z.object({ novelId: z.string().min(1) }).parse(request.params);
+    const pngPath = getCachedCoverPngPath(app.storagePaths, params.novelId);
+    if (await fileExists(pngPath)) {
+      reply.type("image/png");
+      return fs.readFile(pngPath);
+    }
+
+    const bmpPath = getPublishedCoverBmpPath(app.storagePaths, params.novelId);
+    if (await fileExists(bmpPath)) {
+      reply.type("image/bmp");
+      return fs.readFile(bmpPath);
+    }
+
+    reply.code(404);
+    return {
+      ok: false,
+      error: "COVER_NOT_FOUND"
     };
   });
 

@@ -8,6 +8,11 @@ import type { PrismaClient } from "@prisma/client";
 import type { AppConfig } from "../config/env.js";
 import { buildChapterEpub } from "../epub/builder.js";
 import {
+  getNovelCoverAssets,
+  readEpubCoverBuffer,
+  syncNovelCoverAssets
+} from "../library/cover-assets.js";
+import {
   buildSeriesId,
   getChapterHtmlPath,
   getPublishedChapterPath,
@@ -131,7 +136,7 @@ async function buildSeriesManifestFromDatabase(
 
   const seriesDir = getPublishedSeriesDir(storagePaths, novelId);
   await ensureDir(seriesDir);
-  const firstChapter = novel.chapters[0];
+  const coverAssets = await getNovelCoverAssets(storagePaths, novelId);
 
   return {
     version: 1,
@@ -141,8 +146,7 @@ async function buildSeriesManifestFromDatabase(
     sourceId: novel.sourceId,
     sourceName: novel.sourceName,
     description: novel.description,
-    coverPath:
-      firstChapter ? path.basename(getPublishedChapterRelativePath(novelId, firstChapter.chapterIndex)) : undefined,
+    coverPath: coverAssets.publishedCoverPath ? path.basename(coverAssets.publishedCoverPath) : undefined,
     status: novel.status,
     updatedAt: new Date().toISOString(),
     chapters: novel.chapters.map((chapter) => ({
@@ -175,6 +179,7 @@ async function writeSeriesManifest(
   }
 ) {
   const manifestPath = getPublishedManifestPath(storagePaths, novelId);
+  const coverAssets = await getNovelCoverAssets(storagePaths, novelId);
 
   if (options?.novel && options.chapter) {
     const existing = await readJsonFile<SeriesManifestShape | null>(manifestPath, null);
@@ -189,7 +194,6 @@ async function writeSeriesManifest(
         .filter((chapter) => chapter.chapterIndex !== chapterEntry.chapterIndex)
         .concat(chapterEntry)
         .sort((left, right) => left.chapterIndex - right.chapterIndex);
-      const firstChapter = chapters[0];
 
       await writeJsonFileAtomic(manifestPath, {
         version: 1,
@@ -199,7 +203,7 @@ async function writeSeriesManifest(
         sourceId: options.novel.sourceId,
         sourceName: options.novel.sourceName,
         description: options.novel.description,
-        coverPath: firstChapter?.file,
+        coverPath: coverAssets.publishedCoverPath ? path.basename(coverAssets.publishedCoverPath) : undefined,
         status: options.novel.status,
         updatedAt: new Date().toISOString(),
         chapters
@@ -535,6 +539,20 @@ export async function processNovelSyncJob(
       }
     });
 
+    if (novel.coverUrl) {
+      try {
+        await syncNovelCoverAssets(context.prisma, context.storagePaths, {
+          id: novel.id,
+          coverUrl: novel.coverUrl
+        });
+      } catch (error) {
+        console.warn("Failed to refresh published cover assets", {
+          novelId: novel.id,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
     await updateNovelAggregateState(context.prisma, novel.id);
     return { ok: true, chapters: chapters.length, newChapters };
   } catch (error) {
@@ -698,6 +716,21 @@ export async function processChapterBuildJob(
       `${chapter.id}.epub`
     );
     const targetPath = getPublishedChapterPath(context.storagePaths, chapter.novelId, chapter.chapterIndex);
+    let coverImage = await readEpubCoverBuffer(context.storagePaths, chapter.novelId);
+    if (!coverImage && chapter.novel.coverUrl) {
+      try {
+        await syncNovelCoverAssets(context.prisma, context.storagePaths, {
+          id: chapter.novelId,
+          coverUrl: chapter.novel.coverUrl
+        });
+        coverImage = await readEpubCoverBuffer(context.storagePaths, chapter.novelId);
+      } catch (error) {
+        console.warn("Failed to refresh EPUB cover asset", {
+          novelId: chapter.novelId,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
 
     await ensureDir(path.dirname(tempPath));
     const buildResult = await buildChapterEpub({
@@ -705,7 +738,15 @@ export async function processChapterBuildJob(
       identifier: `${chapter.novelId}:${chapter.chapterIndex}`,
       title: chapter.title,
       author: chapter.novel.author,
-      contentHtml: html
+      contentHtml: html,
+      sourceUrl: chapter.sourceUrl,
+      coverImage: coverImage
+        ? {
+            buffer: coverImage.buffer,
+            mediaType: coverImage.mediaType,
+            fileName: "images/cover.png"
+          }
+        : null
     });
 
     await moveFile(tempPath, targetPath);

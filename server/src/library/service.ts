@@ -23,8 +23,28 @@ export function getPublishedManifestPath(storagePaths: StorageLayout, novelId: s
   return path.join(getPublishedSeriesDir(storagePaths, novelId), "_series.json");
 }
 
+export function getPublishedCoverBmpPath(storagePaths: StorageLayout, novelId: string) {
+  return path.join(getPublishedSeriesDir(storagePaths, novelId), "cover.bmp");
+}
+
 export function getPublishedChapterRelativePath(novelId: string, chapterIndex: number) {
   return path.posix.join("series", novelId, formatChapterFilename(chapterIndex, 3));
+}
+
+export function getPublishedCoverRelativePath(novelId: string) {
+  return path.posix.join("series", novelId, "cover.bmp");
+}
+
+export function getCachedCoverDir(storagePaths: StorageLayout, novelId: string) {
+  return path.join(storagePaths.cacheCoversDir, novelId);
+}
+
+export function getCachedCoverPngPath(storagePaths: StorageLayout, novelId: string) {
+  return path.join(getCachedCoverDir(storagePaths, novelId), "cover.png");
+}
+
+export function getCachedCoverBmpPath(storagePaths: StorageLayout, novelId: string) {
+  return path.join(getCachedCoverDir(storagePaths, novelId), "cover.bmp");
 }
 
 export async function upsertNovelFromSourceDetail(

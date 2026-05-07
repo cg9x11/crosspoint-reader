@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { load } from "cheerio";
 import yazl from "yazl";
 
 import { ensureDir, sha256Hex } from "../lib/filesystem.js";
+import { buildEpubImageAsset } from "../lib/image-assets.js";
 
 function escapeXml(value: string) {
   return value
@@ -16,7 +18,7 @@ function escapeXml(value: string) {
 
 function buildXhtmlDocument(title: string, bodyHtml: string) {
   return `<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="vi">
   <head>
     <title>${escapeXml(title)}</title>
     <meta charset="utf-8" />
@@ -30,12 +32,95 @@ function buildXhtmlDocument(title: string, bodyHtml: string) {
 </html>`;
 }
 
+interface EpubBinaryAsset {
+  zipPath: string;
+  mediaType: string;
+  buffer: Buffer;
+}
+
 export interface BuildChapterEpubOptions {
   outputPath: string;
   identifier: string;
   title: string;
   author?: string | null;
   contentHtml: string;
+  sourceUrl?: string | null;
+  coverImage?: {
+    buffer: Buffer;
+    mediaType: string;
+    fileName?: string;
+  } | null;
+}
+
+async function localizeChapterImages(contentHtml: string, sourceUrl?: string | null) {
+  const $ = load(`<div id="chapter-root">${contentHtml}</div>`, {
+    xmlMode: false
+  });
+  const root = $("#chapter-root");
+  const assets: EpubBinaryAsset[] = [];
+  const assetBySource = new Map<string, string>();
+  let counter = 0;
+
+  const images = root.find("img").toArray();
+  for (const imageNode of images) {
+    const image = $(imageNode);
+    const rawSrc = String(image.attr("src") || "").trim();
+    if (!rawSrc) {
+      image.remove();
+      continue;
+    }
+
+    let resolvedSrc = rawSrc;
+    if (!/^data:/i.test(rawSrc)) {
+      try {
+        resolvedSrc = new URL(rawSrc, sourceUrl || undefined).toString();
+      } catch {
+        if (!/^https?:\/\//i.test(rawSrc)) {
+          image.replaceWith("<p>[Anh minh hoa khong ho tro]</p>");
+          continue;
+        }
+      }
+    }
+
+    try {
+      let localPath = assetBySource.get(resolvedSrc);
+      if (!localPath) {
+        counter += 1;
+        const asset = await buildEpubImageAsset(resolvedSrc, {
+          maxWidth: 1200,
+          maxHeight: 1800,
+          timeoutMs: 20_000,
+          headers: sourceUrl
+            ? {
+                Referer: sourceUrl
+              }
+            : undefined
+        });
+        localPath = `images/img_${String(counter).padStart(3, "0")}${asset.extension}`;
+        assetBySource.set(resolvedSrc, localPath);
+        assets.push({
+          zipPath: `OEBPS/${localPath}`,
+          mediaType: asset.mediaType,
+          buffer: asset.buffer
+        });
+      }
+
+      image.attr("src", localPath);
+      image.removeAttr("srcset");
+      image.removeAttr("sizes");
+      image.removeAttr("loading");
+      image.removeAttr("decoding");
+      image.removeAttr("fetchpriority");
+      image.removeAttr("referrerpolicy");
+    } catch {
+      image.replaceWith("<p>[Khong tai duoc anh minh hoa]</p>");
+    }
+  }
+
+  return {
+    contentHtml: root.html() || "",
+    assets
+  };
 }
 
 export async function buildChapterEpub({
@@ -43,13 +128,24 @@ export async function buildChapterEpub({
   identifier,
   title,
   author,
-  contentHtml
+  contentHtml,
+  sourceUrl,
+  coverImage
 }: BuildChapterEpubOptions) {
   await ensureDir(path.dirname(outputPath));
 
   const zipFile = new yazl.ZipFile();
-  const styles = `body{font-family:serif;line-height:1.55;padding:0 0.5rem;}h1{font-size:1.4rem;margin-bottom:1rem;}p{margin:0 0 1rem;}`;
-  const chapterXhtml = buildXhtmlDocument(title, contentHtml);
+  const styles = [
+    "body{font-family:serif;line-height:1.6;padding:0 0.5rem;color:#111;background:#fff;}",
+    "h1{font-size:1.4rem;margin:0 0 1rem;}",
+    "p{margin:0 0 1rem;}",
+    "img{display:block;max-width:100%;height:auto;margin:1rem auto;page-break-inside:avoid;}",
+    ".cover-page{margin:0;padding:0;text-align:center;}",
+    ".cover-page img{max-width:100%;max-height:96vh;margin:0 auto;}"
+  ].join("");
+  const localized = await localizeChapterImages(contentHtml, sourceUrl);
+  const chapterXhtml = buildXhtmlDocument(title, localized.contentHtml);
+
   const navXhtml = `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
   <head><title>${escapeXml(title)}</title></head>
@@ -59,6 +155,29 @@ export async function buildChapterEpub({
     </nav>
   </body>
 </html>`;
+
+  const manifestItems = [
+    `<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>`,
+    `<item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>`,
+    `<item id="style" href="styles.css" media-type="text/css"/>`
+  ];
+  const spineRefs = [`<itemref idref="nav"/>`, `<itemref idref="chapter"/>`];
+
+  localized.assets.forEach((asset, index) => {
+    manifestItems.push(
+      `<item id="img-${index + 1}" href="${escapeXml(asset.zipPath.replace(/^OEBPS\//, ""))}" media-type="${asset.mediaType}"/>`
+    );
+  });
+
+  if (coverImage?.buffer?.length) {
+    const coverFileName = coverImage.fileName || "images/cover.png";
+    manifestItems.push(
+      `<item id="cover-image" href="${escapeXml(coverFileName)}" media-type="${coverImage.mediaType}" properties="cover-image"/>`,
+      `<item id="cover-page" href="cover.xhtml" media-type="application/xhtml+xml"/>`
+    );
+    spineRefs.unshift(`<itemref idref="cover-page" linear="no"/>`);
+  }
+
   const packageOpf = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -66,17 +185,16 @@ export async function buildChapterEpub({
     <dc:title>${escapeXml(title)}</dc:title>
     <dc:creator>${escapeXml(author || "Unknown")}</dc:creator>
     <dc:language>vi</dc:language>
+    ${coverImage?.buffer?.length ? `<meta name="cover" content="cover-image"/>` : ""}
   </metadata>
   <manifest>
-    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
-    <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
-    <item id="style" href="styles.css" media-type="text/css"/>
+    ${manifestItems.join("\n    ")}
   </manifest>
   <spine>
-    <itemref idref="nav"/>
-    <itemref idref="chapter"/>
+    ${spineRefs.join("\n    ")}
   </spine>
 </package>`;
+
   const containerXml = `<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles>
@@ -90,6 +208,27 @@ export async function buildChapterEpub({
   zipFile.addBuffer(Buffer.from(navXhtml), "OEBPS/nav.xhtml");
   zipFile.addBuffer(Buffer.from(chapterXhtml), "OEBPS/chapter.xhtml");
   zipFile.addBuffer(Buffer.from(styles), "OEBPS/styles.css");
+
+  if (coverImage?.buffer?.length) {
+    const coverPath = coverImage.fileName || "images/cover.png";
+    const coverXhtml = `<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="vi">
+  <head>
+    <title>${escapeXml(title)}</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" type="text/css" href="styles.css" />
+  </head>
+  <body class="cover-page">
+    <img src="${escapeXml(coverPath)}" alt="${escapeXml(title)}" />
+  </body>
+</html>`;
+    zipFile.addBuffer(coverImage.buffer, `OEBPS/${coverPath}`);
+    zipFile.addBuffer(Buffer.from(coverXhtml), "OEBPS/cover.xhtml");
+  }
+
+  localized.assets.forEach((asset) => {
+    zipFile.addBuffer(asset.buffer, asset.zipPath);
+  });
 
   const outputStream = fs.createWriteStream(outputPath);
   const outputClosed = new Promise<void>((resolve, reject) => {
