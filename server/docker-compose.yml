@@ -11,6 +11,7 @@ services:
       APP_ROLE: app
       STORAGE_PATH: /data
       DATABASE_URL: file:/data/database/library.db
+      NODE_OPTIONS: --max-old-space-size=256
     ports:
       - "8787:8787"
     depends_on:
@@ -47,6 +48,7 @@ services:
       APP_ROLE: worker
       STORAGE_PATH: /data
       DATABASE_URL: file:/data/database/library.db
+      NODE_OPTIONS: --max-old-space-size=512
     depends_on:
       redis:
         condition: service_healthy

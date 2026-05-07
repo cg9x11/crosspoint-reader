@@ -40,6 +40,7 @@
     searchQuery: "",
     searchTimer: null,
     chapterSort: "desc",
+    detailChapterLimit: 150,
     detailContext: "browse",
     detailPayload: null,
     detailLibraryId: null,
@@ -102,6 +103,10 @@
       return text;
     }
     return `${text.slice(0, Math.max(0, length - 1)).trimEnd()}…`;
+  }
+
+  function getBrowseQuery() {
+    return String(state.searchQuery ?? "").trim();
   }
 
   function hashSeed(value) {
@@ -168,6 +173,25 @@
       return `${(numeric / 1000).toFixed(numeric >= 10000 ? 0 : 1)}k`;
     }
     return String(numeric);
+  }
+
+  function formatFileSize(value) {
+    const numeric = Number(value) || 0;
+    if (numeric <= 0) {
+      return "";
+    }
+    if (numeric < 1024) {
+      return `${numeric} B`;
+    }
+
+    const units = ["KB", "MB", "GB"];
+    let size = numeric / 1024;
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex += 1;
+    }
+    return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[unitIndex]}`;
   }
 
   function formatRelative(value) {
@@ -431,8 +455,16 @@
     );
   }
 
-  function isLibraryDownloaded(item) {
+  function hasDownloadedChapters(item) {
+    return Number(item.downloadedChapters) > 0;
+  }
+
+  function isLibraryFullyDownloaded(item) {
     return Number(item.totalChapters) > 0 && Number(item.downloadedChapters) >= Number(item.totalChapters);
+  }
+
+  function isLibraryDownloaded(item) {
+    return hasDownloadedChapters(item);
   }
 
   function sortByPriority(items) {
@@ -463,6 +495,74 @@
   function filterInstalledBySourcePolicy(items) {
     const allowlist = getSourcePolicyAllowlist();
     return allowlist ? items.filter((item) => allowlist.has(item.id)) : items;
+  }
+
+  function isSourceHiddenByPolicy(sourceId) {
+    const allowlist = getSourcePolicyAllowlist();
+    return Boolean(sourceId && allowlist && !allowlist.has(sourceId));
+  }
+
+  function isChapterFailed(status) {
+    return status === "fetch_failed" || status === "build_failed";
+  }
+
+  function isChapterRetryable(chapter) {
+    return Boolean(chapter?.id) && isChapterFailed(chapter.status);
+  }
+
+  function isChapterPreviewable(chapter) {
+    return Boolean(chapter?.id) && chapter.status === "published";
+  }
+
+  function taskStateLabel(stateValue) {
+    if (stateValue === "running") {
+      return "Đang chạy";
+    }
+    if (stateValue === "queued") {
+      return "Đang xếp hàng";
+    }
+    if (stateValue === "stopped") {
+      return "Đã dừng";
+    }
+    return "Hoàn tất";
+  }
+
+  function taskStateTone(stateValue) {
+    if (stateValue === "running" || stateValue === "queued") {
+      return "pending";
+    }
+    if (stateValue === "stopped") {
+      return "error";
+    }
+    return "ready";
+  }
+
+  function formatChapterProgress(downloadedChapters, totalChapters) {
+    const downloaded = Number(downloadedChapters) || 0;
+    const total = Number(totalChapters) || 0;
+    if (total > 0) {
+      return `${formatCount(downloaded)}/${formatCount(total)} chương`;
+    }
+    if (downloaded > 0) {
+      return `${formatCount(downloaded)} chương đã tải`;
+    }
+    return "Chưa tải chương";
+  }
+
+  function buildTaskSummary(task) {
+    const parts = [formatChapterProgress(task.downloadedChapters, task.totalChapters)];
+    if (task.remainingChapters > 0) {
+      parts.push(`còn ${formatCount(task.remainingChapters)}`);
+    }
+    if (task.failedChapters > 0) {
+      parts.push(`lỗi ${formatCount(task.failedChapters)}`);
+    }
+    if (task.activeJobs > 0) {
+      parts.push(`${formatCount(task.activeJobs)} đang chạy`);
+    } else if (task.waitingJobs > 0) {
+      parts.push(`${formatCount(task.waitingJobs)} đang chờ`);
+    }
+    return parts.join(" • ");
   }
 
   function findKnownSourceById(sourceId) {
@@ -552,6 +652,19 @@
         ? state.activeSourceId
         : state.enabledSources[0]?.id;
     return sourceId ? sourceBrowsePath(sourceId) : "/sources";
+  }
+
+  function resetBrowseState() {
+    state.searchQuery = "";
+    state.browseItems = [];
+    state.browseNextPage = null;
+    state.browseSectionId = null;
+    state.browseError = "";
+  }
+
+  function openSourceBrowse(sourceId) {
+    resetBrowseState();
+    navigateTo(sourceBrowsePath(sourceId));
   }
 
   function parseRoute() {
@@ -983,6 +1096,17 @@
             Math.min(100, Math.round(((Number(item.downloadedChapters) || 0) / Number(item.totalChapters)) * 100))
           )
         : 0;
+    const progressLabel = formatChapterProgress(item.downloadedChapters, item.totalChapters);
+    const syncChipClass =
+      item.syncStatus === "error" ? "error" : isLibraryFullyDownloaded(item) ? "ready" : "pending";
+    const syncChipLabel =
+      item.syncStatus === "error"
+        ? "Lỗi tải"
+        : isLibraryFullyDownloaded(item)
+          ? "Đã tải đủ"
+          : hasDownloadedChapters(item)
+            ? "Đang tải dở"
+            : "Chưa tải";
     const coverMarkup = item.coverUrl
       ? `<img class="novel-card-cover" src="${escapeHtml(item.coverUrl)}" alt="${escapeHtml(
           item.title || ""
@@ -1005,6 +1129,10 @@
       </div>
       <div class="novel-card-title">${escapeHtml(item.title || "Không có tiêu đề")}</div>
       <div class="novel-card-sub">${escapeHtml(buildNovelSubtitle(item) || truncate(sourceDomain(item.sourceUrl), 36))}</div>
+      <div class="novel-card-meta">
+        <span class="novel-card-progress-label">${escapeHtml(progressLabel)}</span>
+        <span class="novel-card-sync ${syncChipClass}">${escapeHtml(syncChipLabel)}</span>
+      </div>
     `;
 
     if (options.onClick) {
@@ -1029,7 +1157,7 @@
     } else if (state.activeFilter === "completed") {
       items = items.filter((item) => String(item.status).toLowerCase() === "completed");
     } else if (state.activeFilter === "downloaded") {
-      items = items.filter((item) => isLibraryDownloaded(item));
+      items = items.filter((item) => hasDownloadedChapters(item));
     }
 
     grid.innerHTML = "";
@@ -1065,7 +1193,7 @@
       button.className = `source-tab${source.id === state.activeSourceId ? " active" : ""}`;
       button.type = "button";
       button.innerHTML = `<span class="source-tab-dot"></span>${escapeHtml(source.name)}`;
-      button.addEventListener("click", () => navigateTo(sourceBrowsePath(source.id)));
+      button.addEventListener("click", () => openSourceBrowse(source.id));
       container.appendChild(button);
     });
   }
@@ -1077,7 +1205,7 @@
     }
 
     bar.innerHTML = "";
-    if (state.searchQuery) {
+    if (getBrowseQuery()) {
       const button = document.createElement("button");
       button.className = "cat-btn active";
       button.type = "button";
@@ -1113,11 +1241,13 @@
       return;
     }
 
+    const browseQuery = getBrowseQuery();
+
     renderBrowseSourceTabs();
     renderBrowseCategoryBar();
     syncBrowseSearchUi();
 
-    const items = state.searchQuery
+    const items = browseQuery
       ? state.browseItems
       : state.browseHome?.sections?.find((section) => section.id === state.browseSectionId)?.items || [];
 
@@ -1138,7 +1268,7 @@
         "Mở Nguồn",
         () => navigateTo("/sources")
       );
-    } else if (!items.length && !state.searchQuery && !(state.browseHome?.sections?.length || 0)) {
+    } else if (!items.length && !browseQuery && !(state.browseHome?.sections?.length || 0)) {
       setMessageInGrid(
         grid,
         "Nguồn chưa có home",
@@ -1150,13 +1280,11 @@
       setMessageInGrid(
         grid,
         "Không có truyện phù hợp",
-        state.searchQuery ? "Thử từ khóa khác hoặc xóa bộ lọc tìm kiếm." : "Mục này hiện chưa có dữ liệu.",
-        state.searchQuery ? "Xóa tìm kiếm" : "",
-        state.searchQuery
+        browseQuery ? "Thử từ khóa khác hoặc xóa bộ lọc tìm kiếm." : "Mục này hiện chưa có dữ liệu.",
+        browseQuery ? "Xóa tìm kiếm" : "",
+        browseQuery
           ? () => {
-              state.searchQuery = "";
-              state.browseItems = [];
-              state.browseNextPage = null;
+              resetBrowseState();
               syncBrowseSearchUi();
               void refreshBrowseContent({ append: false });
             }
@@ -1173,7 +1301,7 @@
     }
 
     if (loadMoreWrap) {
-      loadMoreWrap.style.display = state.searchQuery && state.browseNextPage ? "flex" : "none";
+      loadMoreWrap.style.display = browseQuery && state.browseNextPage ? "flex" : "none";
     }
   }
 
@@ -1261,8 +1389,12 @@
 
       card.querySelector(".source-browse-btn")?.addEventListener("click", (event) => {
         event.stopPropagation();
-        if (item.enabled && item.runtimeSupported) {
-          navigateTo(sourceBrowsePath(item.id));
+        if (false) {
+          void showSourceInPolicy(item.id).catch((error) => {
+            showToast("!", "Không hiển thị được nguồn", error.message);
+          });
+        } else if (item.enabled && item.runtimeSupported) {
+          openSourceBrowse(item.id);
         } else {
           openExtensionInfoModal(item, true);
         }
@@ -1372,6 +1504,7 @@
     const chapterList = $id("chapter-list");
     const addButton = $id("btn-add-library");
     const syncButton = $id("btn-download-all");
+    const removeLibraryButton = $id("btn-remove-library");
     const openLibraryButton = $id("btn-in-library");
 
     coverWrap.style.background = coverGradient(detail.title || detail.sourceUrl || detail.requestUrl);
@@ -1379,8 +1512,8 @@
       cover.src = detail.coverUrl;
       cover.alt = detail.title || "";
       cover.style.display = "block";
-      blur.style.backgroundImage = `url("${detail.coverUrl}")`;
-      blur.style.opacity = "0.35";
+      blur.style.backgroundImage = "none";
+      blur.style.opacity = "1";
     } else {
       cover.removeAttribute("src");
       cover.style.display = "none";
@@ -1417,6 +1550,7 @@
 
     addButton.style.display = detail.libraryItem ? "none" : "block";
     syncButton.style.display = detail.libraryItem ? "block" : "none";
+    removeLibraryButton.style.display = detail.libraryItem ? "block" : "none";
     openLibraryButton.style.display = detail.libraryItem && detail.kind !== "library" ? "block" : "none";
 
     syncButton.textContent =
@@ -1429,28 +1563,64 @@
     }
 
     chapterList.innerHTML = "";
-    const limitedChapters = chapters.slice(0, 150);
-    limitedChapters.forEach((chapter) => {
+    const chapterLimit = Math.min(chapters.length, state.detailChapterLimit || 150);
+    const visibleChapters = chapters.slice(0, chapterLimit);
+    const limitedChapters = visibleChapters;
+    visibleChapters.forEach((chapter) => {
       const row = document.createElement("div");
       const downloaded = chapter.status === "published";
-      row.className = `chapter-row${downloaded ? " downloaded" : ""}`;
+      const chapterTitle = escapeHtml(chapter.title || "Chương");
+      const chapterMeta = chapter.lastError
+        ? `<span class="ch-meta">${escapeHtml(truncate(chapter.lastError, 88))}</span>`
+        : "";
+      const previewButton = isChapterPreviewable(chapter)
+        ? `<button class="chapter-view-btn" type="button">Xem</button>`
+        : "";
+      const retryButton = isChapterRetryable(chapter)
+        ? `<button class="chapter-retry-btn" type="button">Tải lại</button>`
+        : "";
+      row.className = `chapter-row${downloaded ? " downloaded" : ""}${isChapterFailed(chapter.status) ? " failed" : ""}`;
       row.innerHTML = `
         <span class="ch-index">${String(chapter.chapterIndex ?? 0).padStart(3, "0")}</span>
-        <span class="ch-title">${escapeHtml(chapter.title || "Chương")}</span>
-        <span class="ch-dl-icon">${buildDetailRowIcon(chapter.status)}</span>
+        <div class="ch-main">
+          <span class="ch-title">${chapterTitle}</span>
+          ${chapterMeta}
+        </div>
+        <div class="ch-actions">
+          <span class="ch-dl-icon">${buildDetailRowIcon(chapter.status)}</span>
+          ${previewButton}
+          ${retryButton}
+        </div>
       `;
-      if (chapter.sourceUrl) {
-        row.addEventListener("click", () => {
+      if (isChapterPreviewable(chapter) || chapter.sourceUrl) {
+        row.addEventListener("click", (event) => {
+          if (event.target.closest(".chapter-retry-btn, .chapter-view-btn")) {
+            return;
+          }
+          if (isChapterPreviewable(chapter)) {
+            void previewCurrentChapter(chapter.id);
+            return;
+          }
           window.open(chapter.sourceUrl, "_blank", "noopener,noreferrer");
         });
       }
+      row.querySelector(".chapter-view-btn")?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void previewCurrentChapter(chapter.id);
+      });
+      row.querySelector(".chapter-retry-btn")?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void retryCurrentChapter(chapter.id);
+      });
       chapterList.appendChild(row);
     });
 
     if (!limitedChapters.length) {
       const row = document.createElement("div");
       row.className = "chapter-row";
-      row.innerHTML = `<span class="ch-title">Chưa có dữ liệu chương từ nguồn hoặc thư viện.</span>`;
+      row.innerHTML = `<span class="ch-title">${escapeHtml(
+        detail.chapterWarning || "Chưa có dữ liệu chương từ nguồn hoặc thư viện."
+      )}</span>`;
       chapterList.appendChild(row);
     } else if (chapters.length > limitedChapters.length) {
       const row = document.createElement("div");
@@ -1461,6 +1631,23 @@
       row.style.fontFamily = "var(--font-mono)";
       row.textContent = `... và ${chapters.length - limitedChapters.length} chương khác`;
       chapterList.appendChild(row);
+    }
+
+    if (chapters.length > visibleChapters.length) {
+      chapterList.lastElementChild?.remove();
+      const button = document.createElement("button");
+      button.className = "chapter-more-btn";
+      button.type = "button";
+      button.textContent = `Xem thêm ${Math.min(150, chapters.length - visibleChapters.length)} / ${
+        chapters.length - visibleChapters.length
+      } chương`;
+      button.addEventListener("click", () => {
+        state.detailChapterLimit += 150;
+        if (state.detailPayload) {
+          renderDetail(state.detailPayload);
+        }
+      });
+      chapterList.appendChild(button);
     }
 
     const sortButton = $id("sort-btn");
@@ -1487,13 +1674,16 @@
       .filter((entry) => Boolean(entry[1]))
       .map((entry) => `<span class="badge badge-cat">${escapeHtml(entry[0])}</span>`)
       .join("");
+    const hiddenByPolicy = isInstalled && isSourceHiddenByPolicy(item.id);
 
     const footerButtons = [
       `<button class="btn-ghost" type="button" data-close="dynamic-modal">Đóng</button>`
     ];
 
-    if (isInstalled && item.enabled && item.runtimeSupported) {
+    if (isInstalled && item.enabled && item.runtimeSupported && !hiddenByPolicy) {
       footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-browse-source">Duyệt</button>`);
+    } else if (hiddenByPolicy) {
+      footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-show-source">Hiện nguồn</button>`);
     } else if (!isInstalled) {
       footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-install-source">Cài & bật</button>`);
     }
@@ -1558,7 +1748,16 @@
 
     $id("dynamic-browse-source")?.addEventListener("click", () => {
       closeModal("dynamic-modal");
-      navigateTo(sourceBrowsePath(item.id));
+      openSourceBrowse(item.id);
+    });
+
+    $id("dynamic-show-source")?.addEventListener("click", async () => {
+      try {
+        await showSourceInPolicy(item.id);
+        closeModal("dynamic-modal");
+      } catch (error) {
+        showToast("!", error.message, "Không hiển thị được nguồn.");
+      }
     });
 
     $id("dynamic-install-source")?.addEventListener("click", async () => {
@@ -1719,18 +1918,14 @@
         const row = document.createElement("div");
         row.className = "log-row";
         row.innerHTML = `
-          <div class="log-dot${job.state === "failed" ? " error" : ""}"></div>
+          <div class="log-dot${taskStateTone(job.state) === "error" ? " error" : ""}"></div>
           <div class="log-content">
-            <div class="log-title">${escapeHtml(
-              `[${job.queue}] ${job.novelTitle || job.name || String(job.id)}`
+            <div class="log-title">${escapeHtml(job.title || String(job.id))}</div>
+            <div class="log-time">${escapeHtml(
+              `${taskStateLabel(job.state)} â€¢ ${buildTaskSummary(job)} â€¢ ${formatRelative(job.lastActivityAt || job.createdAt)}`
             )}</div>
-            <div class="log-time">${escapeHtml(`${job.state} • ${formatRelative(job.createdAt)}`)}</div>
           </div>
-          ${
-            job.state === "failed" || job.state === "completed"
-              ? `<button class="source-browse-btn" type="button">Retry</button>`
-              : ""
-          }
+          ${job.retryable ? `<button class="source-browse-btn" type="button">Thử lại</button>` : ""}
         `;
         row.querySelector("button")?.addEventListener("click", () => void retryJob(job.id));
         taskList.appendChild(row);
@@ -1749,15 +1944,17 @@
           </svg>
         </div>
         <div class="device-info">
-          <span class="device-name">Raspberry Pi 4 • ${escapeHtml(system.role || "app")}</span>
-          <span class="device-last">${escapeHtml(truncate(state.storage?.root || "Không rõ storage root", 60))}</span>
+          <span class="device-name">${escapeHtml(system.roleLabel || system.role || "app")}</span>
+          <span class="device-last">${escapeHtml(
+            truncate(system.roleDescription || state.storage?.root || "Không rõ storage root", 72)
+          )}</span>
         </div>
         <span class="device-dot ${ready.status === "ready" ? "online" : ""}"></span>
       </div>
     `;
   }
 
-  function createExtensionCard(item, { catalog = false } = {}) {
+  function createExtensionCard(item, { catalog = false, hiddenByPolicy = false } = {}) {
     const card = document.createElement("div");
     card.className = "source-card";
     card.innerHTML = `
@@ -1794,16 +1991,38 @@
       const detailButton = document.createElement("button");
       detailButton.className = "source-browse-btn";
       detailButton.type = "button";
+      if (hiddenByPolicy) {
+        detailButton.textContent = "Hiện nguồn";
+      }
       detailButton.textContent = item.enabled && item.runtimeSupported ? "Duyệt" : "Chi tiết";
+      if (hiddenByPolicy) {
+        detailButton.textContent = "Hiện nguồn";
+      }
       detailButton.addEventListener("click", (event) => {
         event.stopPropagation();
-        if (item.enabled && item.runtimeSupported) {
-          navigateTo(sourceBrowsePath(item.id));
+        if (hiddenByPolicy) {
+          void showSourceInPolicy(item.id).catch((error) => {
+            showToast("!", "Không hiển thị được nguồn", error.message);
+          });
+        } else if (item.enabled && item.runtimeSupported) {
+          openSourceBrowse(item.id);
         } else {
           openExtensionInfoModal(item, true);
         }
       });
       actions.appendChild(detailButton);
+
+      if (!item.bundled) {
+        const removeButton = document.createElement("button");
+        removeButton.className = "source-browse-btn";
+        removeButton.type = "button";
+        removeButton.textContent = "Gỡ";
+        removeButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          confirmRemoveExtension(item.id, item.name || item.id);
+        });
+        actions.appendChild(removeButton);
+      }
 
       const toggle = document.createElement("label");
       toggle.className = "toggle-switch";
@@ -1862,6 +2081,14 @@
           <button class="source-browse-btn" type="button">Sync</button>
         `;
         row.querySelector("button")?.addEventListener("click", () => void refreshRegistry(registry.id));
+        if (!["ext-vbook", "vbook-extensions"].includes(registry.id)) {
+          const removeButton = document.createElement("button");
+          removeButton.className = "source-browse-btn";
+          removeButton.type = "button";
+          removeButton.textContent = "Xóa";
+          removeButton.addEventListener("click", () => confirmRemoveRegistry(registry.id, registry.name));
+          row.appendChild(removeButton);
+        }
         registryList.appendChild(row);
       });
     }
@@ -1908,7 +2135,9 @@
 
     const hiddenInstalledList = logCard.querySelector("#server-hidden-installed-list");
     if (hiddenInstalledList) {
-      hiddenInstalled.forEach((item) => hiddenInstalledList.appendChild(createExtensionCard(item)));
+      hiddenInstalled.forEach((item) =>
+        hiddenInstalledList.appendChild(createExtensionCard(item, { hiddenByPolicy: true }))
+      );
     }
 
     const connectCard = $("#page-server .connect-card");
@@ -2090,7 +2319,7 @@
 
   async function loadBrowseSearch(sourceId, append = false) {
     const params = new URLSearchParams();
-    params.set("query", state.searchQuery);
+    params.set("query", getBrowseQuery());
     if (append && state.browseNextPage) {
       params.set("page", state.browseNextPage);
     }
@@ -2117,7 +2346,7 @@
     }
 
     try {
-      if (state.searchQuery) {
+      if (getBrowseQuery()) {
         await loadBrowseSearch(state.activeSourceId, append);
       } else {
         await loadBrowseHome(state.activeSourceId);
@@ -2156,10 +2385,11 @@
       author: enriched?.author || novel.author,
       coverUrl: enriched?.coverUrl || novel.coverUrl,
       description: enriched?.description || novel.description,
-      status: enriched?.status || novel.status,
+      status: novel.status,
       genres: Array.isArray(enriched?.genres) ? enriched.genres : [],
       chapterCount: Number(novel.totalChapters) || (novel.chapters?.length || 0),
       chapters: Array.isArray(novel.chapters) ? novel.chapters : [],
+      chapterWarning: null,
       source: getInstalledExtensionById(novel.sourceId) || getEnabledSourceById(novel.sourceId) || {
         id: novel.sourceId,
         name: getReadableSourceLabel(novel) || novel.sourceId
@@ -2193,11 +2423,17 @@
       genres: Array.isArray(detailPayload.genres) ? detailPayload.genres : [],
       chapterCount: Array.isArray(chapterPayload.items) ? chapterPayload.items.length : 0,
       chapters: Array.isArray(chapterPayload.items)
-        ? chapterPayload.items.map((item) => ({
-            ...item,
-            status: libraryItem?.chapters?.find((chapter) => chapter.chapterIndex === item.chapterIndex)?.status || "remote"
-          }))
+        ? chapterPayload.items.map((item) => {
+            const libraryChapter = libraryItem?.chapters?.find((chapter) => chapter.chapterIndex === item.chapterIndex);
+            return {
+              ...item,
+              id: libraryChapter?.id || null,
+              status: libraryChapter?.status || "remote",
+              lastError: libraryChapter?.lastError || null
+            };
+          })
         : [],
+      chapterWarning: typeof chapterPayload.warning === "string" ? chapterPayload.warning : null,
       source: getEnabledSourceById(sourceId) || getInstalledExtensionById(sourceId),
       libraryItem,
       requestUrl,
@@ -2223,8 +2459,9 @@
       }
     }
 
+    state.libraryLoaded = false;
     state.tasksLoaded = false;
-    await loadTasks(true).catch(() => []);
+    await Promise.all([loadLibrary(true), loadTasks(true).catch(() => [])]);
     showToast("✓", "Đã đẩy vào hàng đợi", `${state.libraryItems.length} truyện`);
   }
 
@@ -2314,7 +2551,7 @@
 
   async function retryJob(jobId) {
     try {
-      await apiJson(`/api/tasks/jobs/${encodeURIComponent(jobId)}/retry`, {
+      await apiJson(`/api/tasks/novels/${encodeURIComponent(jobId)}/retry`, {
         method: "POST"
       });
       state.tasksLoaded = false;
@@ -2366,9 +2603,194 @@
         : `/api/library/novels/${encodeURIComponent(libraryItem.id)}/sync`;
 
     await apiJson(endpoint, { method: "POST" });
+    state.libraryLoaded = false;
     state.tasksLoaded = false;
-    await loadTasks(true).catch(() => []);
+    await Promise.all([loadLibrary(true), loadTasks(true).catch(() => []), refreshActiveDetailView()]);
     showToast("↻", "Đã xếp hàng đồng bộ", libraryItem.title);
+  }
+
+  async function refreshActiveDetailView() {
+    if (!state.detailPayload) {
+      return;
+    }
+
+    if (state.detailContext === "library" && state.detailLibraryId) {
+      const detail = await loadLibraryDetail(state.detailLibraryId);
+      renderDetail(detail);
+      return;
+    }
+
+    if (state.detailPayload.sourceId && state.detailRequestUrl) {
+      const detail = await loadSourceDetail(state.detailPayload.sourceId, state.detailRequestUrl);
+      renderDetail(detail);
+    }
+  }
+
+  async function previewCurrentChapter(chapterId) {
+    const libraryItem = state.detailPayload?.libraryItem || getLibraryById(state.detailLibraryId);
+    if (!libraryItem?.id || !chapterId) {
+      return;
+    }
+
+    try {
+      const payload = await apiJson(
+        `/api/library/novels/${encodeURIComponent(libraryItem.id)}/chapters/${encodeURIComponent(chapterId)}/preview`
+      );
+      const preview = payload.item || payload;
+      const footerButtons = [`<button class="btn-ghost" type="button" data-close="dynamic-modal">Đóng</button>`];
+
+      if (preview.sourceUrl) {
+        footerButtons.push(`<button class="btn-ghost" type="button" id="chapter-preview-source">Mở nguồn</button>`);
+      }
+      if (preview.epubUrl) {
+        footerButtons.push(`<button class="btn-primary" type="button" id="chapter-preview-epub">Mở EPUB</button>`);
+      }
+
+      showDynamicModal({
+        title: preview.title || `Chương ${preview.chapterIndex || ""}`.trim(),
+        bodyHtml: `
+          <div class="chapter-preview-shell">
+            <div class="detail-badges" style="margin-bottom:10px;">
+              <span class="badge badge-cat">Đọc từ dữ liệu local</span>
+              ${preview.fileSize ? `<span class="badge badge-cat">${escapeHtml(formatFileSize(preview.fileSize))}</span>` : ""}
+              ${preview.publishedAt ? `<span class="badge badge-cat">${escapeHtml(formatRelative(preview.publishedAt))}</span>` : ""}
+            </div>
+            <p class="form-hint" style="margin:0 0 14px;">
+              Đây là bản HTML đã tải và lưu trong server. Nếu nội dung hiển thị đúng thì chapter này đã download thành công.
+            </p>
+            <div class="chapter-preview-info">
+              <div><span class="form-label">Truyện</span><p class="form-hint">${escapeHtml(
+                preview.novelTitle || libraryItem.title || ""
+              )}</p></div>
+              <div><span class="form-label">Chương</span><p class="form-hint">${escapeHtml(
+                String(preview.chapterIndex || "")
+              )}</p></div>
+              ${
+                preview.checksum
+                  ? `<div><span class="form-label">Checksum</span><p class="form-hint">${escapeHtml(preview.checksum)}</p></div>`
+                  : ""
+              }
+            </div>
+            <article class="chapter-preview-content" id="chapter-preview-html">${preview.html || ""}</article>
+          </div>
+        `,
+        footerHtml: footerButtons.join("")
+      });
+
+      $id("chapter-preview-source")?.addEventListener("click", () => {
+        window.open(preview.sourceUrl, "_blank", "noopener,noreferrer");
+      });
+      $id("chapter-preview-epub")?.addEventListener("click", () => {
+        window.open(preview.epubUrl, "_blank", "noopener,noreferrer");
+      });
+      $("#chapter-preview-html")
+        ?.querySelectorAll("a[href]")
+        .forEach((anchor) => {
+          anchor.setAttribute("target", "_blank");
+          anchor.setAttribute("rel", "noopener noreferrer");
+        });
+    } catch (error) {
+      showToast("!", "Không mở được bản local của chương", error.message);
+    }
+  }
+
+  async function retryCurrentChapter(chapterId) {
+    const libraryItem = state.detailPayload?.libraryItem || getLibraryById(state.detailLibraryId);
+    if (!libraryItem?.id || !chapterId) {
+      return;
+    }
+
+    await apiJson(
+      `/api/library/novels/${encodeURIComponent(libraryItem.id)}/chapters/${encodeURIComponent(chapterId)}/retry`,
+      {
+        method: "POST"
+      }
+    );
+
+    state.libraryLoaded = false;
+    state.tasksLoaded = false;
+    await Promise.all([loadLibrary(true), loadTasks(true).catch(() => []), refreshActiveDetailView()]);
+    showToast("↻", "Đã xếp hàng tải lại chương", libraryItem.title);
+  }
+
+  async function removeCurrentDetailFromLibrary() {
+    const libraryItem = state.detailPayload?.libraryItem || getLibraryById(state.detailLibraryId);
+    if (!libraryItem?.id) {
+      return;
+    }
+
+    showConfirmModal({
+      title: "Xóa truyện khỏi thư viện",
+      message: `Xóa ${libraryItem.title} và dọn cache, EPUB đã build cùng tất cả task liên quan?`,
+      confirmLabel: "Xóa truyện",
+      onConfirm: async () => {
+        await apiJson(`/api/library/novels/${encodeURIComponent(libraryItem.id)}`, {
+          method: "DELETE"
+        });
+
+        state.libraryLoaded = false;
+        state.tasksLoaded = false;
+        state.detailLibraryId = null;
+        if (state.detailPayload) {
+          state.detailPayload.libraryItem = null;
+        }
+        await Promise.all([loadLibrary(true), loadTasks(true).catch(() => [])]);
+
+        if (state.detailContext === "library") {
+          navigateTo("/library", true);
+        } else {
+          await refreshActiveDetailView();
+        }
+
+        showToast("✓", "Đã xóa khỏi thư viện", libraryItem.title);
+      }
+    });
+  }
+
+  async function showSourceInPolicy(sourceId) {
+    const currentAllowlist = Array.isArray(state.system?.sourcePolicy?.enabledAllowlist)
+      ? state.system.sourcePolicy.enabledAllowlist
+      : [];
+    const nextAllowlist = Array.from(new Set([...currentAllowlist, sourceId]));
+
+    await apiJson("/api/settings/source-policy", {
+      method: "PATCH",
+      body: {
+        enabledAllowlist: nextAllowlist
+      }
+    });
+
+    state.system = null;
+    state.enabledSourcesLoaded = false;
+    state.extensionsLoaded = false;
+    await Promise.all([loadSystem(true), loadEnabledSources(true), loadExtensions(true)]);
+    renderSources();
+    if (state.serverSection === "extensions") {
+      renderServerExtensionsSection();
+    }
+
+    const source = getInstalledExtensionById(sourceId) || getEnabledSourceById(sourceId);
+    showToast("✓", "Đã hiện nguồn", source?.name || sourceId);
+  }
+
+  function confirmRemoveRegistry(registryId, name) {
+    showConfirmModal({
+      title: "Xóa registry",
+      message: `Xóa registry ${name}? Catalog tương ứng sẽ bị gỡ khỏi server.`,
+      confirmLabel: "Xóa registry",
+      onConfirm: async () => {
+        await apiJson(`/api/extensions/registries/${encodeURIComponent(registryId)}`, {
+          method: "DELETE"
+        });
+        state.extensionsLoaded = false;
+        state.registriesLoaded = false;
+        await Promise.all([loadRegistries(true), loadExtensions(true)]);
+        if (state.serverSection === "extensions") {
+          renderServerExtensionsSection();
+        }
+        showToast("✓", "Đã xóa registry", name);
+      }
+    });
   }
 
   async function logout() {
@@ -2497,7 +2919,7 @@
         await installAndEnableExtension(addedFromRegistry[0].id);
         closeModal("add-source-modal");
         input.value = "";
-        navigateTo(sourceBrowsePath(addedFromRegistry[0].id));
+        openSourceBrowse(addedFromRegistry[0].id);
         return;
       }
 
@@ -2553,7 +2975,7 @@
 
     const searchInput = $id("browse-search");
     searchInput?.addEventListener("input", () => {
-      state.searchQuery = searchInput.value.trim();
+      state.searchQuery = searchInput.value;
       syncBrowseSearchUi();
       clearTimeout(state.searchTimer);
       state.searchTimer = setTimeout(() => {
@@ -2562,9 +2984,7 @@
     });
 
     $id("search-clear")?.addEventListener("click", () => {
-      state.searchQuery = "";
-      state.browseItems = [];
-      state.browseNextPage = null;
+      resetBrowseState();
       syncBrowseSearchUi();
       void refreshBrowseContent({ append: false });
     });
@@ -2587,6 +3007,12 @@
     $id("btn-download-all")?.addEventListener("click", () => {
       void syncCurrentDetail().catch((error) => {
         showToast("!", "Không đẩy được tác vụ", error.message);
+      });
+    });
+
+    $id("btn-remove-library")?.addEventListener("click", () => {
+      void removeCurrentDetailFromLibrary().catch((error) => {
+        showToast("!", "Không xóa được truyện", error.message);
       });
     });
 
@@ -2773,7 +3199,7 @@
 
     if (route.page === "browse") {
       activatePage("browse", "browse");
-      await loadEnabledSources();
+      await Promise.all([loadEnabledSources(), loadExtensions().catch(() => ({ installed: [], catalog: [] }))]);
       if (token !== state.routeToken) {
         return;
       }
@@ -2783,15 +3209,18 @@
         return;
       }
 
+      if (route.sourceId && !getEnabledSourceById(route.sourceId) && isSourceHiddenByPolicy(route.sourceId)) {
+        navigateTo("/extensions", true);
+        showToast("!", "Nguồn đang bị ẩn bởi policy", findKnownSourceById(route.sourceId)?.name || route.sourceId);
+        return;
+      }
+
       const nextSourceId =
         route.sourceId && getEnabledSourceById(route.sourceId) ? route.sourceId : state.enabledSources[0].id;
       const sourceChanged = nextSourceId !== state.activeSourceId;
       state.activeSourceId = nextSourceId;
       if (sourceChanged) {
-        state.searchQuery = "";
-        state.browseItems = [];
-        state.browseNextPage = null;
-        state.browseSectionId = null;
+        resetBrowseState();
       }
 
       renderBrowseLoading();
@@ -2807,6 +3236,7 @@
       if (token !== state.routeToken) {
         return;
       }
+      state.detailChapterLimit = 150;
       renderDetail(detail);
       return;
     }
@@ -2814,12 +3244,17 @@
     if (route.page === "detail" && route.detailContext === "browse") {
       activatePage("detail", "browse");
       renderDetailLoading();
-      await loadEnabledSources();
+      await Promise.all([loadEnabledSources(), loadExtensions().catch(() => ({ installed: [], catalog: [] }))]);
       if (token !== state.routeToken) {
         return;
       }
 
       if (!getEnabledSourceById(route.sourceId)) {
+        if (isSourceHiddenByPolicy(route.sourceId)) {
+          navigateTo("/extensions", true);
+          showToast("!", "Nguồn đang bị ẩn bởi policy", findKnownSourceById(route.sourceId)?.name || route.sourceId);
+          return;
+        }
         navigateTo(defaultBrowsePath(), true);
         return;
       }
@@ -2829,6 +3264,7 @@
       if (token !== state.routeToken) {
         return;
       }
+      state.detailChapterLimit = 150;
       renderDetail(detail);
       return;
     }

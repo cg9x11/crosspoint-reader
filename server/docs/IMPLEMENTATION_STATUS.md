@@ -92,7 +92,7 @@ Date: 2026-05-05
 - remote deploy verified on `192.168.1.202` on 2026-05-05:
   - SSH reachable
   - Docker Compose build/start succeeded on Raspberry Pi 4 ARM64
-  - host bind-mount data moved to `/srv/dev../data-docker/crosspoint-reader/runtime`
+  - host bind-mount data moved to `/srv/dev-disk-by-uuid-efa4bb57-8270-4740-be2c-01caa4be7407/docker-data/crosspoint-reader/runtime`
   - HTTP auth/session verified
   - source list/home/search/detail verified for compatible sources
   - demo novel sync/build verified

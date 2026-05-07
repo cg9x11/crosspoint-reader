@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { PrismaClient, Novel } from "@prisma/client";
@@ -111,6 +112,14 @@ export async function deleteLibraryNovel(prisma: PrismaClient, novelId: string) 
   await prisma.chapter.deleteMany({ where: { novelId } });
   await prisma.syncRun.deleteMany({ where: { novelId } });
   await prisma.novel.delete({ where: { id: novelId } });
+}
+
+export async function purgeLibraryNovelArtifacts(storagePaths: StorageLayout, novelId: string) {
+  await Promise.all([
+    fs.rm(path.join(storagePaths.cacheTextDir, novelId), { recursive: true, force: true }),
+    fs.rm(path.join(storagePaths.tempEpubBuildDir, novelId), { recursive: true, force: true }),
+    fs.rm(getPublishedSeriesDir(storagePaths, novelId), { recursive: true, force: true })
+  ]);
 }
 
 export async function updateNovelAggregateState(prisma: PrismaClient, novelId: string) {

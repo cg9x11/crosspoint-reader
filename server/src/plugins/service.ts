@@ -12,6 +12,7 @@ import {
   stableId,
   writeJsonFileAtomic
 } from "../lib/filesystem.js";
+import { resolveSourcePolicy } from "../lib/sourcePolicy.js";
 import { fetchBuffer, fetchJson } from "../lib/http.js";
 import {
   buildVbookStateDir,
@@ -69,30 +70,16 @@ function getPackageDir(storagePaths: StorageLayout, extensionId: string) {
   return path.join(storagePaths.extensionsDir, "packages", sanitizeFileSegment(extensionId));
 }
 
-function parseEnvList(value?: string) {
-  if (!value) {
-    return [];
+function applySourceVisibilityPolicy<T extends { id: string }>(
+  items: T[],
+  policy: {
+    enabledAllowlist: string[];
+    priorityIds: string[];
   }
-
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function getEnabledSourceAllowlist() {
-  const items = parseEnvList(process.env.SOURCE_ENABLED_ALLOWLIST);
-  return items.length > 0 ? new Set(items) : null;
-}
-
-function getSourcePriorityOrder() {
-  return parseEnvList(process.env.SOURCE_PRIORITY_IDS);
-}
-
-function applySourceVisibilityPolicy<T extends { id: string }>(items: T[]) {
-  const allowlist = getEnabledSourceAllowlist();
+) {
+  const allowlist = policy.enabledAllowlist.length > 0 ? new Set(policy.enabledAllowlist) : null;
   const visibleItems = allowlist ? items.filter((item) => allowlist.has(item.id)) : items;
-  const priority = getSourcePriorityOrder();
+  const priority = policy.priorityIds;
 
   if (priority.length === 0) {
     return visibleItems;
@@ -519,13 +506,13 @@ export async function listCatalog(storagePaths: StorageLayout) {
 export async function listInstalledExtensions(storagePaths: StorageLayout, prisma: PrismaClient) {
   const state = await loadState(storagePaths);
   const installed = [bundledExtensionRecord(), ...(await refreshInstalledExtensionState(storagePaths, state))];
-  await syncPluginSources(prisma, installed);
   return installed;
 }
 
 export async function listSources(storagePaths: StorageLayout, prisma: PrismaClient) {
   const installed = await listInstalledExtensions(storagePaths, prisma);
-  return applySourceVisibilityPolicy(installed.filter((item) => item.enabled).map(toSourceListItem));
+  const policy = await resolveSourcePolicy(prisma);
+  return applySourceVisibilityPolicy(installed.filter((item) => item.enabled).map(toSourceListItem), policy);
 }
 
 export async function addRegistry(storagePaths: StorageLayout, input: { name?: string; url: string; trustType?: "community" | "custom" }) {

@@ -3,20 +3,29 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { isHiddenAppSettingKey } from "../../lib/adminAuth.js";
+import { resolveSourcePolicy, updateSourcePolicy } from "../../lib/sourcePolicy.js";
 
 const patchSettingsSchema = z.object({
   settings: z.record(z.string(), z.string())
 });
 
-function parseEnvList(value?: string) {
-  if (!value) {
-    return [];
+const patchSourcePolicySchema = z.object({
+  enabledAllowlist: z.array(z.string().trim().min(1)).optional(),
+  priorityIds: z.array(z.string().trim().min(1)).optional()
+});
+
+function buildRoleMeta(role: "app" | "worker") {
+  if (role === "worker") {
+    return {
+      roleLabel: "Worker đồng bộ",
+      roleDescription: "Xử lý hàng đợi đồng bộ chương và build EPUB nền."
+    };
   }
 
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return {
+    roleLabel: "Web app / OPDS",
+    roleDescription: "Phục vụ giao diện quản trị, API và feed OPDS cho thiết bị đọc."
+  };
 }
 
 export async function registerSettingsApiRoutes(app: FastifyInstance) {
@@ -67,9 +76,22 @@ export async function registerSettingsApiRoutes(app: FastifyInstance) {
     };
   });
 
+  app.get("/api/settings/source-policy", async () => {
+    return resolveSourcePolicy(app.prisma, app.appConfig);
+  });
+
+  app.patch("/api/settings/source-policy", async (request) => {
+    const body = patchSourcePolicySchema.parse(request.body);
+    return updateSourcePolicy(app.prisma, body, app.appConfig);
+  });
+
   app.get("/api/settings/system", async () => {
+    const roleMeta = buildRoleMeta(app.appConfig.APP_ROLE);
+    const sourcePolicy = await resolveSourcePolicy(app.prisma, app.appConfig);
+
     return {
       role: app.appConfig.APP_ROLE,
+      ...roleMeta,
       nodeEnv: app.appConfig.NODE_ENV,
       baseUrl: app.appConfig.APP_BASE_URL,
       redisUrl: app.appConfig.REDIS_URL,
@@ -84,10 +106,7 @@ export async function registerSettingsApiRoutes(app: FastifyInstance) {
         chapterBuild: app.appConfig.QUEUE_CONCURRENCY_CHAPTER_BUILD,
         maintenance: app.appConfig.QUEUE_CONCURRENCY_MAINTENANCE
       },
-      sourcePolicy: {
-        enabledAllowlist: parseEnvList(app.appConfig.SOURCE_ENABLED_ALLOWLIST),
-        priorityIds: parseEnvList(app.appConfig.SOURCE_PRIORITY_IDS)
-      }
+      sourcePolicy
     };
   });
 }

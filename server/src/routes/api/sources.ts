@@ -10,6 +10,15 @@ import {
   listSources
 } from "../../plugins/service.js";
 
+function isRecoverableChapterListError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return message.includes("extension returned no data");
+}
+
 export async function registerSourcesApiRoutes(app: FastifyInstance) {
   app.get("/api/sources", async () => {
     return {
@@ -53,8 +62,28 @@ export async function registerSourcesApiRoutes(app: FastifyInstance) {
       })
       .parse(request.query);
 
-    return {
-      items: await getSourceChapters(app.storagePaths, app.prisma, params.sourceId, query.url)
-    };
+    try {
+      return {
+        items: await getSourceChapters(app.storagePaths, app.prisma, params.sourceId, query.url)
+      };
+    } catch (error) {
+      if (!isRecoverableChapterListError(error)) {
+        throw error;
+      }
+
+      app.log.warn(
+        {
+          err: error,
+          sourceId: params.sourceId,
+          detailUrl: query.url
+        },
+        "Source returned no chapter data for detail request"
+      );
+
+      return {
+        items: [],
+        warning: "Nguồn không trả về danh sách chương cho truyện này. Bạn vẫn có thể mở nguồn khác hoặc thử lại sau."
+      };
+    }
   });
 }

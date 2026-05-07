@@ -5,7 +5,7 @@
 - Raspberry Pi 4 8GB
 - Docker Compose stack
 - current bind mount data path:
-  - `/srv/dev../data-docker/crosspoint-reader/runtime`
+  - `/srv/dev-disk-by-uuid-efa4bb57-8270-4740-be2c-01caa4be7407/docker-data/crosspoint-reader/runtime`
 
 ## Current production shape
 
@@ -44,7 +44,7 @@ sudo -n docker compose ps
 - `APP_BASE_URL=http://<host>:8787`
 - `DATABASE_URL=file:/data/database/library.db`
 - `STORAGE_PATH=/data`
-- `APP_DATA_DIR=/srv/dev../data-docker/crosspoint-reader/runtime`
+- `APP_DATA_DIR=/srv/dev-disk-by-uuid-efa4bb57-8270-4740-be2c-01caa4be7407/docker-data/crosspoint-reader/runtime`
 - `REDIS_URL=redis://redis:6379`
 - `ADMIN_PASSWORD_HASH=sha256:<digest>`
 - `SOURCE_ENABLED_ALLOWLIST=<sourceId1>,<sourceId2>`
@@ -80,8 +80,8 @@ Prefer backup when `app` and `worker` are stopped, or during a quiet window.
 
 ```sh
 cd ~/crosspoint-reader-server
-APP_DATA_DIR=/srv/dev../data-docker/crosspoint-reader/runtime \
-BACKUP_DIR=/srv/dev../data-docker/crosspoint-reader/backups \
+APP_DATA_DIR=/srv/dev-disk-by-uuid-efa4bb57-8270-4740-be2c-01caa4be7407/docker-data/crosspoint-reader/runtime \
+BACKUP_DIR=/srv/dev-disk-by-uuid-efa4bb57-8270-4740-be2c-01caa4be7407/docker-data/crosspoint-reader/backups \
 ./scripts/backup-runtime.sh
 ```
 

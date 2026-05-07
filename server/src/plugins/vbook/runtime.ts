@@ -52,6 +52,14 @@ const SUSPICIOUS_REDIRECT_HOST_PATTERNS = [
   /(?:^|\.)plarclck\.com$/i,
   /(?:^|\.)exmainclcknew\.com$/i
 ];
+const CANONICAL_HOST_OVERRIDES = new Map<string, string>([
+  ["docln.sbs", "ln.hako.vn"],
+  ["www.docln.sbs", "ln.hako.vn"],
+  ["docln.net", "ln.hako.vn"],
+  ["www.docln.net", "ln.hako.vn"],
+  ["ln.hako.re", "ln.hako.vn"],
+  ["www.ln.hako.re", "ln.hako.vn"]
+]);
 
 const SUPPORTED_RESPONSE_TERMINALS = new Set(["text", "html", "json", "base64", "blob"]);
 const SUPPORTED_HTTP_TERMINALS = new Set(["string", "html", "json", "base64", "blob"]);
@@ -132,6 +140,21 @@ function normalizeRelativeScriptPath(scriptName: string) {
   return scriptName.replace(/\\/g, "/").replace(/^\.?\//, "");
 }
 
+function canonicalizeKnownSourceUrl(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    const overrideHost = CANONICAL_HOST_OVERRIDES.get(url.hostname.toLowerCase());
+    if (!overrideHost) {
+      return rawUrl;
+    }
+
+    url.hostname = overrideHost;
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
 function normalizeUrl(rawUrl: string, baseUrl?: string) {
   const url = rawUrl.trim();
 
@@ -140,11 +163,11 @@ function normalizeUrl(rawUrl: string, baseUrl?: string) {
   }
 
   if (/^https?:\/\//i.test(url)) {
-    return url;
+    return canonicalizeKnownSourceUrl(url);
   }
 
   if (url.startsWith("//")) {
-    return `https:${url}`;
+    return canonicalizeKnownSourceUrl(`https:${url}`);
   }
 
   if (!baseUrl) {
@@ -152,7 +175,7 @@ function normalizeUrl(rawUrl: string, baseUrl?: string) {
   }
 
   try {
-    return new URL(url, baseUrl).toString();
+    return canonicalizeKnownSourceUrl(new URL(url, baseUrl).toString());
   } catch {
     return url;
   }
@@ -268,11 +291,11 @@ function isSuspiciousRedirectHost(requestUrl: string, responseUrl: string) {
 function buildSourceBaseUrl(source: Pick<SourceListItem, "sourceUrl">, manifest: VbookManifest | null) {
   const metadataSource = manifest?.metadata?.source;
   if (typeof metadataSource === "string" && metadataSource.trim()) {
-    return metadataSource.trim();
+    return canonicalizeKnownSourceUrl(metadataSource.trim());
   }
 
   if (typeof source.sourceUrl === "string" && source.sourceUrl.trim() && source.sourceUrl !== "builtin://core-demo") {
-    return source.sourceUrl.trim();
+    return canonicalizeKnownSourceUrl(source.sourceUrl.trim());
   }
 
   return "";
@@ -1235,6 +1258,7 @@ class VbookRuntimeSession {
       },
       Html: htmlBridge,
       Blob: VbookBlob,
+      CONFIG_URL: this.baseUrl,
       UserAgent: {
         system: () => "xteinkreader-server/0.1",
         android: () => RUNTIME_MOBILE_USER_AGENT,
@@ -1594,7 +1618,7 @@ export async function createVbookSourceRuntime(options: {
         author: getStringField(record, ["author"]),
         coverUrl: coverUrl ? normalizeUrl(coverUrl, getStringField(record, ["host"]) || sourceBaseUrl) : undefined,
         description,
-        status: normalizeStatus(record.status ?? record.ongoing ?? record.detail),
+        status: normalizeStatus(record.status ?? record.ongoing),
         genres: extractGenreTitles(record.genres),
         sourceUrl
       };

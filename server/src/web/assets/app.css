@@ -452,6 +452,47 @@ ul { list-style: none; }
   overflow-wrap: anywhere;
 }
 
+.novel-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+.novel-card-progress-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.novel-card-sync {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.02);
+}
+
+.novel-card-sync.ready {
+  color: var(--green);
+  border-color: rgba(93,189,138,0.35);
+}
+
+.novel-card-sync.pending {
+  color: var(--accent);
+  border-color: rgba(232,201,122,0.28);
+}
+
+.novel-card-sync.error {
+  color: #d86b6b;
+  border-color: rgba(216,107,107,0.3);
+}
+
 /* Placeholder cover (no image) */
 .cover-placeholder {
   width: 100%; height: 100%;
@@ -1015,6 +1056,30 @@ input:checked + .toggle-track::before {
   white-space: nowrap;
 }
 
+.ch-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ch-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #d86b6b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ch-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 .ch-dl-icon {
   width: 14px; height: 14px;
   color: var(--ink-4);
@@ -1023,6 +1088,86 @@ input:checked + .toggle-track::before {
 .ch-dl-icon svg { width: 100%; height: 100%; }
 .chapter-row.downloaded .ch-dl-icon { color: var(--green); }
 .chapter-row.downloaded .ch-title { color: var(--ink); }
+.chapter-row.failed .ch-dl-icon { color: #d86b6b; }
+
+.chapter-retry-btn,
+.chapter-view-btn,
+.chapter-more-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--ink-2);
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.chapter-retry-btn:hover,
+.chapter-view-btn:hover,
+.chapter-more-btn:hover {
+  border-color: var(--border-md);
+  color: var(--ink);
+}
+
+.chapter-more-btn {
+  width: calc(100% - 16px);
+  margin: 8px;
+  justify-self: center;
+}
+
+.chapter-preview-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chapter-preview-info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.chapter-preview-info .form-hint {
+  margin: 0;
+}
+
+.chapter-preview-content {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg);
+  padding: 16px;
+  max-height: min(56vh, 520px);
+  overflow-y: auto;
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--ink);
+}
+
+.chapter-preview-content img {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.chapter-preview-content a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.chapter-preview-content > :first-child {
+  margin-top: 0;
+}
+
+.chapter-preview-content > :last-child {
+  margin-bottom: 0;
+}
+
+@media (min-width: 560px) {
+  .chapter-preview-info {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 
 /* ════════════════════════════════════════════════════════
    SERVER PAGE
