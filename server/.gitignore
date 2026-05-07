@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+runtime/
+coverage/
+prisma/local-dev/
+.deploy-staging/
+.tmp-browser/
+.tmp-research/
+local-dev/

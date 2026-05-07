@@ -1,0 +1,97 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Novel {
+  id                String    @id @default(uuid())
+  title             String
+  author            String?
+  sourceId          String
+  sourceName        String?
+  sourceUrl         String
+  coverUrl          String?
+  coverLocalPath    String?
+  description       String?
+  status            String    @default("ongoing")
+  syncStatus        String    @default("idle")
+  totalChapters     Int       @default(0)
+  downloadedChapters Int      @default(0)
+  lastCheckedAt     DateTime?
+  lastSyncStartedAt DateTime?
+  lastSyncEndedAt   DateTime?
+  lastError         String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  chapters          Chapter[]
+  syncRuns          SyncRun[]
+
+  @@index([sourceId])
+  @@index([syncStatus])
+}
+
+model Chapter {
+  id           String   @id @default(uuid())
+  novelId      String
+  chapterIndex Int
+  title        String
+  sourceUrl    String
+  status       String   @default("pending")
+  epubPath     String?
+  fileSize     Int?
+  checksum     String?
+  retryCount   Int      @default(0)
+  publishedAt  DateTime?
+  lastError    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  novel        Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([novelId, chapterIndex])
+  @@index([novelId, status])
+}
+
+model SyncRun {
+  id           String   @id @default(uuid())
+  novelId      String
+  triggerType  String
+  status       String   @default("queued")
+  totalFound   Int      @default(0)
+  newChapters  Int      @default(0)
+  errorMessage String?
+  startedAt    DateTime?
+  endedAt      DateTime?
+  createdAt    DateTime @default(now())
+  novel        Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, status])
+}
+
+model PluginSource {
+  id                    String   @id
+  name                  String
+  enabled               Boolean  @default(true)
+  version               String?
+  trustType             String   @default("community")
+  supportsHome          Boolean  @default(false)
+  supportsSearch        Boolean  @default(true)
+  supportsGenre         Boolean  @default(false)
+  supportsPagination    Boolean  @default(false)
+  supportsDetailDescription Boolean @default(false)
+  supportsBrowserAutomation Boolean @default(false)
+  timeoutMs             Int      @default(30000)
+  lastCheckedAt         DateTime?
+  lastError             String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
