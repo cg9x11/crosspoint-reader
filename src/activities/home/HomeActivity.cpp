@@ -20,6 +20,17 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+namespace {
+bool containsNonAscii(const std::string& text) {
+  for (unsigned char ch : text) {
+    if (ch >= 0x80) {
+      return true;
+    }
+  }
+  return false;
+}
+}
+
 bool HomeActivity::hasStandaloneContinueReadingTile() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   return !metrics.homeContinueReadingInMenu && !recentBooks.empty();
@@ -54,6 +65,11 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
     // Limit to maximum number of recent books
     if (recentBooks.size() >= maxBooks) {
       break;
+    }
+
+    if (containsNonAscii(book.path) || containsNonAscii(book.coverBmpPath)) {
+      LOG_ERR("HOME", "Skipping recent item with unsafe path: %s", book.path.c_str());
+      continue;
     }
 
     // Skip if file no longer exists

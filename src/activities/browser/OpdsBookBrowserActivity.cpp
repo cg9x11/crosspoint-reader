@@ -19,6 +19,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
+#include "SeriesManifest.h"
 #include "util/ScreenDebugRecorder.h"
 #include "util/StringUtils.h"
 #include "util/UrlUtils.h"
@@ -84,7 +85,7 @@ int parseChapterIndexFromFilename(const std::string& filename) {
   return atoi(filename.substr(3, filename.size() - 8).c_str());
 }
 
-std::string chooseSeriesDirectoryName(const std::string& feedTitle, const OpdsEntry& entry) {
+std::string chooseLegacySeriesDirectoryName(const std::string& feedTitle, const OpdsEntry& entry) {
   if (!feedTitle.empty()) {
     return "/" + StringUtils::sanitizeFilename(feedTitle);
   }
@@ -94,10 +95,77 @@ std::string chooseSeriesDirectoryName(const std::string& feedTitle, const OpdsEn
   return "/series";
 }
 
+std::string chooseSeriesDirectoryName(const std::string& stableKey, const std::string& feedTitle, const OpdsEntry& entry) {
+  if (!stableKey.empty()) {
+    return "/series_" + std::to_string(std::hash<std::string>{}(stableKey));
+  }
+  return chooseLegacySeriesDirectoryName(feedTitle, entry);
+}
+
 std::string buildPreviewCachePath(const OpdsEntry& entry) {
   const std::string cacheKey = !entry.id.empty() ? entry.id : entry.href;
   const size_t hash = std::hash<std::string>{}(cacheKey);
   return "/.crosspoint/opds/" + std::to_string(hash) + ".bmp";
+}
+
+std::string findSeriesDirectoryBySeriesId(const std::string& seriesId) {
+  if (seriesId.empty()) {
+    return "";
+  }
+
+  auto root = Storage.open("/");
+  if (!root || !root.isDirectory()) {
+    return "";
+  }
+
+  root.rewindDirectory();
+  char name[500];
+  for (auto dir = root.openNextFile(); dir; dir = root.openNextFile()) {
+    if (!dir.isDirectory()) {
+      continue;
+    }
+
+    dir.getName(name, sizeof(name));
+    if (name[0] == '.') {
+      continue;
+    }
+
+    SeriesManifest manifest;
+    const std::string seriesDir = "/" + std::string(name);
+    if (!SeriesManifestStore::loadFromSeriesDir(seriesDir, manifest)) {
+      continue;
+    }
+    if (manifest.seriesId == seriesId) {
+      return seriesDir;
+    }
+  }
+
+  return "";
+}
+
+std::string resolveExistingSeriesDirectoryName(const std::string& stableKey, const std::string& feedTitle,
+                                               const OpdsEntry& entry) {
+  const std::string preferredDir = chooseSeriesDirectoryName(stableKey, feedTitle, entry);
+  if (Storage.exists(preferredDir.c_str())) {
+    return preferredDir;
+  }
+
+  const std::string legacyFeedDir = chooseLegacySeriesDirectoryName(feedTitle, entry);
+  if (legacyFeedDir != preferredDir && Storage.exists(legacyFeedDir.c_str())) {
+    return legacyFeedDir;
+  }
+
+  const std::string legacyEntryDir = chooseLegacySeriesDirectoryName("", entry);
+  if (legacyEntryDir != preferredDir && legacyEntryDir != legacyFeedDir && Storage.exists(legacyEntryDir.c_str())) {
+    return legacyEntryDir;
+  }
+
+  const std::string manifestMatchedDir = findSeriesDirectoryBySeriesId(stableKey);
+  if (!manifestMatchedDir.empty()) {
+    return manifestMatchedDir;
+  }
+
+  return preferredDir;
 }
 
 std::string normalizePreviewText(const std::string& input) {
@@ -551,7 +619,6 @@ void OpdsBookBrowserActivity::updatePreviewForSelection() {
     return;
   }
 
-  const std::string seriesDir = chooseSeriesDirectoryName("", entry);
   const std::string seriesFeedUrl = UrlUtils::buildUrl(UrlUtils::buildUrl(server.url, currentPath), entry.href);
   const std::string cacheKey = !entry.id.empty() ? entry.id : seriesFeedUrl;
   auto cacheIt = seriesStatusCache.find(cacheKey);
@@ -583,6 +650,7 @@ void OpdsBookBrowserActivity::updatePreviewForSelection() {
   if (!seriesFeedTitle.empty()) {
     currentPreview.title = seriesFeedTitle;
   }
+  const std::string seriesDir = resolveExistingSeriesDirectoryName(seriesFeedUrl, seriesFeedTitle, entry);
   currentPreview.status = buildSeriesPreviewStatus(countExistingSeriesChapters(seriesDir, seriesEntries), serverChapterCount);
   seriesStatusCache[cacheKey] = SeriesStatusSnapshot{currentPreview.title, currentPreview.status};
 }
@@ -698,7 +766,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   std::string localSeriesDir;
 
   if (looksLikeSeriesChapter) {
-    localSeriesDir = chooseSeriesDirectoryName(currentFeedTitle, book);
+    localSeriesDir = resolveExistingSeriesDirectoryName(feedUrl, currentFeedTitle, book);
     Storage.ensureDirectoryExists(localSeriesDir.c_str());
     filename = localSeriesDir + "/" + remoteFilename;
   } else {
@@ -761,11 +829,12 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
     return;
   }
 
-  const std::string localSeriesDir = chooseSeriesDirectoryName(seriesFeedTitle, entry);
+  const std::string localSeriesDir = resolveExistingSeriesDirectoryName(seriesFeedUrl, seriesFeedTitle, entry);
   Storage.ensureDirectoryExists(localSeriesDir.c_str());
 
   const bool hasStoryCover = !entry.imageHref.empty();
   downloadProgress = 0;
+  size_t serverChapterCount = 0;
 
   std::string firstDownloadUrl;
   std::vector<std::pair<OpdsEntry, std::string>> pendingChapters;
@@ -777,6 +846,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
     if (!isSeriesChapterFilename(remoteFilename)) {
       continue;
     }
+    ++serverChapterCount;
 
     if (firstDownloadUrl.empty()) {
       firstDownloadUrl = chapterUrl;
@@ -837,6 +907,11 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   }
   downloadProgress = downloadTotal;
   state = BrowserState::BROWSING;
+  const std::string cacheKey = !entry.id.empty() ? entry.id : seriesFeedUrl;
+  seriesStatusCache[cacheKey] =
+      SeriesStatusSnapshot{seriesFeedTitle.empty() ? entry.title : seriesFeedTitle,
+                           buildSeriesPreviewStatus(serverChapterCount, serverChapterCount)};
+  updatePreviewForSelection();
   requestUpdate();
 }
 

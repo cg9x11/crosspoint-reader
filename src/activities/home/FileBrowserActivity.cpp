@@ -27,6 +27,18 @@ constexpr int PREVIEW_COVER_HEIGHT = 120;
 constexpr const char* NO_DESCRIPTION_TEXT = "No description";
 constexpr const char* CURRENT_READING_TEXT = "Current";
 
+bool containsNonAscii(const char* text) {
+  if (!text) {
+    return false;
+  }
+  for (const unsigned char* p = reinterpret_cast<const unsigned char*>(text); *p != 0; ++p) {
+    if (*p >= 0x80) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::string normalizePreviewText(const std::string& input) {
   std::string output;
   output.reserve(input.size());
@@ -74,6 +86,52 @@ std::string joinPath(std::string base, const std::string& child) {
   return base + child;
 }
 
+bool looksLikeSeriesDirectory(FsFile& dir) {
+  if (!dir || !dir.isDirectory()) {
+    return false;
+  }
+
+  dir.rewindDirectory();
+  char childName[256];
+  bool hasManifest = false;
+  bool hasSeriesChapter = false;
+  for (auto child = dir.openNextFile(); child; child = dir.openNextFile()) {
+    child.getName(childName, sizeof(childName));
+    if (!hasManifest && strcmp(childName, "_series.json") == 0) {
+      hasManifest = true;
+    }
+    if (!hasSeriesChapter) {
+      std::string_view filename{childName};
+      hasSeriesChapter = filename.size() > 8 && filename.rfind("ch_", 0) == 0 &&
+                         filename.substr(filename.size() - 5) == ".epub";
+    }
+    if (hasManifest || hasSeriesChapter) {
+      dir.rewindDirectory();
+      return true;
+    }
+  }
+
+  dir.rewindDirectory();
+  return false;
+}
+
+std::string migrateUnicodeSeriesDirectoryName(const std::string& basepath, const std::string& directoryName, FsFile& dir) {
+  if (!containsNonAscii(directoryName.c_str()) || !looksLikeSeriesDirectory(dir)) {
+    return directoryName;
+  }
+
+  const std::string oldPath = joinPath(basepath, directoryName);
+  const std::string newDirName = "series_" + std::to_string(std::hash<std::string>{}(directoryName));
+  const std::string newPath = joinPath(basepath, newDirName);
+  if (Storage.exists(newPath.c_str()) || !Storage.rename(oldPath.c_str(), newPath.c_str())) {
+    LOG_ERR("FBA", "Failed to migrate unicode series dir: %s", oldPath.c_str());
+    return directoryName;
+  }
+
+  LOG_DBG("FBA", "Migrated unicode series dir: %s -> %s", oldPath.c_str(), newPath.c_str());
+  return newDirName;
+}
+
 std::string getDirectoryTitle(std::string directoryName) {
   if (!directoryName.empty() && directoryName.back() == '/') {
     directoryName.pop_back();
@@ -95,6 +153,10 @@ std::string getFileExtension(const std::string& filename) {
 }
 
 bool compareFileBrowserNames(const std::string& str1, const std::string& str2) {
+  if (str1.empty() || str2.empty()) {
+    return str1 < str2;
+  }
+
   // Directories first
   bool isDir1 = str1.back() == '/';
   bool isDir2 = str2.back() == '/';
@@ -106,15 +168,18 @@ bool compareFileBrowserNames(const std::string& str1, const std::string& str2) {
 
   // Iterate while both strings have characters
   while (*s1 && *s2) {
+    const unsigned char uc1 = static_cast<unsigned char>(*s1);
+    const unsigned char uc2 = static_cast<unsigned char>(*s2);
+
     // Check if both are at the start of a number
-    if (isdigit(*s1) && isdigit(*s2)) {
+    if (isdigit(uc1) && isdigit(uc2)) {
       while (*s1 == '0') s1++;
       while (*s2 == '0') s2++;
 
       int len1 = 0;
       int len2 = 0;
-      while (isdigit(s1[len1])) len1++;
-      while (isdigit(s2[len2])) len2++;
+      while (isdigit(static_cast<unsigned char>(s1[len1]))) len1++;
+      while (isdigit(static_cast<unsigned char>(s2[len2]))) len2++;
 
       if (len1 != len2) return len1 < len2;
 
@@ -125,8 +190,8 @@ bool compareFileBrowserNames(const std::string& str1, const std::string& str2) {
       s1 += len1;
       s2 += len2;
     } else {
-      char c1 = tolower(*s1);
-      char c2 = tolower(*s2);
+      const unsigned char c1 = static_cast<unsigned char>(tolower(uc1));
+      const unsigned char c2 = static_cast<unsigned char>(tolower(uc2));
       if (c1 != c2) return c1 < c2;
       s1++;
       s2++;
@@ -359,13 +424,14 @@ void FileBrowserActivity::loadFiles() {
     }
 
     if (file.isDirectory()) {
+      const std::string normalizedDirectoryName = migrateUnicodeSeriesDirectoryName(basepath, name, file);
       FileBrowserEntry entry;
-      if (tryBuildSeriesEntry(name, entry)) {
+      if (tryBuildSeriesEntry(normalizedDirectoryName, entry)) {
         files.push_back(std::move(entry));
         continue;
       }
 
-      entry.rawName = std::string(name) + "/";
+      entry.rawName = normalizedDirectoryName + "/";
       entry.title = getDirectoryTitle(entry.rawName);
       entry.kind = EntryKind::Directory;
       files.push_back(std::move(entry));
