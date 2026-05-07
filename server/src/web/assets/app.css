@@ -1391,6 +1391,14 @@ input:checked + .toggle-track::before {
 }
 .btn-primary:hover { background: #f0d48a; }
 .btn-primary:active { transform: scale(0.98); }
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-ghost:disabled,
+.source-browse-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 .btn-secondary {
   padding: 11px 20px;

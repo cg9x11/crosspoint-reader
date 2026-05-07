@@ -15,6 +15,7 @@ import {
 } from "../../library/service.js";
 import { fileExists, formatChapterFilename } from "../../lib/filesystem.js";
 import { getSourceDetail } from "../../plugins/service.js";
+import { isVbookUpstreamBlockedError } from "../../plugins/vbook/runtime.js";
 import {
   removeNovelQueueJobs,
   retryChapterPipeline,
@@ -43,9 +44,25 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post("/api/library/novels", async (request) => {
+  app.post("/api/library/novels", async (request, reply) => {
     const body = createLibraryNovelSchema.parse(request.body);
-    const detail = await getSourceDetail(app.storagePaths, app.prisma, body.sourceId, body.detailUrl);
+    let detail;
+    try {
+      detail = await getSourceDetail(app.storagePaths, app.prisma, body.sourceId, body.detailUrl);
+    } catch (error) {
+      if (!isVbookUpstreamBlockedError(error)) {
+        throw error;
+      }
+
+      reply.code(409);
+      return {
+        ok: false,
+        error: "SOURCE_UPSTREAM_BLOCKED",
+        message:
+          "Nguồn đang chặn truy cập chi tiết truyện từ server, nên hiện chưa thể thêm trực tiếp vào thư viện. Hãy thử lại sau."
+      };
+    }
+
     const novel = await upsertNovelFromSourceDetail(app.prisma, body.sourceId, detail);
 
     if (body.syncNow) {

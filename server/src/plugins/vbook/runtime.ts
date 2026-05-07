@@ -9,6 +9,7 @@ import { unzipSync } from "fflate";
 import { parse } from "acorn";
 import { fullAncestor } from "acorn-walk";
 import MagicString from "magic-string";
+import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Route } from "playwright-core";
 
 import { fetchBuffer, fetchWithTimeout } from "../../lib/http.js";
 import {
@@ -47,19 +48,31 @@ const DEFAULT_ACCEPT_HEADER =
 const DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.8";
 const DEFAULT_ACCEPT_LANGUAGE_VI = "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7";
 const DEFAULT_ACCEPT_LANGUAGE_ZH = "zh-CN,zh;q=0.9,en;q=0.8";
+const BROWSER_FALLBACK_TIMEOUT_MS = 20000;
 const SUSPICIOUS_REDIRECT_HOST_PATTERNS = [
   /(?:^|\.)explorads\.com$/i,
   /(?:^|\.)plarclck\.com$/i,
   /(?:^|\.)exmainclcknew\.com$/i
 ];
 const CANONICAL_HOST_OVERRIDES = new Map<string, string>([
-  ["docln.sbs", "ln.hako.vn"],
-  ["www.docln.sbs", "ln.hako.vn"],
-  ["docln.net", "ln.hako.vn"],
-  ["www.docln.net", "ln.hako.vn"],
-  ["ln.hako.re", "ln.hako.vn"],
-  ["www.ln.hako.re", "ln.hako.vn"]
+  ["www.docln.sbs", "docln.sbs"],
+  ["docln.net", "docln.sbs"],
+  ["www.docln.net", "docln.sbs"],
+  ["docln.top", "docln.sbs"],
+  ["www.docln.top", "docln.sbs"],
+  ["ln.hako.vn", "docln.sbs"],
+  ["www.ln.hako.vn", "docln.sbs"],
+  ["ln.hako.re", "docln.sbs"],
+  ["www.ln.hako.re", "docln.sbs"]
 ]);
+const NO_WWW_FALLBACK_HOSTS = new Set(["ln.hako.vn", "docln.sbs", "docln.net", "docln.top"]);
+const BROWSER_FALLBACK_HOSTS = new Set(["ln.hako.vn", "docln.sbs", "docln.net", "docln.top"]);
+const CHROMIUM_EXECUTABLE_CANDIDATES = [
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable"
+];
 
 const SUPPORTED_RESPONSE_TERMINALS = new Set(["text", "html", "json", "base64", "blob"]);
 const SUPPORTED_HTTP_TERMINALS = new Set(["string", "html", "json", "base64", "blob"]);
@@ -78,6 +91,25 @@ const EMPTY_CAPABILITIES: SourceCapabilities = {
   supportsDetailDescription: false,
   supportsBrowserAutomation: false
 };
+
+let sharedBrowserPromise: Promise<Browser> | null = null;
+
+export class VbookUpstreamBlockedError extends Error {
+  readonly code = "SOURCE_UPSTREAM_BLOCKED";
+
+  constructor(
+    readonly requestUrl: string,
+    readonly statusCode: number,
+    readonly sourceHost: string
+  ) {
+    super(`Upstream blocked automated access for ${requestUrl}`);
+    this.name = "VbookUpstreamBlockedError";
+  }
+}
+
+export function isVbookUpstreamBlockedError(error: unknown): error is VbookUpstreamBlockedError {
+  return error instanceof VbookUpstreamBlockedError;
+}
 
 interface VbookManifest {
   metadata?: Record<string, unknown>;
@@ -240,9 +272,124 @@ function getAlternateHosts(rawUrl: string) {
     if (url.hostname.startsWith("www.")) {
       return [url.hostname.slice(4)];
     }
+    if (NO_WWW_FALLBACK_HOSTS.has(url.hostname)) {
+      return [];
+    }
     return [`www.${url.hostname}`];
   } catch {
     return [];
+  }
+}
+
+function resolveChromiumExecutablePath() {
+  const overridePath = process.env.CHROMIUM_EXECUTABLE_PATH?.trim();
+  if (overridePath) {
+    return overridePath;
+  }
+
+  for (const candidate of CHROMIUM_EXECUTABLE_CANDIDATES) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+async function getSharedBrowser() {
+  if (!sharedBrowserPromise) {
+    sharedBrowserPromise = (async () => {
+      const executablePath = resolveChromiumExecutablePath();
+      if (!executablePath) {
+        throw new Error("Chromium executable not found for browser fallback");
+      }
+
+      const browser = await chromium.launch({
+        executablePath,
+        headless: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+      });
+
+      browser.on("disconnected", () => {
+        sharedBrowserPromise = null;
+      });
+
+      return browser;
+    })().catch((error) => {
+      sharedBrowserPromise = null;
+      throw error;
+    });
+  }
+
+  return sharedBrowserPromise;
+}
+
+function toBrowserContextOptions(headers: Headers): BrowserContextOptions {
+  const locale = headers.get("accept-language")?.split(",")[0]?.split(";")[0]?.trim() || "en-US";
+  const extraHTTPHeaders: Record<string, string> = {};
+
+  headers.forEach((value, key) => {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey === "host" || lowerKey === "content-length" || lowerKey === "connection") {
+      return;
+    }
+    extraHTTPHeaders[lowerKey] = value;
+  });
+
+  return {
+    locale,
+    userAgent: headers.get("user-agent") ?? RUNTIME_DESKTOP_USER_AGENT,
+    extraHTTPHeaders,
+    ignoreHTTPSErrors: true
+  };
+}
+
+function isBrowserFallbackHost(rawUrl: string) {
+  try {
+    return BROWSER_FALLBACK_HOSTS.has(new URL(rawUrl).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function isChallengeErrorPage(bodyText: string) {
+  return (
+    bodyText.includes("challenge-platform/scripts/jsd/main.js") &&
+    bodyText.includes('main id="mainpart" class="error-page"') &&
+    bodyText.includes('class="error-name">404')
+  );
+}
+
+function hasChallengePlatform(bodyText: string) {
+  return bodyText.includes("challenge-platform/scripts/jsd/main.js");
+}
+
+function looksLikeResolvedHakoHtml(bodyText: string) {
+  return (
+    bodyText.includes("series-name") ||
+    bodyText.includes("volume-list") ||
+    bodyText.includes('id="chapter-content"') ||
+    bodyText.includes("thumb-item-flow")
+  );
+}
+
+function isChallengeBlockedHtml(requestUrl: string, contentType: string, bodyText: string) {
+  if (!isBrowserFallbackHost(requestUrl) || !/html/i.test(contentType)) {
+    return false;
+  }
+
+  if (isChallengeErrorPage(bodyText)) {
+    return true;
+  }
+
+  return hasChallengePlatform(bodyText) && !looksLikeResolvedHakoHtml(bodyText);
+}
+
+function getSourceHost(rawUrl: string) {
+  try {
+    return new URL(rawUrl).hostname.toLowerCase();
+  } catch {
+    return "";
   }
 }
 
@@ -1141,6 +1288,118 @@ class VbookRuntimeSession {
     return response;
   }
 
+  private async fetchWithBrowserFallback(
+    requestUrl: string,
+    headers: Headers,
+    timeoutMs: number,
+    initialResponse: {
+      status: number;
+      statusText: string;
+      url: string;
+      headers: Record<string, string>;
+      body: Buffer;
+    }
+  ) {
+    const contentType = initialResponse.headers["content-type"] ?? "";
+    if (
+      !isBrowserFallbackHost(requestUrl) ||
+      !/html/i.test(contentType)
+    ) {
+      return null;
+    }
+
+    const initialHtml = decodeBuffer(initialResponse.body);
+    if (!isChallengeErrorPage(initialHtml) && !(hasChallengePlatform(initialHtml) && !looksLikeResolvedHakoHtml(initialHtml))) {
+      return null;
+    }
+
+    let context: BrowserContext | null = null;
+
+    try {
+      const browser = await getSharedBrowser();
+      context = await browser.newContext(toBrowserContextOptions(headers));
+      const budgetMs = Math.max(timeoutMs, BROWSER_FALLBACK_TIMEOUT_MS);
+      const page = await context.newPage();
+      await page.route("**/*", (route: Route) => {
+        const resourceType = route.request().resourceType();
+        if (resourceType === "image" || resourceType === "media" || resourceType === "font") {
+          return route.abort();
+        }
+        return route.continue();
+      });
+
+      const gotoAndWait = async (targetUrl: string) => {
+        const mainResponse = await page.goto(targetUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: budgetMs
+        });
+
+        try {
+          await page.waitForTimeout(1500);
+          await page.waitForFunction(
+            `() => Boolean(
+              document.querySelector(".series-name, .volume-list, #chapter-content, .thumb-item-flow")
+            ) || !document.querySelector('script[src*="challenge-platform"], iframe[src*="challenge-platform"]')`,
+            { timeout: Math.min(budgetMs, 12000) }
+          );
+        } catch {
+          // Fall through and inspect the current DOM snapshot.
+        }
+
+        try {
+          await page.waitForLoadState("networkidle", { timeout: 5000 });
+        } catch {
+          // Some challenge flows keep background requests open.
+        }
+
+        return mainResponse;
+      };
+
+      let mainResponse = await gotoAndWait(requestUrl);
+      let html = await page.content();
+
+      if (!looksLikeResolvedHakoHtml(html) && isChallengeErrorPage(html)) {
+        mainResponse = await page.reload({
+          waitUntil: "domcontentloaded",
+          timeout: budgetMs
+        });
+        try {
+          await page.waitForLoadState("networkidle", { timeout: 5000 });
+        } catch {
+          // Some challenge flows keep background requests open.
+        }
+        html = await page.content();
+      }
+
+      if (!looksLikeResolvedHakoHtml(html)) {
+        return null;
+      }
+
+      const finalUrl = page.url();
+      const browserHeaders: Record<string, string> = mainResponse ? await mainResponse.allHeaders() : {};
+      const status = mainResponse?.status() ?? 200;
+      return new VbookHttpResponse(Buffer.from(html), {
+        ok: true,
+        status: status >= 200 && status < 400 ? status : 200,
+        statusText: mainResponse?.statusText() ?? "OK",
+        url: finalUrl,
+        headers: {
+          ...browserHeaders,
+          "content-type": browserHeaders["content-type"] ?? "text/html; charset=utf-8"
+        },
+        request: {
+          url: requestUrl,
+          headers: Object.fromEntries(headers.entries())
+        },
+        contentType: browserHeaders["content-type"] ?? "text/html; charset=utf-8"
+      });
+    } catch {
+      return null;
+    } finally {
+      await context?.close().catch(() => undefined);
+    }
+  }
+
   async fetch(rawUrl: string, options?: FetchLikeOptions) {
     const requestUrl = this.buildRequestUrl(rawUrl, options?.queries);
     const method = options?.method ?? "GET";
@@ -1211,6 +1470,28 @@ class VbookRuntimeSession {
           body,
           timeoutMs
         );
+        const responseHeaders = buildHeadersRecord(response.headers);
+        const responseBody = Buffer.from(await response.arrayBuffer());
+        const browserFallbackResponse = await this.fetchWithBrowserFallback(attempt.url, attempt.headers, timeoutMs, {
+          status: response.status,
+          statusText: response.statusText,
+          url: response.url,
+          headers: responseHeaders,
+          body: responseBody
+        });
+        if (browserFallbackResponse) {
+          return browserFallbackResponse;
+        }
+
+        const contentType = responseHeaders["content-type"] ?? "";
+        const responseText = /html/i.test(contentType) ? decodeBuffer(responseBody) : "";
+        if (isChallengeBlockedHtml(attempt.url, contentType, responseText)) {
+          lastError = new VbookUpstreamBlockedError(attempt.url, response.status, getSourceHost(attempt.url));
+          addFallbackAttempts(attempt.url, "challenge", response.status >= 500);
+          if (attempts.length > 0) {
+            continue;
+          }
+        }
 
         if (isSuspiciousRedirectHost(attempt.url, response.url)) {
           lastError = new Error(`unexpected redirect from ${attempt.url} to ${response.url}`);
@@ -1226,17 +1507,17 @@ class VbookRuntimeSession {
           }
         }
 
-        return new VbookHttpResponse(Buffer.from(await response.arrayBuffer()), {
+        return new VbookHttpResponse(responseBody, {
           ok: response.ok,
           status: response.status,
           statusText: response.statusText,
           url: response.url,
-          headers: buildHeadersRecord(response.headers),
+          headers: responseHeaders,
           request: {
             url: attempt.url,
             headers: Object.fromEntries(attempt.headers.entries())
           },
-          contentType: response.headers.get("content-type") ?? undefined
+          contentType: responseHeaders["content-type"] ?? undefined
         });
       } catch (error) {
         lastError = error;
@@ -1575,6 +1856,31 @@ export async function createVbookSourceRuntime(options: {
           .map((item) => normalizeHomeItem(options.source.id, sourceBaseUrl, item))
           .filter((item): item is SourceHomeItem => Boolean(item))
       : [];
+  const isHakoSource =
+    options.source.id.toLowerCase().includes("hako") || /(?:^|\/\/)docln\.sbs(?:\/|$)/i.test(sourceBaseUrl);
+  const buildUpstreamBlockedError = (requestUrl: string) =>
+    new VbookUpstreamBlockedError(
+      normalizeUrl(requestUrl, sourceBaseUrl),
+      503,
+      getSourceHost(normalizeUrl(requestUrl, sourceBaseUrl))
+    );
+  const isSuspiciousDetailPayload = (record: Record<string, unknown>, detailUrl: string) => {
+    if (!isHakoSource) {
+      return false;
+    }
+
+    const title = getStringField(record, ["title", "name"]) ?? "";
+    const description = getStringField(record, ["description", "detail"]) ?? "";
+    const cover = getStringField(record, ["coverUrl", "cover", "image"]) ?? "";
+    const genres = extractGenreTitles(record.genres);
+
+    return (
+      (!title || normalizeUrl(title, sourceBaseUrl) === normalizeUrl(detailUrl, sourceBaseUrl)) &&
+      !description.trim() &&
+      !cover.trim() &&
+      genres.length === 0
+    );
+  };
 
   return {
     async home(): Promise<SourceHomePayload> {
@@ -1649,8 +1955,20 @@ export async function createVbookSourceRuntime(options: {
     },
 
     async search(query: string, page?: string): Promise<SourceSearchPayload> {
-      const runtimeSearchResult = await executeNamedScriptResult("search", [query, page ?? "1"]);
+      let runtimeSearchResult: RuntimeScriptResult;
+      try {
+        runtimeSearchResult = await executeNamedScriptResult("search", [query, page ?? "1"]);
+      } catch (error) {
+        if (error instanceof Error && error.message === "Extension returned no data") {
+          runtimeSearchResult = { data: [], meta: null };
+        } else {
+          throw error;
+        }
+      }
       const items = mapHomeItems(runtimeSearchResult.data);
+      if (isHakoSource && query.trim() && items.length === 0) {
+        throw buildUpstreamBlockedError(`/tim-kiem?keywords=${encodeURIComponent(query.trim())}`);
+      }
       const currentPage = page ?? "1";
       const nextPage =
         coerceNextPageToken(runtimeSearchResult.meta) ??
@@ -1676,6 +1994,9 @@ export async function createVbookSourceRuntime(options: {
       }
 
       const record = rawDetail as Record<string, unknown>;
+      if (isSuspiciousDetailPayload(record, detailUrl)) {
+        throw buildUpstreamBlockedError(detailUrl);
+      }
       const sourceUrl = normalizeUrl(detailUrl, getStringField(record, ["host"]) || sourceBaseUrl);
       const title = getStringField(record, ["title", "name"]) ?? sourceUrl;
       const coverUrl = getStringField(record, ["coverUrl", "cover", "image"]);
@@ -1727,7 +2048,15 @@ export async function createVbookSourceRuntime(options: {
       const dedupe = new Map<string, SourceChapterPayload>();
 
       for (const input of pageInputs) {
-        const rawTocData = await executeNamedScript("toc", [input]);
+        let rawTocData: unknown;
+        try {
+          rawTocData = await executeNamedScript("toc", [input]);
+        } catch (error) {
+          if (isHakoSource && error instanceof Error && error.message === "Extension returned no data") {
+            continue;
+          }
+          throw error;
+        }
         if (!Array.isArray(rawTocData)) {
           continue;
         }
@@ -1754,6 +2083,10 @@ export async function createVbookSourceRuntime(options: {
         }
       }
 
+      if (isHakoSource && dedupe.size === 0) {
+        throw buildUpstreamBlockedError(detailUrl);
+      }
+
       return Array.from(dedupe.values()).map((chapter, index) => ({
         ...chapter,
         chapterIndex: index + 1
@@ -1764,6 +2097,9 @@ export async function createVbookSourceRuntime(options: {
       const rawChapterData = await executeNamedScript("chap", [chapterUrl]);
 
       if (typeof rawChapterData === "string") {
+        if (isHakoSource && rawChapterData.replace(/<[^>]+>/g, "").trim().length < 40) {
+          throw buildUpstreamBlockedError(chapterUrl);
+        }
         return {
           title: path.basename(new URL(chapterUrl).pathname) || "Chapter",
           html: rawChapterData
@@ -1775,9 +2111,13 @@ export async function createVbookSourceRuntime(options: {
       }
 
       const record = rawChapterData as Record<string, unknown>;
+      const html = getStringField(record, ["html", "content", "description"]) ?? "";
+      if (isHakoSource && html.replace(/<[^>]+>/g, "").trim().length < 40) {
+        throw buildUpstreamBlockedError(chapterUrl);
+      }
       return {
         title: getStringField(record, ["title", "name"]) ?? "Chapter",
-        html: getStringField(record, ["html", "content", "description"]) ?? ""
+        html
       };
     }
   };

@@ -4,7 +4,6 @@ import path from "node:path";
 import type { PrismaClient } from "@prisma/client";
 
 import type { StorageLayout } from "../storage/paths.js";
-import { coreDemoRuntime, coreDemoSource } from "./core/demoCatalog.js";
 import {
   fileExists,
   readJsonFile,
@@ -52,6 +51,10 @@ interface SourcePayloadCacheEntry<T> {
 }
 
 const sourcePayloadCache = new Map<string, SourcePayloadCacheEntry<unknown>>();
+const SYSTEM_SOURCE_IDS = new Set([
+  "ext:vbook-extensions-hako-novel-https-docln-sbs-b2fef1a6",
+  "ext:vbook-extensions-truyen-full-https-truyenfull-vi-556a351d"
+]);
 
 const EMPTY_CAPABILITIES: SourceCapabilities = {
   supportsHome: false,
@@ -323,37 +326,25 @@ async function withSourcePayloadCache<T>(key: string, ttlMs: number, loader: () 
   }
 }
 
-function bundledExtensionRecord(): InstalledExtensionRecord {
+function isSystemSourceId(sourceId: string) {
+  return SYSTEM_SOURCE_IDS.has(sourceId);
+}
+
+function normalizeInstalledExtensionRecord(extension: InstalledExtensionRecord): InstalledExtensionRecord {
+  if (!isSystemSourceId(extension.id)) {
+    return {
+      ...extension,
+      systemSource: Boolean(extension.systemSource)
+    };
+  }
+
   return {
-    id: coreDemoSource.id,
-    name: coreDemoSource.name,
-    author: coreDemoSource.author,
-    version: coreDemoSource.version,
-    sourceUrl: coreDemoSource.sourceUrl,
-    iconUrl: coreDemoSource.iconUrl,
-    description: coreDemoSource.description,
-    type: coreDemoSource.type,
-    locale: coreDemoSource.locale,
+    ...extension,
     trustType: "core",
-    registryId: "bundled",
-    registryName: "Bundled",
-    installUrl: undefined,
-    manifestUrl: undefined,
-    runtimeKind: "builtin",
-    runtimeSupported: true,
-    capabilities: {
-      supportsHome: coreDemoSource.supportsHome,
-      supportsSearch: coreDemoSource.supportsSearch,
-      supportsGenre: coreDemoSource.supportsGenre,
-      supportsPagination: coreDemoSource.supportsPagination,
-      supportsDetailDescription: coreDemoSource.supportsDetailDescription,
-      supportsBrowserAutomation: coreDemoSource.supportsBrowserAutomation
-    },
-    enabled: true,
-    installedAt: "bundled",
-    updatedAt: "bundled",
-    bundled: true,
-    lastError: null
+    registryId: "system",
+    registryName: "System",
+    bundled: false,
+    systemSource: true
   };
 }
 
@@ -363,6 +354,7 @@ function toSourceListItem(extension: InstalledExtensionRecord): SourceListItem {
     name: extension.name,
     trustType: extension.trustType,
     version: extension.version,
+    systemSource: extension.systemSource,
     enabled: extension.enabled,
     runtimeKind: extension.runtimeKind,
     runtimeSupported: extension.runtimeSupported,
@@ -459,11 +451,17 @@ async function refreshInstalledExtensionState(storagePaths: StorageLayout, state
   let changed = false;
   const installed = await Promise.all(
     state.installed.map(async (extension) => {
-      const refreshed = await refreshInstalledExtensionRuntime(storagePaths, extension);
+      const refreshed = normalizeInstalledExtensionRecord(
+        await refreshInstalledExtensionRuntime(storagePaths, extension)
+      );
       if (
         refreshed.runtimeSupported !== extension.runtimeSupported ||
         refreshed.lastError !== extension.lastError ||
-        JSON.stringify(refreshed.capabilities) !== JSON.stringify(extension.capabilities)
+        JSON.stringify(refreshed.capabilities) !== JSON.stringify(extension.capabilities) ||
+        refreshed.systemSource !== extension.systemSource ||
+        refreshed.registryId !== extension.registryId ||
+        refreshed.registryName !== extension.registryName ||
+        refreshed.trustType !== extension.trustType
       ) {
         changed = true;
       }
@@ -479,10 +477,6 @@ async function refreshInstalledExtensionState(storagePaths: StorageLayout, state
 }
 
 async function findInstalledExtension(storagePaths: StorageLayout, sourceId: string) {
-  if (sourceId === coreDemoSource.id) {
-    return bundledExtensionRecord();
-  }
-
   const state = await loadState(storagePaths);
   const extension = state.installed.find((item) => item.id === sourceId);
   if (!extension) {
@@ -490,7 +484,7 @@ async function findInstalledExtension(storagePaths: StorageLayout, sourceId: str
   }
 
   const refreshed = await refreshInstalledExtensionRuntime(storagePaths, extension);
-  return refreshed;
+  return normalizeInstalledExtensionRecord(refreshed);
 }
 
 export async function listRegistries(storagePaths: StorageLayout) {
@@ -505,8 +499,8 @@ export async function listCatalog(storagePaths: StorageLayout) {
 
 export async function listInstalledExtensions(storagePaths: StorageLayout, prisma: PrismaClient) {
   const state = await loadState(storagePaths);
-  const installed = [bundledExtensionRecord(), ...(await refreshInstalledExtensionState(storagePaths, state))];
-  return installed;
+  const installed = await refreshInstalledExtensionState(storagePaths, state);
+  return installed.map(normalizeInstalledExtensionRecord);
 }
 
 export async function listSources(storagePaths: StorageLayout, prisma: PrismaClient) {
@@ -672,6 +666,7 @@ export async function installExtension(storagePaths: StorageLayout, prisma: Pris
       ...entry,
       enabled: false,
       bundled: false,
+      systemSource: isSystemSourceId(entry.id),
       installedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       lastError: null,
@@ -703,15 +698,15 @@ export async function installExtension(storagePaths: StorageLayout, prisma: Pris
 
     const existingIndex = state.installed.findIndex((item) => item.id === extensionId);
     if (existingIndex >= 0) {
-      state.installed[existingIndex] = installed;
+      state.installed[existingIndex] = normalizeInstalledExtensionRecord(installed);
     } else {
-      state.installed.push(installed);
+      state.installed.push(normalizeInstalledExtensionRecord(installed));
     }
 
     await saveState(storagePaths, state);
-    await syncPluginSources(prisma, [bundledExtensionRecord(), ...state.installed]);
+    await syncPluginSources(prisma, state.installed.map(normalizeInstalledExtensionRecord));
     clearSourcePayloadCache();
-    return installed;
+    return normalizeInstalledExtensionRecord(installed);
   });
 }
 
@@ -721,10 +716,6 @@ async function toggleExtension(
   extensionId: string,
   enabled: boolean
 ) {
-  if (extensionId === coreDemoSource.id) {
-    return bundledExtensionRecord();
-  }
-
   return queueExtensionStateMutation(async () => {
     const state = await loadState(storagePaths);
     const extension = state.installed.find((item) => item.id === extensionId);
@@ -737,9 +728,9 @@ async function toggleExtension(
     extension.updatedAt = new Date().toISOString();
 
     await saveState(storagePaths, state);
-    await syncPluginSources(prisma, [bundledExtensionRecord(), ...state.installed]);
+    await syncPluginSources(prisma, state.installed.map(normalizeInstalledExtensionRecord));
     clearSourcePayloadCache();
-    return extension;
+    return normalizeInstalledExtensionRecord(extension);
   });
 }
 
@@ -752,8 +743,8 @@ export async function disableExtension(storagePaths: StorageLayout, prisma: Pris
 }
 
 export async function removeExtension(storagePaths: StorageLayout, prisma: PrismaClient, extensionId: string) {
-  if (extensionId === coreDemoSource.id) {
-    throw new Error("Bundled extension cannot be removed");
+  if (isSystemSourceId(extensionId)) {
+    throw new Error("System source cannot be removed");
   }
 
   return queueExtensionStateMutation(async () => {
@@ -784,23 +775,11 @@ async function findSourceRecord(storagePaths: StorageLayout, prisma: PrismaClien
   return sources.find((item) => item.id === sourceId) ?? null;
 }
 
-function resolveBuiltinRuntime(sourceId: string): SourceHandler | null {
-  if (sourceId === coreDemoSource.id) {
-    return coreDemoRuntime;
-  }
-  return null;
-}
-
 async function resolveRuntime(storagePaths: StorageLayout, prisma: PrismaClient, sourceId: string) {
   const source = await findSourceRecord(storagePaths, prisma, sourceId);
 
   if (!source) {
     throw new Error("Source not found");
-  }
-
-  const runtime = resolveBuiltinRuntime(sourceId);
-  if (runtime) {
-    return { source, runtime };
   }
 
   const extension = await findInstalledExtension(storagePaths, sourceId);

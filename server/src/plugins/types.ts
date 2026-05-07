@@ -15,6 +15,7 @@ export interface SourceListItem extends SourceCapabilities {
   name: string;
   trustType: TrustType;
   version: string;
+  systemSource?: boolean;
   enabled: boolean;
   runtimeKind: RuntimeKind;
   runtimeSupported: boolean;
@@ -50,6 +51,8 @@ export interface SourceHomeSection {
 export interface SourceHomePayload {
   source: Pick<SourceListItem, "id" | "name" | "description" | "runtimeSupported">;
   sections: SourceHomeSection[];
+  warning?: string;
+  blocked?: boolean;
 }
 
 export interface SourceSearchPayload {
@@ -58,6 +61,8 @@ export interface SourceSearchPayload {
   page: string | null;
   nextPage: string | null;
   items: SourceHomeItem[];
+  warning?: string;
+  blocked?: boolean;
 }
 
 export interface SourceDetailPayload {
@@ -70,6 +75,8 @@ export interface SourceDetailPayload {
   status: string;
   genres: string[];
   sourceUrl: string;
+  warning?: string;
+  blocked?: boolean;
 }
 
 export interface SourceChapterPayload {
@@ -127,6 +134,7 @@ export interface InstalledExtensionRecord extends CatalogExtensionRecord {
   installedAt: string;
   updatedAt: string;
   bundled: boolean;
+  systemSource?: boolean;
   lastError: string | null;
 }
 

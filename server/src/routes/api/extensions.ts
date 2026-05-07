@@ -102,12 +102,25 @@ export async function registerExtensionsApiRoutes(app: FastifyInstance) {
     };
   });
 
-  app.delete("/api/extensions/:extensionId", async (request) => {
+  app.delete("/api/extensions/:extensionId", async (request, reply) => {
     const params = z.object({ extensionId: z.string().min(1) }).parse(request.params);
-    const item = await removeExtension(app.storagePaths, app.prisma, params.extensionId);
-    return {
-      ok: true,
-      item
-    };
+    try {
+      const item = await removeExtension(app.storagePaths, app.prisma, params.extensionId);
+      return {
+        ok: true,
+        item
+      };
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "System source cannot be removed") {
+        throw error;
+      }
+
+      reply.code(409);
+      return {
+        ok: false,
+        error: "SYSTEM_SOURCE_PROTECTED",
+        message: "Nguồn system không thể bị xóa khỏi server."
+      };
+    }
   });
 }

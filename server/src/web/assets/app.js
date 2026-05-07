@@ -12,6 +12,17 @@
     ["#2d1a2d", "#9333ea"],
     ["#1f2d1a", "#65a30d"]
   ];
+  const SOURCE_HOST_ALIASES = new Map([
+    ["www.docln.sbs", "docln.sbs"],
+    ["docln.net", "docln.sbs"],
+    ["www.docln.net", "docln.sbs"],
+    ["docln.top", "docln.sbs"],
+    ["www.docln.top", "docln.sbs"],
+    ["ln.hako.vn", "docln.sbs"],
+    ["www.ln.hako.vn", "docln.sbs"],
+    ["ln.hako.re", "docln.sbs"],
+    ["www.ln.hako.re", "docln.sbs"]
+  ]);
   const SERVER_SECTIONS = [
     { id: "tasks", label: "Tác vụ", path: "/tasks" },
     { id: "extensions", label: "Extensions", path: "/extensions" },
@@ -37,6 +48,7 @@
     browseItems: [],
     browseNextPage: null,
     browseError: "",
+    browseWarning: "",
     searchQuery: "",
     searchTimer: null,
     chapterSort: "desc",
@@ -139,6 +151,87 @@
     } catch {
       return truncate(url, 40);
     }
+  }
+
+  function normalizeKnownSourceUrl(rawUrl) {
+    const value = String(rawUrl || "").trim();
+    if (!value) {
+      return "";
+    }
+
+    try {
+      const url = new URL(value);
+      const nextHost = SOURCE_HOST_ALIASES.get(url.hostname.toLowerCase());
+      if (nextHost) {
+        url.hostname = nextHost;
+      }
+      url.hash = "";
+      url.search = "";
+      url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+      return url.toString();
+    } catch {
+      return value.replace(/\/+$/, "");
+    }
+  }
+
+  function sameSourceUrl(left, right) {
+    return normalizeKnownSourceUrl(left) === normalizeKnownSourceUrl(right);
+  }
+
+  function isSystemSource(item) {
+    return Boolean(item?.systemSource || item?.registryId === "system");
+  }
+
+  function firstText(...values) {
+    for (const value of values) {
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+    return "";
+  }
+
+  function isUrlLikeText(value) {
+    return /^https?:\/\//i.test(String(value || "").trim());
+  }
+
+  function readableTitleFromUrl(rawUrl) {
+    try {
+      const url = new URL(String(rawUrl || ""));
+      const slug = url.pathname.split("/").filter(Boolean).at(-1) || url.hostname;
+      return slug
+        .replace(/[-_]+/g, " ")
+        .replace(/\b\w/g, (character) => character.toUpperCase());
+    } catch {
+      return String(rawUrl || "Không rõ");
+    }
+  }
+
+  function isSourceUpstreamBlockedPayload(payload) {
+    return Boolean(payload && typeof payload === "object" && payload.blocked);
+  }
+
+  function isSourceUpstreamBlockedError(error) {
+    return Boolean(
+      error?.code === "SOURCE_UPSTREAM_BLOCKED" ||
+        error?.payload?.error === "SOURCE_UPSTREAM_BLOCKED"
+    );
+  }
+
+  function getBrowsePreviewItems() {
+    const sectionItems = Array.isArray(state.browseHome?.sections)
+      ? state.browseHome.sections.flatMap((section) => section.items || [])
+      : [];
+    return [...sectionItems, ...(Array.isArray(state.browseItems) ? state.browseItems : [])];
+  }
+
+  function findBrowsePreviewItem(sourceId, requestUrl) {
+    const normalizedRequestUrl = normalizeKnownSourceUrl(requestUrl);
+    return (
+      getBrowsePreviewItems().find(
+        (item) => item?.detailUrl && item?.id && sameSourceUrl(item.detailUrl, normalizedRequestUrl)
+      ) || null
+    );
   }
 
   function statusLabel(status) {
@@ -451,7 +544,9 @@
 
   function findLibraryBySource(sourceId, sourceUrl) {
     return (
-      state.libraryItems.find((item) => item.sourceId === sourceId && item.sourceUrl === sourceUrl) || null
+      state.libraryItems.find(
+        (item) => item.sourceId === sourceId && sameSourceUrl(item.sourceUrl, sourceUrl)
+      ) || null
     );
   }
 
@@ -628,7 +723,7 @@
     }
 
     const params = new URLSearchParams();
-    params.set("detail", detailUrl);
+    params.set("detail", normalizeKnownSourceUrl(detailUrl));
     return `${path}?${params.toString()}`;
   }
 
@@ -660,6 +755,7 @@
     state.browseNextPage = null;
     state.browseSectionId = null;
     state.browseError = "";
+    state.browseWarning = "";
   }
 
   function openSourceBrowse(sourceId) {
@@ -1260,6 +1356,20 @@
         "Tải lại",
         () => void refreshBrowseContent({ append: false })
       );
+    } else if (state.browseWarning && !items.length) {
+      setMessageInGrid(
+        grid,
+        "Nguồn đang chặn truy cập",
+        state.browseWarning,
+        browseQuery ? "Xóa tìm kiếm" : "Tải lại",
+        browseQuery
+          ? () => {
+              resetBrowseState();
+              syncBrowseSearchUi();
+              void refreshBrowseContent({ append: false });
+            }
+          : () => void refreshBrowseContent({ append: false })
+      );
     } else if (!state.enabledSources.length) {
       setMessageInGrid(
         grid,
@@ -1379,7 +1489,7 @@
         <div class="source-actions">
           <button class="source-browse-btn" type="button">${item.enabled && item.runtimeSupported ? "Duyệt" : "Chi tiết"}</button>
           <label class="toggle-switch">
-            <input type="checkbox" ${item.enabled ? "checked" : ""} ${item.bundled ? "disabled" : ""}>
+            <input type="checkbox" ${item.enabled ? "checked" : ""}>
             <span class="toggle-track"></span>
           </label>
         </div>
@@ -1403,6 +1513,9 @@
       card.querySelector("input[type=checkbox]")?.addEventListener("change", (event) => {
         event.stopPropagation();
         void setSourceEnabled(item.id, event.currentTarget.checked);
+      });
+      card.querySelector(".toggle-switch")?.addEventListener("click", (event) => {
+        event.stopPropagation();
       });
 
       list.appendChild(card);
@@ -1460,6 +1573,14 @@
     $id("stat-chapters").textContent = "—";
     $id("stat-status").textContent = "—";
     $id("stat-source").textContent = "—";
+    if ($id("btn-add-library")) {
+      $id("btn-add-library").disabled = false;
+      $id("btn-add-library").textContent = "+ Thêm vào thư viện";
+    }
+    if ($id("btn-download-all")) {
+      $id("btn-download-all").disabled = false;
+      $id("btn-download-all").textContent = "↻ Đồng bộ lại";
+    }
     $id("chapter-list").innerHTML = `
       <div class="chapter-row"><span class="ch-title">Đang tải chương…</span></div>
     `;
@@ -1506,6 +1627,7 @@
     const syncButton = $id("btn-download-all");
     const removeLibraryButton = $id("btn-remove-library");
     const openLibraryButton = $id("btn-in-library");
+    const sourceBlocked = Boolean(detail.upstreamBlocked);
 
     coverWrap.style.background = coverGradient(detail.title || detail.sourceUrl || detail.requestUrl);
     if (detail.coverUrl) {
@@ -1532,6 +1654,13 @@
     statusBadge.textContent = statusLabel(detail.status);
     badges.appendChild(statusBadge);
 
+    if (sourceBlocked) {
+      const warningBadge = document.createElement("span");
+      warningBadge.className = "badge badge-cat";
+      warningBadge.textContent = "Nguồn đang chặn server";
+      badges.appendChild(warningBadge);
+    }
+
     (detail.genres || []).slice(0, 6).forEach((genre) => {
       const tag = document.createElement("span");
       tag.className = "badge badge-cat";
@@ -1541,7 +1670,9 @@
 
     summary.textContent =
       stripHtml(detail.description) ||
-      "Truyện chưa có mô tả từ nguồn. Bạn vẫn có thể thêm vào thư viện và đồng bộ chương.";
+      (sourceBlocked
+        ? detail.chapterWarning || "Nguồn đang chặn truy cập từ server nên chỉ hiển thị được dữ liệu preview."
+        : "Truyện chưa có mô tả từ nguồn. Bạn vẫn có thể thêm vào thư viện và đồng bộ chương.");
     summary.classList.toggle("expanded", false);
 
     $id("stat-chapters").textContent = formatCount(detail.chapterCount || detail.chapters?.length || 0);
@@ -1552,9 +1683,16 @@
     syncButton.style.display = detail.libraryItem ? "block" : "none";
     removeLibraryButton.style.display = detail.libraryItem ? "block" : "none";
     openLibraryButton.style.display = detail.libraryItem && detail.kind !== "library" ? "block" : "none";
+    addButton.disabled = sourceBlocked;
+    syncButton.disabled = sourceBlocked;
 
     syncButton.textContent =
-      detail.libraryItem?.syncStatus === "error" ? "↻ Thử lại đồng bộ" : "↻ Đồng bộ lại";
+      sourceBlocked
+        ? "Nguồn đang chặn"
+        : detail.libraryItem?.syncStatus === "error"
+          ? "↻ Thử lại đồng bộ"
+          : "↻ Đồng bộ lại";
+    addButton.textContent = sourceBlocked ? "Nguồn đang chặn" : "+ Thêm vào thư viện";
     openLibraryButton.textContent = detail.kind === "library" ? "✓ Đã trong thư viện" : "✓ Mở trong thư viện";
 
     const chapters = [...(detail.chapters || [])];
@@ -1688,7 +1826,7 @@
       footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-install-source">Cài & bật</button>`);
     }
 
-    if (isInstalled && !item.bundled) {
+    if (isInstalled && !item.bundled && !isSystemSource(item)) {
       footerButtons.splice(
         1,
         0,
@@ -2012,7 +2150,7 @@
       });
       actions.appendChild(detailButton);
 
-      if (!item.bundled) {
+      if (!item.bundled && !isSystemSource(item)) {
         const removeButton = document.createElement("button");
         removeButton.className = "source-browse-btn";
         removeButton.type = "button";
@@ -2027,12 +2165,15 @@
       const toggle = document.createElement("label");
       toggle.className = "toggle-switch";
       toggle.innerHTML = `
-        <input type="checkbox" ${item.enabled ? "checked" : ""} ${item.bundled ? "disabled" : ""}>
+        <input type="checkbox" ${item.enabled ? "checked" : ""}>
         <span class="toggle-track"></span>
       `;
       toggle.querySelector("input")?.addEventListener("change", (event) => {
         event.stopPropagation();
         void setSourceEnabled(item.id, event.currentTarget.checked);
+      });
+      toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
       });
       actions.appendChild(toggle);
     }
@@ -2310,6 +2451,7 @@
     state.browseItems = [];
     state.browseNextPage = null;
     state.browseError = "";
+    state.browseWarning = typeof payload?.warning === "string" ? payload.warning : "";
 
     const sections = Array.isArray(state.browseHome.sections) ? state.browseHome.sections : [];
     if (!sections.find((section) => section.id === state.browseSectionId)) {
@@ -2332,6 +2474,7 @@
     state.browseItems = append ? [...state.browseItems, ...nextItems] : nextItems;
     state.browseNextPage = payload.nextPage || null;
     state.browseError = "";
+    state.browseWarning = typeof payload?.warning === "string" ? payload.warning : "";
   }
 
   async function refreshBrowseContent({ append = false } = {}) {
@@ -2362,6 +2505,7 @@
         return;
       }
       state.browseError = error.message;
+      state.browseWarning = "";
       renderBrowse();
       showToast("!", "Không tải được dữ liệu nguồn", error.message);
     }
@@ -2401,43 +2545,101 @@
 
   async function loadSourceDetail(sourceId, requestUrl) {
     await loadLibrary();
-    const [detailPayload, chapterPayload] = await Promise.all([
+    const normalizedRequestUrl = normalizeKnownSourceUrl(requestUrl);
+    const preview = findBrowsePreviewItem(sourceId, normalizedRequestUrl);
+    const [detailResult, chapterResult] = await Promise.allSettled([
       apiJson(
-        `/api/sources/${encodeURIComponent(sourceId)}/detail?url=${encodeURIComponent(requestUrl)}`
+        `/api/sources/${encodeURIComponent(sourceId)}/detail?url=${encodeURIComponent(normalizedRequestUrl)}`
       ),
       apiJson(
-        `/api/sources/${encodeURIComponent(sourceId)}/chapters?url=${encodeURIComponent(requestUrl)}`
+        `/api/sources/${encodeURIComponent(sourceId)}/chapters?url=${encodeURIComponent(normalizedRequestUrl)}`
       )
     ]);
 
-    const libraryItem = findLibraryBySource(sourceId, detailPayload.sourceUrl);
+    const detailPayload = detailResult.status === "fulfilled" ? detailResult.value : null;
+    const chapterPayload = chapterResult.status === "fulfilled" ? chapterResult.value : null;
+    const detailError = detailResult.status === "rejected" ? detailResult.reason : null;
+    const chapterError = chapterResult.status === "rejected" ? chapterResult.reason : null;
+    const upstreamBlocked =
+      isSourceUpstreamBlockedPayload(detailPayload) ||
+      isSourceUpstreamBlockedPayload(chapterPayload) ||
+      isSourceUpstreamBlockedError(detailError) ||
+      isSourceUpstreamBlockedError(chapterError);
+
+    if (!detailPayload && !chapterPayload && !upstreamBlocked) {
+      throw detailError || chapterError || new Error("Không tải được chi tiết truyện.");
+    }
+
+    const sourceUrl =
+      detailPayload?.sourceUrl || preview?.detailUrl || normalizedRequestUrl;
+    const libraryItem =
+      findLibraryBySource(sourceId, sourceUrl) ||
+      findLibraryBySource(sourceId, normalizedRequestUrl);
+    const fallbackWarning = firstText(
+      detailPayload?.warning,
+      chapterPayload?.warning,
+      detailError?.message,
+      chapterError?.message
+    );
+    const resolvedStatus = upstreamBlocked
+      ? firstText(preview?.status, libraryItem?.status, detailPayload?.status, "unknown")
+      : firstText(
+          detailPayload?.status !== "unknown" ? detailPayload?.status : "",
+          preview?.status,
+          libraryItem?.status,
+          "unknown"
+        );
+    const resolvedTitle = upstreamBlocked
+      ? firstText(preview?.title, !isUrlLikeText(detailPayload?.title) ? detailPayload?.title : "", libraryItem?.title)
+      : firstText(
+          !isUrlLikeText(detailPayload?.title) ? detailPayload?.title : "",
+          preview?.title,
+          libraryItem?.title
+        );
+    const resolvedDescription = firstText(
+      upstreamBlocked ? preview?.description : detailPayload?.description,
+      detailPayload?.description,
+      libraryItem?.description
+    );
+    const chapters = Array.isArray(chapterPayload?.items)
+      ? chapterPayload.items.map((item) => {
+          const libraryChapter = libraryItem?.chapters?.find(
+            (chapter) => chapter.chapterIndex === item.chapterIndex
+          );
+          return {
+            ...item,
+            id: libraryChapter?.id || null,
+            status: libraryChapter?.status || "remote",
+            lastError: libraryChapter?.lastError || null
+          };
+        })
+      : [];
 
     return {
       kind: "source",
       sourceId,
-      title: detailPayload.title,
-      author: detailPayload.author,
-      coverUrl: detailPayload.coverUrl,
-      description: detailPayload.description,
-      status: detailPayload.status,
-      genres: Array.isArray(detailPayload.genres) ? detailPayload.genres : [],
-      chapterCount: Array.isArray(chapterPayload.items) ? chapterPayload.items.length : 0,
-      chapters: Array.isArray(chapterPayload.items)
-        ? chapterPayload.items.map((item) => {
-            const libraryChapter = libraryItem?.chapters?.find((chapter) => chapter.chapterIndex === item.chapterIndex);
-            return {
-              ...item,
-              id: libraryChapter?.id || null,
-              status: libraryChapter?.status || "remote",
-              lastError: libraryChapter?.lastError || null
-            };
-          })
-        : [],
-      chapterWarning: typeof chapterPayload.warning === "string" ? chapterPayload.warning : null,
+      title: resolvedTitle || readableTitleFromUrl(sourceUrl),
+      author: firstText(
+        upstreamBlocked ? preview?.author : detailPayload?.author,
+        detailPayload?.author,
+        libraryItem?.author
+      ) || null,
+      coverUrl: firstText(
+        upstreamBlocked ? preview?.coverUrl : detailPayload?.coverUrl,
+        detailPayload?.coverUrl,
+        libraryItem?.coverUrl
+      ) || null,
+      description: resolvedDescription || null,
+      status: resolvedStatus || "unknown",
+      genres: Array.isArray(detailPayload?.genres) ? detailPayload.genres : [],
+      chapterCount: chapters.length,
+      chapters,
+      chapterWarning: fallbackWarning || null,
+      upstreamBlocked,
       source: getEnabledSourceById(sourceId) || getInstalledExtensionById(sourceId),
       libraryItem,
-      requestUrl,
-      sourceUrl: detailPayload.sourceUrl
+      requestUrl: normalizedRequestUrl,
+      sourceUrl
     };
   }
 
@@ -2567,6 +2769,14 @@
     if (!state.detailPayload || state.detailPayload.kind !== "source") {
       return;
     }
+    if (state.detailPayload.upstreamBlocked) {
+      showToast(
+        "!",
+        "Nguồn đang chặn truy cập",
+        state.detailPayload.chapterWarning || "Chưa thể thêm truyện này vào thư viện từ server lúc này."
+      );
+      return;
+    }
 
     const response = await apiJson("/api/library/novels", {
       method: "POST",
@@ -2594,6 +2804,14 @@
   async function syncCurrentDetail() {
     const libraryItem = state.detailPayload?.libraryItem || getLibraryById(state.detailLibraryId);
     if (!libraryItem?.id) {
+      return;
+    }
+    if (state.detailPayload?.upstreamBlocked) {
+      showToast(
+        "!",
+        "Nguồn đang chặn truy cập",
+        state.detailPayload.chapterWarning || "Hãy thử đồng bộ lại sau khi nguồn cho phép truy cập."
+      );
       return;
     }
 
@@ -3260,7 +3478,31 @@
       }
 
       state.activeSourceId = route.sourceId;
-      const detail = await loadSourceDetail(route.sourceId, route.detailUrl);
+      let detail;
+      try {
+        detail = await loadSourceDetail(route.sourceId, route.detailUrl);
+      } catch (error) {
+        const preview = findBrowsePreviewItem(route.sourceId, route.detailUrl);
+        detail = {
+          kind: "source",
+          sourceId: route.sourceId,
+          title: preview?.title || readableTitleFromUrl(route.detailUrl),
+          author: preview?.author || null,
+          coverUrl: preview?.coverUrl || null,
+          description: preview?.description || null,
+          status: preview?.status || "unknown",
+          genres: [],
+          chapterCount: 0,
+          chapters: [],
+          chapterWarning: error.message,
+          upstreamBlocked: false,
+          source: getEnabledSourceById(route.sourceId) || getInstalledExtensionById(route.sourceId),
+          libraryItem: findLibraryBySource(route.sourceId, route.detailUrl),
+          requestUrl: normalizeKnownSourceUrl(route.detailUrl),
+          sourceUrl: normalizeKnownSourceUrl(route.detailUrl)
+        };
+        showToast("!", "Không tải được chi tiết truyện", error.message);
+      }
       if (token !== state.routeToken) {
         return;
       }

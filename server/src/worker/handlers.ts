@@ -57,6 +57,8 @@ interface SeriesManifestShape {
 }
 
 const ENABLED_SOURCE_IDS_CACHE_TTL_MS = 30_000;
+const HAKO_SYNC_DELAY_MS = 1200;
+const HAKO_CHAPTER_FETCH_DELAY_MS = 1800;
 let enabledSourceIdsCache:
   | {
       expiresAt: number;
@@ -67,6 +69,14 @@ let enabledSourceIdsCache:
 
 function isRecordMissingError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025";
+}
+
+function isHakoSourceId(sourceId: string) {
+  return sourceId.toLowerCase().includes("hako");
+}
+
+async function sleep(milliseconds: number) {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function getEnabledSourceIds(context: WorkerContext, force = false) {
@@ -439,6 +449,9 @@ export async function processNovelSyncJob(
     });
 
     const handler = await getSourceHandler(context.storagePaths, context.prisma, novel.sourceId);
+    if (isHakoSourceId(novel.sourceId)) {
+      await sleep(HAKO_SYNC_DELAY_MS);
+    }
     const chapters = await handler.chapters(novel.sourceUrl);
     const existingChapters = await context.prisma.chapter.findMany({
       where: { novelId: novel.id },
@@ -588,6 +601,9 @@ export async function processChapterFetchJob(
     });
 
     const handler = await getSourceHandler(context.storagePaths, context.prisma, chapter.novel.sourceId);
+    if (isHakoSourceId(chapter.novel.sourceId)) {
+      await sleep(HAKO_CHAPTER_FETCH_DELAY_MS);
+    }
     const content = await handler.chapterContent(chapter.sourceUrl);
     const html = sanitizeHtmlFragment(content.html);
     const htmlPath = getChapterHtmlPath(context.storagePaths, chapter.novelId, chapter.chapterIndex);
