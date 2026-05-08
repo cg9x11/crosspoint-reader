@@ -1,6 +1,6 @@
 import { loadConfig } from "./config/env.js";
 import { buildApp } from "./app.js";
-import { createPrismaClient } from "./lib/db.js";
+import { createPrismaClient, initializePrismaClient } from "./lib/db.js";
 import { createRedisConnection } from "./queues/redis.js";
 import { createStorageLayout, ensureStorageLayout } from "./storage/paths.js";
 
@@ -10,6 +10,7 @@ async function main() {
   await ensureStorageLayout(storagePaths);
 
   const prisma = createPrismaClient();
+  await initializePrismaClient(prisma);
   const redis = createRedisConnection(config.REDIS_URL);
   const app = await buildApp({ config, prisma, redis, storagePaths });
 

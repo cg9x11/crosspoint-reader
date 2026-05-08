@@ -2262,7 +2262,7 @@
     const logCard = $("#page-server .log-card");
     logCard.innerHTML = `<h3 class="card-title">Tác vụ gần đây</h3><div class="log-list" id="server-task-list"></div>`;
     const taskList = logCard.querySelector("#server-task-list");
-    const jobs = state.tasks.slice(0, 8);
+    const jobs = state.tasks.slice(0, 10);
     if (!jobs.length) {
       setMessageInBlock(taskList, "Chưa có job", "Hàng đợi hiện chưa có tác vụ đồng bộ nào.");
     } else {
@@ -2312,7 +2312,7 @@
         });
         row.querySelector(".source-browse-btn")?.addEventListener("click", (event) => {
           event.stopPropagation();
-          void retryJob(job.id);
+          void retryJob(job.novelId || job.id);
         });
         taskList.appendChild(row);
       });

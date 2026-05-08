@@ -76,6 +76,48 @@ function isRecordMissingError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025";
 }
 
+function isTransientDatabaseTimeout(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("socket timeout") ||
+    message.includes("database failed to respond") ||
+    message.includes("timed out") ||
+    message.includes("database is locked") ||
+    message.includes("busy")
+  );
+}
+
+async function runWithDatabaseRetry<T>(
+  action: () => Promise<T>,
+  options?: {
+    attempts?: number;
+    initialDelayMs?: number;
+  }
+) {
+  const attempts = Math.max(1, options?.attempts ?? 4);
+  let delayMs = Math.max(100, options?.initialDelayMs ?? 250);
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await action();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isTransientDatabaseTimeout(error)) {
+        throw error;
+      }
+      await sleep(delayMs);
+      delayMs = Math.min(delayMs * 2, 2_000);
+    }
+  }
+
+  throw lastError;
+}
+
 function isHakoSourceId(sourceId: string) {
   return sourceId.toLowerCase().includes("hako");
 }
@@ -858,13 +900,15 @@ export async function processChapterBuildJob(
   }
 
   try {
-    await context.prisma.chapter.update({
-      where: { id: chapter.id },
-      data: {
-        status: "building",
-        lastError: null
-      }
-    });
+    await runWithDatabaseRetry(() =>
+      context.prisma.chapter.update({
+        where: { id: chapter.id },
+        data: {
+          status: "building",
+          lastError: null
+        }
+      })
+    );
 
     const htmlPath = getChapterHtmlPath(context.storagePaths, chapter.novelId, chapter.chapterIndex);
     const html = await fs.readFile(htmlPath, "utf8");
@@ -891,17 +935,19 @@ export async function processChapterBuildJob(
       epubPath
     );
     try {
-      await context.prisma.chapter.update({
-        where: { id: chapter.id },
-        data: {
-          status: "published",
-          epubPath,
-          fileSize: chapterBuffer.byteLength,
-          checksum: sha256Hex(chapterBuffer),
-          publishedAt: new Date(),
-          lastError: null
-        }
-      });
+      await runWithDatabaseRetry(() =>
+        context.prisma.chapter.update({
+          where: { id: chapter.id },
+          data: {
+            status: "published",
+            epubPath,
+            fileSize: chapterBuffer.byteLength,
+            checksum: sha256Hex(chapterBuffer),
+            publishedAt: new Date(),
+            lastError: null
+          }
+        })
+      );
     } catch (error) {
       if (isRecordMissingError(error)) {
         await fs.rm(targetPath, { force: true });
@@ -910,55 +956,63 @@ export async function processChapterBuildJob(
       throw error;
     }
 
-    await writeSeriesManifest(context.prisma, context.storagePaths, chapter.novelId, {
-      novel: {
-        id: chapter.novel.id,
-        title: chapter.novel.title,
-        author: chapter.novel.author,
-        sourceId: chapter.novel.sourceId,
-        sourceName: chapter.novel.sourceName,
-        description: chapter.novel.description,
-        status: chapter.novel.status
-      },
-      chapter: {
-        chapterIndex: chapter.chapterIndex,
-        title: chapter.title,
-        epubPath
-      }
+    await runWithDatabaseRetry(async () => {
+      await writeSeriesManifest(context.prisma, context.storagePaths, chapter.novelId, {
+        novel: {
+          id: chapter.novel.id,
+          title: chapter.novel.title,
+          author: chapter.novel.author,
+          sourceId: chapter.novel.sourceId,
+          sourceName: chapter.novel.sourceName,
+          description: chapter.novel.description,
+          status: chapter.novel.status
+        },
+        chapter: {
+          chapterIndex: chapter.chapterIndex,
+          title: chapter.title,
+          epubPath
+        }
+      });
+      await updateNovelAggregateState(context.prisma, chapter.novelId);
+      await closeRunningRebuildRunIfSettled(context.prisma, chapter.novelId);
     });
-    await updateNovelAggregateState(context.prisma, chapter.novelId);
-    await closeRunningRebuildRunIfSettled(context.prisma, chapter.novelId);
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Chapter build failed";
-    await context.prisma.chapter
-      .update({
-        where: { id: chapter.id },
-        data: {
-          status: "build_failed",
-          retryCount: { increment: 1 },
-          lastError: message
-        }
-      })
-      .catch((updateError) => {
-        if (!isRecordMissingError(updateError)) {
-          throw updateError;
-        }
-      });
-    await context.prisma.novel
-      .update({
-        where: { id: chapter.novelId },
-        data: {
-          syncStatus: "error",
-          lastError: message
-        }
-      })
-      .catch((updateError) => {
-        if (!isRecordMissingError(updateError)) {
-          throw updateError;
-        }
-      });
-    await closeRunningRebuildRunIfSettled(context.prisma, chapter.novelId);
+    await runWithDatabaseRetry(() =>
+      context.prisma.chapter
+        .update({
+          where: { id: chapter.id },
+          data: {
+            status: "build_failed",
+            retryCount: { increment: 1 },
+            lastError: message
+          }
+        })
+        .catch((updateError) => {
+          if (!isRecordMissingError(updateError)) {
+            throw updateError;
+          }
+        })
+    ).catch(() => undefined);
+    await runWithDatabaseRetry(() =>
+      context.prisma.novel
+        .update({
+          where: { id: chapter.novelId },
+          data: {
+            syncStatus: "error",
+            lastError: message
+          }
+        })
+        .catch((updateError) => {
+          if (!isRecordMissingError(updateError)) {
+            throw updateError;
+          }
+        })
+    ).catch(() => undefined);
+    await runWithDatabaseRetry(() => closeRunningRebuildRunIfSettled(context.prisma, chapter.novelId)).catch(
+      () => undefined
+    );
     throw error;
   }
 }

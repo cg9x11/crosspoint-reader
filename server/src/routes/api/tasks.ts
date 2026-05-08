@@ -156,47 +156,56 @@ function buildTaskState(input: {
 
 export async function registerTasksApiRoutes(app: FastifyInstance) {
   const listTasks = async () => {
-    const novels = await app.prisma.novel.findMany({
+    const runs = await app.prisma.syncRun.findMany({
       where: {
-        OR: [
-          { syncRuns: { some: {} } },
-          { syncStatus: { in: ["queued", "syncing", "error"] } },
-          { totalChapters: { gt: 0 } },
-          { downloadedChapters: { gt: 0 } }
-        ]
+        novel: {
+          OR: [
+            { syncRuns: { some: {} } },
+            { syncStatus: { in: ["queued", "syncing", "error"] } },
+            { totalChapters: { gt: 0 } },
+            { downloadedChapters: { gt: 0 } }
+          ]
+        }
       },
-      orderBy: [{ updatedAt: "desc" }],
-      take: 20,
+      orderBy: [{ createdAt: "desc" }],
+      take: 10,
       select: {
         id: true,
-        title: true,
-        sourceId: true,
-        sourceName: true,
-        syncStatus: true,
-        totalChapters: true,
-        downloadedChapters: true,
-        lastError: true,
-        lastSyncStartedAt: true,
-        lastSyncEndedAt: true,
-        updatedAt: true,
-        syncRuns: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
+        status: true,
+        triggerType: true,
+        errorMessage: true,
+        createdAt: true,
+        startedAt: true,
+        endedAt: true,
+        totalFound: true,
+        newChapters: true,
+        novelId: true,
+        novel: {
           select: {
-            status: true,
-            triggerType: true,
-            errorMessage: true,
-            createdAt: true,
-            startedAt: true,
-            endedAt: true,
-            totalFound: true,
-            newChapters: true
+            id: true,
+            title: true,
+            sourceId: true,
+            sourceName: true,
+            syncStatus: true,
+            totalChapters: true,
+            downloadedChapters: true,
+            lastError: true,
+            lastSyncStartedAt: true,
+            lastSyncEndedAt: true,
+            updatedAt: true,
+            syncRuns: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: {
+                id: true
+              }
+            }
           }
         }
       }
     });
 
-    const novelIds = novels.map((novel) => novel.id);
+    const novelIds = Array.from(new Set(runs.map((run) => run.novelId)));
     const chapterStates = novelIds.length
       ? await app.prisma.chapter.findMany({
           where: {
@@ -260,8 +269,9 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
       ])
     );
 
-    const items = novels
-      .map((novel) => {
+    const items = runs
+      .map((run) => {
+        const novel = run.novel;
         const stats = chapterStats.get(novel.id) ?? {
           failed: 0,
           pending: 0,
@@ -271,57 +281,60 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
           lastFailedChapter: null
         };
         const queue = queueActivity.get(novel.id);
+        const isLatestRunForNovel = novel.syncRuns[0]?.id === run.id;
         const remainingChapters = Math.max(
           stats.pending,
           Math.max(0, Number(novel.totalChapters) - Number(novel.downloadedChapters))
         );
-        const latestRun = novel.syncRuns[0] ?? null;
         const state = buildTaskState({
-          syncStatus: novel.syncStatus,
-          triggerType: latestRun?.triggerType || null,
-          lastRunStatus: latestRun?.status || null,
-          hasRunningJobs: Boolean(queue?.totalJobs),
-          failedChapters: stats.failed,
-          remainingChapters
+          syncStatus: isLatestRunForNovel ? novel.syncStatus : run.status === "failed" ? "error" : "ready",
+          triggerType: run.triggerType || null,
+          lastRunStatus: run.status || null,
+          hasRunningJobs: isLatestRunForNovel ? Boolean(queue?.totalJobs) : false,
+          failedChapters: isLatestRunForNovel ? stats.failed : 0,
+          remainingChapters: isLatestRunForNovel ? remainingChapters : 0
         });
         const lastFailedChapter = stats.lastFailedChapter;
-        const lastError =
-          lastFailedChapter?.lastError || novel.lastError || latestRun?.errorMessage || null;
-        const lastErrorSource = lastFailedChapter
+        const lastError = isLatestRunForNovel
+          ? lastFailedChapter?.lastError || novel.lastError || run.errorMessage || null
+          : run.errorMessage || null;
+        const lastErrorSource = isLatestRunForNovel && lastFailedChapter
           ? lastFailedChapter.status === "build_failed"
             ? "chapter_build"
             : "chapter_fetch"
-          : novel.lastError
+          : isLatestRunForNovel && novel.lastError
             ? "novel"
-            : latestRun?.errorMessage
+            : run.errorMessage
               ? "sync_run"
               : null;
         const lastActivityAt =
-          queue?.latestCreatedAt ||
-          novel.lastSyncEndedAt?.toISOString() ||
-          novel.lastSyncStartedAt?.toISOString() ||
-          novel.updatedAt.toISOString();
+          (isLatestRunForNovel ? queue?.latestCreatedAt : null) ||
+          run.endedAt?.toISOString() ||
+          run.startedAt?.toISOString() ||
+          run.createdAt.toISOString();
         const rebuildTargetChapters =
-          latestRun?.triggerType === "rebuild" ? Math.max(0, latestRun.totalFound ?? 0) : 0;
+          run.triggerType === "rebuild" ? Math.max(0, run.totalFound ?? 0) : 0;
         const rebuildRemainingChapters =
-          latestRun?.triggerType === "rebuild"
-            ? Math.min(rebuildTargetChapters, stats.queuedBuild + stats.building + stats.buildFailed)
+          run.triggerType === "rebuild"
+            ? isLatestRunForNovel && run.status === "running"
+              ? Math.min(rebuildTargetChapters, stats.queuedBuild + stats.building + stats.buildFailed)
+              : Math.max(0, rebuildTargetChapters - Math.max(0, run.newChapters ?? 0))
             : 0;
         const rebuildCompletedChapters =
-          latestRun?.triggerType === "rebuild"
+          run.triggerType === "rebuild"
             ? Math.max(0, rebuildTargetChapters - rebuildRemainingChapters)
             : 0;
         const exportTargetChapters =
-          latestRun?.triggerType === "export" ? Math.max(0, latestRun.totalFound ?? 0) : 0;
+          run.triggerType === "export" ? Math.max(0, run.totalFound ?? 0) : 0;
         const exportCompletedChapters =
-          latestRun?.triggerType === "export" ? Math.max(0, latestRun.newChapters ?? 0) : 0;
+          run.triggerType === "export" ? Math.max(0, run.newChapters ?? 0) : 0;
         const exportRemainingChapters =
-          latestRun?.triggerType === "export"
+          run.triggerType === "export"
             ? Math.max(0, exportTargetChapters - exportCompletedChapters)
             : 0;
 
         return {
-          id: novel.id,
+          id: run.id,
           novelId: novel.id,
           title: novel.title,
           sourceId: novel.sourceId,
@@ -330,27 +343,27 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
           state,
           totalChapters: novel.totalChapters,
           downloadedChapters: novel.downloadedChapters,
-          remainingChapters,
-          failedChapters: stats.failed,
-          queueDepth: queue?.totalJobs ?? 0,
-          activeJobs: queue?.activeJobs ?? 0,
-          waitingJobs: queue?.waitingJobs ?? 0,
-          activeQueues: queue ? Array.from(queue.queues) : [],
+          remainingChapters: isLatestRunForNovel ? remainingChapters : 0,
+          failedChapters: isLatestRunForNovel ? stats.failed : 0,
+          queueDepth: isLatestRunForNovel ? queue?.totalJobs ?? 0 : 0,
+          activeJobs: isLatestRunForNovel ? queue?.activeJobs ?? 0 : 0,
+          waitingJobs: isLatestRunForNovel ? queue?.waitingJobs ?? 0 : 0,
+          activeQueues: isLatestRunForNovel && queue ? Array.from(queue.queues) : [],
           rebuildTargetChapters,
           rebuildCompletedChapters,
           rebuildRemainingChapters,
           exportTargetChapters,
           exportCompletedChapters,
           exportRemainingChapters,
-          retryable: state === "stopped",
+          retryable: isLatestRunForNovel && state === "stopped",
           lastError,
           lastErrorSource,
           lastErrorAt:
-            lastFailedChapter?.updatedAt.toISOString() ||
-            latestRun?.endedAt?.toISOString() ||
-            novel.lastSyncEndedAt?.toISOString() ||
+            (isLatestRunForNovel ? lastFailedChapter?.updatedAt.toISOString() : null) ||
+            run.endedAt?.toISOString() ||
+            (isLatestRunForNovel ? novel.lastSyncEndedAt?.toISOString() : null) ||
             null,
-          lastErrorChapter: lastFailedChapter
+          lastErrorChapter: isLatestRunForNovel && lastFailedChapter
             ? {
                 chapterIndex: lastFailedChapter.chapterIndex,
                 title: lastFailedChapter.title,
@@ -359,29 +372,18 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
                 updatedAt: lastFailedChapter.updatedAt.toISOString()
               }
             : null,
-          triggerType: latestRun?.triggerType || null,
-          lastRunStatus: latestRun?.status || null,
-          lastRunFound: latestRun?.totalFound ?? null,
-          lastRunNewChapters: latestRun?.newChapters ?? null,
-          createdAt: latestRun?.createdAt?.toISOString() || novel.updatedAt.toISOString(),
-          startedAt: latestRun?.startedAt?.toISOString() || novel.lastSyncStartedAt?.toISOString() || null,
-          finishedAt: latestRun?.endedAt?.toISOString() || novel.lastSyncEndedAt?.toISOString() || null,
+          triggerType: run.triggerType || null,
+          lastRunStatus: run.status || null,
+          lastRunFound: run.totalFound ?? null,
+          lastRunNewChapters: run.newChapters ?? null,
+          createdAt: run.createdAt.toISOString(),
+          startedAt: run.startedAt?.toISOString() || null,
+          finishedAt: run.endedAt?.toISOString() || null,
           lastActivityAt
         };
       })
       .sort((left, right) => {
-        const stateRank = new Map([
-          ["running", 0],
-          ["queued", 1],
-          ["stopped", 2],
-          ["completed", 3]
-        ]);
-        const leftRank = stateRank.get(left.state) ?? 99;
-        const rightRank = stateRank.get(right.state) ?? 99;
-        if (leftRank !== rightRank) {
-          return leftRank - rightRank;
-        }
-        return (right.lastActivityAt ?? "").localeCompare(left.lastActivityAt ?? "");
+        return (right.createdAt ?? "").localeCompare(left.createdAt ?? "");
       });
 
     return { items };

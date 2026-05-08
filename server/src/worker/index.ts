@@ -2,7 +2,7 @@ import { Worker } from "bullmq";
 import cron from "node-cron";
 
 import { loadConfig } from "../config/env.js";
-import { createPrismaClient } from "../lib/db.js";
+import { createPrismaClient, initializePrismaClient } from "../lib/db.js";
 import { createQueues } from "../queues/index.js";
 import { createRedisConnection } from "../queues/redis.js";
 import { QUEUE_NAMES } from "../queues/names.js";
@@ -20,6 +20,7 @@ async function main() {
   await ensureStorageLayout(storagePaths);
 
   const prisma = createPrismaClient();
+  await initializePrismaClient(prisma);
   const connection = createRedisConnection(config.REDIS_URL);
   const queues = createQueues(config, connection);
   const logPrefix = `[worker:${process.pid}]`;

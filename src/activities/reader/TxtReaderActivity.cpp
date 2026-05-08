@@ -24,6 +24,26 @@ constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
 constexpr uint8_t CACHE_VERSION = 2;          // Increment when cache format changes
 constexpr unsigned long skipChapterMs = 700;
 
+bool isPrevHoldPressed(const MappedInputManager& mappedInput) {
+  return mappedInput.isPressed(MappedInputManager::Button::Left) ||
+         mappedInput.isPressed(MappedInputManager::Button::PageBack);
+}
+
+bool isNextHoldPressed(const MappedInputManager& mappedInput) {
+  return mappedInput.isPressed(MappedInputManager::Button::Right) ||
+         mappedInput.isPressed(MappedInputManager::Button::PageForward);
+}
+
+bool wasPrevHoldReleased(const MappedInputManager& mappedInput) {
+  return mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+         mappedInput.wasReleased(MappedInputManager::Button::PageBack);
+}
+
+bool wasNextHoldReleased(const MappedInputManager& mappedInput) {
+  return mappedInput.wasReleased(MappedInputManager::Button::Right) ||
+         mappedInput.wasReleased(MappedInputManager::Button::PageForward);
+}
+
 RecentBook buildRecentBookEntry(const Txt& txt, const std::optional<SeriesReadingContext>& seriesContext) {
   RecentBook recent{seriesContext.has_value() ? seriesContext->seriesId : "", txt.getPath(), txt.getTitle(), "",
                     txt.getCoverBmpPath()};
@@ -115,18 +135,20 @@ void TxtReaderActivity::loop() {
       SETTINGS.longPressButtonBehavior == CrossPointSettings::LONG_PRESS_BUTTON_BEHAVIOR::CHAPTER_SKIP;
 
   if (longPressChapterSkip && totalPages > 0) {
-    if (!consumeLeftRelease && mappedInput.isPressed(MappedInputManager::Button::Left) &&
+    if (!consumeLeftRelease && !consumePageBackRelease && isPrevHoldPressed(mappedInput) &&
         mappedInput.getHeldTime() > skipChapterMs) {
       consumeLeftRelease = true;
+      consumePageBackRelease = true;
       if (currentPage != 0) {
         currentPage = 0;
         requestUpdate();
       }
       return;
     }
-    if (!consumeRightRelease && mappedInput.isPressed(MappedInputManager::Button::Right) &&
+    if (!consumeRightRelease && !consumePageForwardRelease && isNextHoldPressed(mappedInput) &&
         mappedInput.getHeldTime() > skipChapterMs) {
       consumeRightRelease = true;
+      consumePageForwardRelease = true;
       const int lastPage = totalPages - 1;
       if (currentPage != lastPage) {
         currentPage = lastPage;
@@ -136,12 +158,14 @@ void TxtReaderActivity::loop() {
     }
   }
 
-  if (consumeLeftRelease && mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+  if ((consumeLeftRelease || consumePageBackRelease) && wasPrevHoldReleased(mappedInput)) {
     consumeLeftRelease = false;
+    consumePageBackRelease = false;
     return;
   }
-  if (consumeRightRelease && mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+  if ((consumeRightRelease || consumePageForwardRelease) && wasNextHoldReleased(mappedInput)) {
     consumeRightRelease = false;
+    consumePageForwardRelease = false;
     return;
   }
 
