@@ -742,7 +742,8 @@ void FileBrowserActivity::loop() {
         if (!res.isCancelled) {
           LOG_DBG("FileBrowser", "Attempting to delete: %s", fullPath.c_str());
           clearFileMetadata(fullPath);
-          if (Storage.remove(fullPath.c_str())) {
+          const bool deleted = Storage.remove(fullPath.c_str());
+          if (deleted) {
             LOG_DBG("FileBrowser", "Deleted successfully");
             loadFiles();
             if (files.empty()) {
@@ -755,7 +756,7 @@ void FileBrowserActivity::loop() {
             loadPreviewForSelection();
             requestUpdate(true);
           } else {
-            LOG_ERR("FileBrowser", "Failed to delete file: %s", fullPath.c_str());
+            LOG_ERR("FileBrowser", "Failed to delete: %s", fullPath.c_str());
           }
         } else {
           LOG_DBG("FileBrowser", "Delete cancelled by user");
