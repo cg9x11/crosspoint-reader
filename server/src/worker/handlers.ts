@@ -411,6 +411,62 @@ export async function retryNovelPipeline(
   };
 }
 
+export async function rebuildNovelPipeline(
+  queues: AppQueues,
+  prisma: PrismaClient,
+  storagePaths: StorageLayout,
+  novelId: string
+) {
+  const novel = await prisma.novel.findUnique({
+    where: { id: novelId },
+    include: {
+      chapters: {
+        orderBy: { chapterIndex: "asc" }
+      }
+    }
+  });
+
+  if (!novel) {
+    throw new Error("Novel not found");
+  }
+
+  let chapterJobs = 0;
+  for (const chapter of novel.chapters) {
+    const htmlPath = getChapterHtmlPath(storagePaths, chapter.novelId, chapter.chapterIndex);
+    if (!(await fileExists(htmlPath))) {
+      continue;
+    }
+
+    await prisma.chapter.update({
+      where: { id: chapter.id },
+      data: {
+        status: "queued_build",
+        lastError: null
+      }
+    });
+
+    await enqueueChapterBuild(queues, {
+      novelId: chapter.novelId,
+      chapterId: chapter.id
+    });
+    chapterJobs += 1;
+  }
+
+  await prisma.novel.update({
+    where: { id: novelId },
+    data: {
+      syncStatus: chapterJobs > 0 ? "syncing" : novel.syncStatus,
+      lastError: chapterJobs > 0 ? null : novel.lastError
+    }
+  });
+
+  await updateNovelAggregateState(prisma, novelId);
+  return {
+    ok: true,
+    chapterJobs
+  };
+}
+
 export async function processNovelSyncJob(
   context: WorkerContext,
   job: Job<NovelSyncJobData>

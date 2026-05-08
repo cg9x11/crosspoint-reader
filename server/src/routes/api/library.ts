@@ -1,24 +1,27 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 
 import type { FastifyInstance } from "fastify";
-
 import { z } from "zod";
 
+import { buildBookEpub } from "../../epub/builder.js";
+import { readEpubCoverBuffer } from "../../library/cover-assets.js";
 import {
   deleteLibraryNovel,
   getChapterHtmlPath,
   getCachedCoverPngPath,
   getLibraryNovel,
-  getPublishedCoverBmpPath,
   getPublishedChapterPath,
+  getPublishedCoverBmpPath,
   listLibraryNovels,
   purgeLibraryNovelArtifacts,
   upsertNovelFromSourceDetail
 } from "../../library/service.js";
-import { fileExists, formatChapterFilename } from "../../lib/filesystem.js";
+import { fileExists, formatChapterFilename, sanitizeFileSegment } from "../../lib/filesystem.js";
 import { getSourceDetail } from "../../plugins/service.js";
 import { isVbookUpstreamBlockedError } from "../../plugins/vbook/runtime.js";
 import {
+  rebuildNovelPipeline,
   removeNovelQueueJobs,
   retryChapterPipeline,
   retryNovelPipeline,
@@ -82,7 +85,7 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
         ok: false,
         error: "SOURCE_UPSTREAM_BLOCKED",
         message:
-          "Nguồn đang chặn truy cập chi tiết truyện từ server, nên hiện chưa thể thêm trực tiếp vào thư viện. Hãy thử lại sau."
+          "Nguon dang chan truy cap chi tiet truyen tu server, nen hien chua the them truc tiep vao thu vien. Hay thu lai sau."
       };
     }
 
@@ -141,23 +144,26 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
       return {
         ok: false,
         error: "CHAPTER_NOT_FOUND",
-        message: "Không tìm thấy chương trong thư viện."
+        message: "Khong tim thay chuong trong thu vien."
       };
     }
 
     const htmlPath = getChapterHtmlPath(app.storagePaths, chapter.novelId, chapter.chapterIndex);
-    const epubPath = getPublishedChapterPath(app.storagePaths, chapter.novelId, chapter.chapterIndex);
-    const [htmlExists, epubExists] = await Promise.all([fileExists(htmlPath), fileExists(epubPath)]);
+    const chapterPath = getPublishedChapterPath(app.storagePaths, chapter.novelId, chapter.chapterIndex);
+    const [htmlExists, chapterFileExists] = await Promise.all([
+      fileExists(htmlPath),
+      fileExists(chapterPath)
+    ]);
 
     if (chapter.status !== "published") {
       reply.code(409);
       return {
         ok: false,
         error: "CHAPTER_NOT_PUBLISHED",
-        message: "Chương này chưa hoàn tất publish nên chưa thể xem local.",
+        message: "Chuong nay chua hoan tat publish nen chua the xem local.",
         integrity: {
           htmlExists,
-          epubExists
+          chapterFileExists
         }
       };
     }
@@ -167,23 +173,23 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
       return {
         ok: false,
         error: "CHAPTER_HTML_MISSING",
-        message: "Không tìm thấy HTML local của chương đã tải.",
+        message: "Khong tim thay HTML local cua chuong da tai.",
         integrity: {
           htmlExists,
-          epubExists
+          chapterFileExists
         }
       };
     }
 
-    if (!epubExists) {
+    if (!chapterFileExists) {
       reply.code(409);
       return {
         ok: false,
-        error: "CHAPTER_EPUB_MISSING",
-        message: "Chương đã đánh dấu publish nhưng file EPUB đang thiếu.",
+        error: "CHAPTER_FILE_MISSING",
+        message: "Chuong da publish nhung file local dang thieu.",
         integrity: {
           htmlExists,
-          epubExists
+          chapterFileExists
         }
       };
     }
@@ -205,10 +211,10 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
         checksum: chapter.checksum,
         publishedAt: chapter.publishedAt?.toISOString() ?? null,
         updatedAt: chapter.updatedAt.toISOString(),
-        epubUrl: `/opds/download/${encodeURIComponent(chapter.novelId)}/${formatChapterFilename(chapter.chapterIndex, 3)}`,
+        chapterUrl: `/opds/download/${encodeURIComponent(chapter.novelId)}/${formatChapterFilename(chapter.chapterIndex, 3)}`,
         integrity: {
           htmlExists,
-          epubExists
+          chapterFileExists
         }
       }
     };
@@ -225,6 +231,11 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
     return retryNovelPipeline(app.queues, app.prisma, app.storagePaths, params.novelId);
   });
 
+  app.post("/api/library/novels/:novelId/rebuild", async (request) => {
+    const params = z.object({ novelId: z.string().min(1) }).parse(request.params);
+    return rebuildNovelPipeline(app.queues, app.prisma, app.storagePaths, params.novelId);
+  });
+
   app.post("/api/library/novels/:novelId/chapters/:chapterId/retry", async (request) => {
     const params = z
       .object({
@@ -233,6 +244,81 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
       })
       .parse(request.params);
     return retryChapterPipeline(app.queues, app.prisma, app.storagePaths, params.novelId, params.chapterId);
+  });
+
+  app.get("/api/library/novels/:novelId/export.epub", async (request, reply) => {
+    const params = z.object({ novelId: z.string().min(1) }).parse(request.params);
+    const novel = await app.prisma.novel.findUnique({
+      where: { id: params.novelId },
+      include: {
+        chapters: {
+          where: { status: "published" },
+          orderBy: { chapterIndex: "asc" }
+        }
+      }
+    });
+
+    if (!novel) {
+      reply.code(404);
+      return {
+        ok: false,
+        error: "NOVEL_NOT_FOUND"
+      };
+    }
+
+    if (!novel.chapters.length) {
+      reply.code(409);
+      return {
+        ok: false,
+        error: "NO_PUBLISHED_CHAPTERS",
+        message: "Truyen chua co chuong nao da tai de xuat EPUB."
+      };
+    }
+
+    const chapterPayload = await Promise.all(
+      novel.chapters.map(async (chapter) => {
+        const htmlPath = getChapterHtmlPath(app.storagePaths, chapter.novelId, chapter.chapterIndex);
+        return {
+          title: chapter.title,
+          sourceUrl: chapter.sourceUrl,
+          contentHtml: await fs.readFile(htmlPath, "utf8")
+        };
+      })
+    );
+
+    const coverImage = await readEpubCoverBuffer(app.storagePaths, novel.id);
+    const outputPath = path.join(
+      app.storagePaths.tempEpubBuildDir,
+      "exports",
+      `${novel.id}-${Date.now()}.epub`
+    );
+
+    await buildBookEpub({
+      outputPath,
+      identifier: `${novel.sourceId}:${novel.id}:full`,
+      title: novel.title,
+      author: novel.author,
+      description: novel.description,
+      coverImage: coverImage
+        ? {
+            buffer: coverImage.buffer,
+            mediaType: coverImage.mediaType,
+            fileName: "images/cover.png"
+          }
+        : null,
+      chapters: chapterPayload
+    });
+
+    const fileName = `${sanitizeFileSegment(novel.title)}.epub`;
+
+    try {
+      const file = await fs.readFile(outputPath);
+      reply.header("Content-Disposition", `attachment; filename="${fileName}"`);
+      reply.type("application/epub+zip");
+      return file;
+    } finally {
+      await fs.rm(outputPath, { force: true }).catch(() => undefined);
+    }
   });
 
   app.delete("/api/library/novels/:novelId", async (request, reply) => {

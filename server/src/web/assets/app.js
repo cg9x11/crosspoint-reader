@@ -1725,6 +1725,14 @@
       $id("btn-download-all").disabled = false;
       $id("btn-download-all").textContent = "↻ Đồng bộ lại";
     }
+    if ($id("btn-rebuild-library")) {
+      $id("btn-rebuild-library").disabled = false;
+      $id("btn-rebuild-library").textContent = "↻ Rebuild local files";
+    }
+    if ($id("btn-export-epub")) {
+      $id("btn-export-epub").disabled = false;
+      $id("btn-export-epub").textContent = "⇩ Xuất EPUB tổng hợp";
+    }
     $id("chapter-list").innerHTML = `
       <div class="chapter-row"><span class="ch-title">Đang tải chương…</span></div>
     `;
@@ -1771,6 +1779,8 @@
     const chapterList = $id("chapter-list");
     const addButton = $id("btn-add-library");
     const syncButton = $id("btn-download-all");
+    const rebuildButton = $id("btn-rebuild-library");
+    const exportButton = $id("btn-export-epub");
     const removeLibraryButton = $id("btn-remove-library");
     const openLibraryButton = $id("btn-in-library");
     const sourceBlocked = Boolean(detail.upstreamBlocked);
@@ -1839,10 +1849,14 @@
 
     addButton.style.display = detail.libraryItem ? "none" : "block";
     syncButton.style.display = detail.libraryItem ? "block" : "none";
+    rebuildButton.style.display = detail.libraryItem ? "block" : "none";
+    exportButton.style.display = detail.libraryItem ? "block" : "none";
     removeLibraryButton.style.display = detail.libraryItem ? "block" : "none";
     openLibraryButton.style.display = detail.libraryItem && detail.kind !== "library" ? "block" : "none";
     addButton.disabled = sourceBlocked;
     syncButton.disabled = sourceBlocked;
+    rebuildButton.disabled = !detail.libraryItem;
+    exportButton.disabled = !detail.libraryItem || !Number(detail.libraryItem?.downloadedChapters);
 
     syncButton.textContent =
       sourceBlocked
@@ -1850,6 +1864,8 @@
         : detail.libraryItem?.syncStatus === "error"
           ? "↻ Thử lại đồng bộ"
           : "↻ Đồng bộ lại";
+    rebuildButton.textContent = "↻ Rebuild local files";
+    exportButton.textContent = "⇩ Xuất EPUB tổng hợp";
     addButton.textContent = sourceBlocked ? "Nguồn đang chặn" : "+ Thêm vào thư viện";
     openLibraryButton.textContent = detail.kind === "library" ? "✓ Đã trong thư viện" : "✓ Mở trong thư viện";
 
@@ -3021,6 +3037,35 @@
     showToast("↻", "Đã xếp hàng đồng bộ", libraryItem.title);
   }
 
+  async function rebuildCurrentDetail() {
+    const libraryItem = state.detailPayload?.libraryItem || getLibraryById(state.detailLibraryId);
+    if (!libraryItem?.id) {
+      return;
+    }
+
+    await apiJson(`/api/library/novels/${encodeURIComponent(libraryItem.id)}/rebuild`, {
+      method: "POST"
+    });
+
+    state.libraryLoaded = false;
+    state.tasksLoaded = false;
+    await Promise.all([loadLibrary(true), loadTasks(true).catch(() => []), refreshActiveDetailView()]);
+    showToast("↻", "Đã xếp hàng rebuild", libraryItem.title);
+  }
+
+  function exportCurrentDetailEpub() {
+    const libraryItem = state.detailPayload?.libraryItem || getLibraryById(state.detailLibraryId);
+    if (!libraryItem?.id) {
+      return;
+    }
+
+    window.open(
+      `/api/library/novels/${encodeURIComponent(libraryItem.id)}/export.epub`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }
+
   async function refreshActiveDetailView() {
     if (!state.detailPayload) {
       return;
@@ -3054,8 +3099,8 @@
       if (preview.sourceUrl) {
         footerButtons.push(`<button class="btn-ghost" type="button" id="chapter-preview-source">Mở nguồn</button>`);
       }
-      if (preview.epubUrl) {
-        footerButtons.push(`<button class="btn-primary" type="button" id="chapter-preview-epub">Mở EPUB</button>`);
+      if (preview.chapterUrl) {
+        footerButtons.push(`<button class="btn-primary" type="button" id="chapter-preview-file">Mở file local</button>`);
       }
 
       showDynamicModal({
@@ -3092,8 +3137,8 @@
       $id("chapter-preview-source")?.addEventListener("click", () => {
         window.open(preview.sourceUrl, "_blank", "noopener,noreferrer");
       });
-      $id("chapter-preview-epub")?.addEventListener("click", () => {
-        window.open(preview.epubUrl, "_blank", "noopener,noreferrer");
+      $id("chapter-preview-file")?.addEventListener("click", () => {
+        window.open(preview.chapterUrl, "_blank", "noopener,noreferrer");
       });
       $("#chapter-preview-html")
         ?.querySelectorAll("a[href]")
@@ -3424,6 +3469,20 @@
       void syncCurrentDetail().catch((error) => {
         showToast("!", "Không đẩy được tác vụ", error.message);
       });
+    });
+
+    $id("btn-rebuild-library")?.addEventListener("click", () => {
+      void rebuildCurrentDetail().catch((error) => {
+        showToast("!", "Không xếp hàng rebuild được", error.message);
+      });
+    });
+
+    $id("btn-export-epub")?.addEventListener("click", () => {
+      try {
+        exportCurrentDetailEpub();
+      } catch (error) {
+        showToast("!", "Không xuất được EPUB", error.message);
+      }
     });
 
     $id("btn-remove-library")?.addEventListener("click", () => {

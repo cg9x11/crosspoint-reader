@@ -473,8 +473,8 @@ void OpdsBookBrowserActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
     if (!searchTemplate.empty() && selectorIndex == 0) {
       launchSearch();
+      return;
     }
-    return;
   }
 
   if (entries.empty()) {
