@@ -54,9 +54,13 @@ export function sanitizeFileSegment(value: string) {
   return safe.length > 0 ? safe : "item";
 }
 
-export function formatChapterFilename(chapterIndex: number, minWidth = 3) {
+export function formatChapterStem(chapterIndex: number, minWidth = 3) {
   const width = Math.max(minWidth, String(chapterIndex).length);
-  return `ch_${String(chapterIndex).padStart(width, "0")}.epub`;
+  return `ch_${String(chapterIndex).padStart(width, "0")}`;
+}
+
+export function formatChapterFilename(chapterIndex: number, minWidth = 3) {
+  return `${formatChapterStem(chapterIndex, minWidth)}.txt`;
 }
 
 export function sha256Hex(input: Buffer | string) {

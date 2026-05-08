@@ -6,10 +6,8 @@ import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 
 import type { AppConfig } from "../config/env.js";
-import { buildChapterEpub } from "../epub/builder.js";
 import {
   getNovelCoverAssets,
-  readEpubCoverBuffer,
   syncNovelCoverAssets
 } from "../library/cover-assets.js";
 import {
@@ -21,8 +19,8 @@ import {
   getPublishedSeriesDir,
   updateNovelAggregateState
 } from "../library/service.js";
-import { ensureDir, fileExists, readJsonFile, writeJsonFileAtomic } from "../lib/filesystem.js";
-import { sanitizeHtmlFragment } from "../lib/sanitize.js";
+import { ensureDir, fileExists, readJsonFile, sha256Hex, writeFileAtomic, writeJsonFileAtomic } from "../lib/filesystem.js";
+import { sanitizeHtmlFragment, stripHtmlToReadableText } from "../lib/sanitize.js";
 import { getSourceHandler, listSources } from "../plugins/service.js";
 import type { ChapterBuildJobData, ChapterFetchJobData, NovelSyncJobData } from "../queues/jobs.js";
 import type { AppQueues } from "../queues/index.js";
@@ -717,41 +715,14 @@ export async function processChapterBuildJob(
     const tempPath = path.join(
       context.storagePaths.tempEpubBuildDir,
       chapter.novelId,
-      `${chapter.id}.epub`
+      `${chapter.id}.txt`
     );
     const targetPath = getPublishedChapterPath(context.storagePaths, chapter.novelId, chapter.chapterIndex);
-    let coverImage = await readEpubCoverBuffer(context.storagePaths, chapter.novelId);
-    if (!coverImage && chapter.novel.coverUrl) {
-      try {
-        await syncNovelCoverAssets(context.prisma, context.storagePaths, {
-          id: chapter.novelId,
-          coverUrl: chapter.novel.coverUrl
-        });
-        coverImage = await readEpubCoverBuffer(context.storagePaths, chapter.novelId);
-      } catch (error) {
-        console.warn("Failed to refresh EPUB cover asset", {
-          novelId: chapter.novelId,
-          message: error instanceof Error ? error.message : String(error)
-        });
-      }
-    }
 
     await ensureDir(path.dirname(tempPath));
-    const buildResult = await buildChapterEpub({
-      outputPath: tempPath,
-      identifier: `${chapter.novelId}:${chapter.chapterIndex}`,
-      title: chapter.title,
-      author: chapter.novel.author,
-      contentHtml: html,
-      sourceUrl: chapter.sourceUrl,
-      coverImage: coverImage
-        ? {
-            buffer: coverImage.buffer,
-            mediaType: coverImage.mediaType,
-            fileName: "images/cover.png"
-          }
-        : null
-    });
+    const chapterText = stripHtmlToReadableText(`<h1>${chapter.title}</h1>\n${html}`);
+    const chapterBuffer = Buffer.from(`${chapterText}\n`, "utf8");
+    await writeFileAtomic(tempPath, chapterBuffer);
 
     await moveFile(tempPath, targetPath);
 
@@ -762,8 +733,8 @@ export async function processChapterBuildJob(
         data: {
           status: "published",
           epubPath,
-          fileSize: buildResult.fileSize,
-          checksum: buildResult.checksum,
+          fileSize: chapterBuffer.byteLength,
+          checksum: sha256Hex(chapterBuffer),
           publishedAt: new Date(),
           lastError: null
         }

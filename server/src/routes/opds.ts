@@ -18,7 +18,7 @@ function absoluteUrl(baseUrl: string, routePath: string) {
 }
 
 function chapterFilename(chapterIndex: number) {
-  return `ch_${String(chapterIndex).padStart(3, "0")}.epub`;
+  return `ch_${String(chapterIndex).padStart(3, "0")}.txt`;
 }
 
 function parseChapterIndex(input: string) {
@@ -26,7 +26,7 @@ function parseChapterIndex(input: string) {
     return Number(input);
   }
 
-  const match = /^ch_(\d+)\.epub$/i.exec(input);
+  const match = /^ch_(\d+)\.(txt|epub)$/i.exec(input);
   return match ? Number(match[1]) : 0;
 }
 
@@ -191,7 +191,7 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
           {
             href: absoluteUrl(baseUrl, `/opds/download/${novelId}/${chapterFilename(chapter.chapterIndex)}`),
             rel: "http://opds-spec.org/acquisition",
-            type: "application/epub+zip"
+            type: "text/plain; charset=utf-8"
           }
         ]
       }))
@@ -262,7 +262,11 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
     try {
       const file = await fs.readFile(filePath);
       reply.header("Content-Disposition", `attachment; filename="${path.basename(filePath)}"`);
-      reply.type("application/epub+zip");
+      if (filePath.toLowerCase().endsWith(".txt")) {
+        reply.type("text/plain; charset=utf-8");
+      } else {
+        reply.type("application/epub+zip");
+      }
       return file;
     } catch {
       reply.code(404);

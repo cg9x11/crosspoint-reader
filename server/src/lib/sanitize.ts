@@ -48,3 +48,22 @@ export function stripHtmlToText(html: string) {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+export function stripHtmlToReadableText(html: string) {
+  const normalizedHtml = html
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\s*hr\s*\/?\s*>/gi, "\n\n")
+    .replace(/<\s*li\b[^>]*>/gi, "\n- ")
+    .replace(/<\/\s*(p|div|section|article|blockquote|h1|h2|h3|h4|h5|h6|ul|ol|pre)\s*>/gi, "\n\n");
+
+  return sanitizeHtml(normalizedHtml, {
+    allowedTags: [],
+    allowedAttributes: {}
+  })
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}

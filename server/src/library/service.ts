@@ -3,12 +3,12 @@ import path from "node:path";
 
 import type { PrismaClient, Novel } from "@prisma/client";
 
-import { formatChapterFilename } from "../lib/filesystem.js";
+import { formatChapterFilename, formatChapterStem } from "../lib/filesystem.js";
 import type { SourceDetailPayload } from "../plugins/types.js";
 import type { StorageLayout } from "../storage/paths.js";
 
 export function getChapterHtmlPath(storagePaths: StorageLayout, novelId: string, chapterIndex: number) {
-  return path.join(storagePaths.cacheTextDir, novelId, `${formatChapterFilename(chapterIndex, 3)}.html`);
+  return path.join(storagePaths.cacheTextDir, novelId, `${formatChapterStem(chapterIndex, 3)}.html`);
 }
 
 export function getPublishedSeriesDir(storagePaths: StorageLayout, novelId: string) {
