@@ -108,6 +108,28 @@ std::string buildPreviewCachePath(const OpdsEntry& entry) {
   return "/.crosspoint/opds/" + std::to_string(hash) + ".bmp";
 }
 
+void drawBitmapCoverFill(GfxRenderer& renderer, const Bitmap& bitmap, const int x, const int y, const int width,
+                         const int height) {
+  if (bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0 || width <= 0 || height <= 0) {
+    return;
+  }
+
+  const float bitmapAspect = static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
+  const float targetAspect = static_cast<float>(width) / static_cast<float>(height);
+  float cropX = 0.0f;
+  float cropY = 0.0f;
+
+  if (bitmapAspect > targetAspect) {
+    const float targetWidth = static_cast<float>(bitmap.getHeight()) * targetAspect;
+    cropX = 1.0f - (targetWidth / static_cast<float>(bitmap.getWidth()));
+  } else if (bitmapAspect < targetAspect) {
+    const float targetHeight = static_cast<float>(bitmap.getWidth()) / targetAspect;
+    cropY = 1.0f - (targetHeight / static_cast<float>(bitmap.getHeight()));
+  }
+
+  renderer.drawBitmap(bitmap, x, y, width, height, cropX, cropY);
+}
+
 std::string findSeriesDirectoryBySeriesId(const std::string& seriesId) {
   if (seriesId.empty()) {
     return "";
@@ -426,7 +448,7 @@ void OpdsBookBrowserActivity::drawPreviewPanel(const Rect& rect, const PreviewDa
     if (Storage.openFileForRead("OPDS", preview.coverBmpPath, file)) {
       Bitmap bitmap(file);
       if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-        renderer.drawBitmap(bitmap, coverX, coverY, coverWidth, coverHeight);
+        drawBitmapCoverFill(renderer, bitmap, coverX, coverY, coverWidth, coverHeight);
         coverDrawn = true;
       }
       file.close();

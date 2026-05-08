@@ -31,7 +31,9 @@ class HomeActivity final : public Activity {
   bool isContinueReadingMenuEnabled() const;
   int getContinueReadingSelectorCount() const;
   int getMenuSelectionOffset() const;
+  int getMenuActionSelectionOffset() const;
   int getMenuItemCount() const;
+  std::string getOpdsMenuLabel() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image
   bool restoreCoverBuffer();  // Restore frame buffer from stored cover
   void freeCoverBuffer();     // Free the stored cover buffer

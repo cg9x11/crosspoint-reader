@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { resolvePublicBaseUrl } from "../lib/requestBaseUrl.js";
 import { buildOpdsFeed } from "../opds/feed.js";
 import {
   getPublishedChapterPath,
@@ -50,28 +51,29 @@ function repairSeriesManifestPayload(payload: unknown, hasCoverBmp: boolean) {
 }
 
 export async function registerOpdsRoutes(app: FastifyInstance) {
-  app.get("/opds", async (_, reply) => {
+  app.get("/opds", async (request, reply) => {
+    const baseUrl = resolvePublicBaseUrl(request, app.appConfig.APP_BASE_URL);
     const updatedAt = new Date().toISOString();
     const feed = buildOpdsFeed({
-      id: absoluteUrl(app.appConfig.APP_BASE_URL, "/opds"),
+      id: absoluteUrl(baseUrl, "/opds"),
       title: "CrossPoint Reader OPDS",
       updatedAt,
       links: [
         {
-          href: absoluteUrl(app.appConfig.APP_BASE_URL, "/opds"),
+          href: absoluteUrl(baseUrl, "/opds"),
           rel: "self",
           type: "application/atom+xml;profile=opds-catalog;kind=navigation"
         }
       ],
       entries: [
         {
-          id: absoluteUrl(app.appConfig.APP_BASE_URL, "/opds/library"),
+          id: absoluteUrl(baseUrl, "/opds/library"),
           title: "Thu vien",
           updatedAt,
           summary: "Danh sach series da publish",
           links: [
             {
-              href: absoluteUrl(app.appConfig.APP_BASE_URL, "/opds/library"),
+              href: absoluteUrl(baseUrl, "/opds/library"),
               type: "application/atom+xml;profile=opds-catalog;kind=navigation"
             }
           ]
@@ -83,7 +85,8 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
     return feed;
   });
 
-  app.get("/opds/library", async (_, reply) => {
+  app.get("/opds/library", async (request, reply) => {
+    const baseUrl = resolvePublicBaseUrl(request, app.appConfig.APP_BASE_URL);
     const novels = await app.prisma.novel.findMany({
       where: {
         chapters: {
@@ -96,17 +99,17 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
     });
 
     const feed = buildOpdsFeed({
-      id: absoluteUrl(app.appConfig.APP_BASE_URL, "/opds/library"),
+      id: absoluteUrl(baseUrl, "/opds/library"),
       title: "Thu vien OPDS",
       updatedAt: new Date().toISOString(),
       links: [
         {
-          href: absoluteUrl(app.appConfig.APP_BASE_URL, "/opds/library"),
+          href: absoluteUrl(baseUrl, "/opds/library"),
           rel: "self",
           type: "application/atom+xml;profile=opds-catalog;kind=navigation"
         },
         {
-          href: absoluteUrl(app.appConfig.APP_BASE_URL, "/opds"),
+          href: absoluteUrl(baseUrl, "/opds"),
           rel: "start",
           type: "application/atom+xml;profile=opds-catalog;kind=navigation"
         }
@@ -119,18 +122,18 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
         author: novel.author ?? undefined,
         links: [
           {
-            href: absoluteUrl(app.appConfig.APP_BASE_URL, `/opds/series/${novel.id}`),
+            href: absoluteUrl(baseUrl, `/opds/series/${novel.id}`),
             type: "application/atom+xml;profile=opds-catalog;kind=acquisition"
           },
           ...(novel.coverLocalPath
             ? [
                 {
-                  href: absoluteUrl(app.appConfig.APP_BASE_URL, buildCoverDownloadPath(novel.id)),
+                  href: absoluteUrl(baseUrl, buildCoverDownloadPath(novel.id)),
                   rel: "http://opds-spec.org/image",
                   type: "image/bmp"
                 },
                 {
-                  href: absoluteUrl(app.appConfig.APP_BASE_URL, buildCoverDownloadPath(novel.id)),
+                  href: absoluteUrl(baseUrl, buildCoverDownloadPath(novel.id)),
                   rel: "http://opds-spec.org/image/thumbnail",
                   type: "image/bmp"
                 }
@@ -145,6 +148,7 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
   });
 
   app.get("/opds/series/:novelId", async (request, reply) => {
+    const baseUrl = resolvePublicBaseUrl(request, app.appConfig.APP_BASE_URL);
     const novelId = (request.params as { novelId: string }).novelId;
     const novel = await app.prisma.novel.findUnique({
       where: { id: novelId },
@@ -162,17 +166,17 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
     }
 
     const feed = buildOpdsFeed({
-      id: absoluteUrl(app.appConfig.APP_BASE_URL, `/opds/series/${novelId}`),
+      id: absoluteUrl(baseUrl, `/opds/series/${novelId}`),
       title: novel.title,
       updatedAt: novel.updatedAt.toISOString(),
       links: [
         {
-          href: absoluteUrl(app.appConfig.APP_BASE_URL, `/opds/series/${novelId}`),
+          href: absoluteUrl(baseUrl, `/opds/series/${novelId}`),
           rel: "self",
           type: "application/atom+xml;profile=opds-catalog;kind=acquisition"
         },
         {
-          href: absoluteUrl(app.appConfig.APP_BASE_URL, "/opds/library"),
+          href: absoluteUrl(baseUrl, "/opds/library"),
           rel: "start",
           type: "application/atom+xml;profile=opds-catalog;kind=navigation"
         }
@@ -185,10 +189,7 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
         author: novel.author ?? undefined,
         links: [
           {
-            href: absoluteUrl(
-              app.appConfig.APP_BASE_URL,
-              `/opds/download/${novelId}/${chapterFilename(chapter.chapterIndex)}`
-            ),
+            href: absoluteUrl(baseUrl, `/opds/download/${novelId}/${chapterFilename(chapter.chapterIndex)}`),
             rel: "http://opds-spec.org/acquisition",
             type: "application/epub+zip"
           }

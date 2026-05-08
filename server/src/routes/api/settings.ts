@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { isHiddenAppSettingKey } from "../../lib/adminAuth.js";
+import { resolvePublicBaseUrl } from "../../lib/requestBaseUrl.js";
 import { resolveSourcePolicy, updateSourcePolicy } from "../../lib/sourcePolicy.js";
 
 const patchSettingsSchema = z.object({
@@ -85,7 +86,7 @@ export async function registerSettingsApiRoutes(app: FastifyInstance) {
     return updateSourcePolicy(app.prisma, body, app.appConfig);
   });
 
-  app.get("/api/settings/system", async () => {
+  app.get("/api/settings/system", async (request) => {
     const roleMeta = buildRoleMeta(app.appConfig.APP_ROLE);
     const sourcePolicy = await resolveSourcePolicy(app.prisma, app.appConfig);
 
@@ -93,7 +94,7 @@ export async function registerSettingsApiRoutes(app: FastifyInstance) {
       role: app.appConfig.APP_ROLE,
       ...roleMeta,
       nodeEnv: app.appConfig.NODE_ENV,
-      baseUrl: app.appConfig.APP_BASE_URL,
+      baseUrl: resolvePublicBaseUrl(request, app.appConfig.APP_BASE_URL),
       redisUrl: app.appConfig.REDIS_URL,
       syncCron: app.appConfig.SYNC_CRON,
       puppeteer: {

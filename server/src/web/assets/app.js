@@ -1003,6 +1003,13 @@
     }
   }
 
+  function submitBrowseSearch() {
+    const input = $id("browse-search");
+    state.searchQuery = input?.value ?? "";
+    syncBrowseSearchUi();
+    void refreshBrowseContent({ append: false });
+  }
+
   function ensureServerSectionBar() {
     if ($id("server-section-bar")) {
       return;
@@ -3382,11 +3389,15 @@
     searchInput?.addEventListener("input", () => {
       state.searchQuery = searchInput.value;
       syncBrowseSearchUi();
-      clearTimeout(state.searchTimer);
-      state.searchTimer = setTimeout(() => {
-        void refreshBrowseContent({ append: false });
-      }, 250);
     });
+    searchInput?.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") {
+        return;
+      }
+      event.preventDefault();
+      submitBrowseSearch();
+    });
+    $id("browse-search-submit")?.addEventListener("click", () => submitBrowseSearch());
 
     $id("search-clear")?.addEventListener("click", () => {
       resetBrowseState();

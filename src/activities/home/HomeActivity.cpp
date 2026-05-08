@@ -20,17 +20,6 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-namespace {
-bool containsNonAscii(const std::string& text) {
-  for (unsigned char ch : text) {
-    if (ch >= 0x80) {
-      return true;
-    }
-  }
-  return false;
-}
-}
-
 bool HomeActivity::hasStandaloneContinueReadingTile() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   return !metrics.homeContinueReadingInMenu && !recentBooks.empty();
@@ -47,6 +36,8 @@ int HomeActivity::getContinueReadingSelectorCount() const {
 
 int HomeActivity::getMenuSelectionOffset() const { return hasStandaloneContinueReadingTile() ? 1 : 0; }
 
+int HomeActivity::getMenuActionSelectionOffset() const { return getContinueReadingSelectorCount(); }
+
 int HomeActivity::getMenuItemCount() const {
   int count = 4;  // File Browser, Recents, File transfer, Settings
   count += getContinueReadingSelectorCount();
@@ -54,6 +45,14 @@ int HomeActivity::getMenuItemCount() const {
     count++;
   }
   return count;
+}
+
+std::string HomeActivity::getOpdsMenuLabel() const {
+  const auto& servers = OPDS_STORE.getServers();
+  if (servers.size() == 1 && !servers[0].name.empty()) {
+    return servers[0].name;
+  }
+  return tr(STR_OPDS_BROWSER);
 }
 
 void HomeActivity::loadRecentBooks(int maxBooks) {
@@ -65,11 +64,6 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
     // Limit to maximum number of recent books
     if (recentBooks.size() >= maxBooks) {
       break;
-    }
-
-    if (containsNonAscii(book.path) || containsNonAscii(book.coverBmpPath)) {
-      LOG_ERR("HOME", "Skipping recent item with unsafe path: %s", book.path.c_str());
-      continue;
     }
 
     // Skip if file no longer exists
@@ -208,7 +202,7 @@ void HomeActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     // Calculate dynamic indices based on which options are available
     int idx = 0;
-    const int menuSelectedIndex = selectorIndex - getMenuSelectionOffset();
+    const int menuSelectedIndex = selectorIndex - getMenuActionSelectionOffset();
     const int fileBrowserIdx = idx++;
     const int recentsIdx = idx++;
     const int opdsLibraryIdx = hasOpdsServers ? idx++ : -1;
@@ -270,12 +264,13 @@ void HomeActivity::render(RenderLock&&) {
                           std::bind(&HomeActivity::storeCoverBuffer, this));
 
   // Build menu items dynamically
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
+  const std::string opdsMenuLabel = getOpdsMenuLabel();
+  std::vector<std::string> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
                                         tr(STR_SETTINGS_TITLE)};
   std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings};
 
   if (hasOpdsServers) {
-    menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
+    menuItems.insert(menuItems.begin() + 2, opdsMenuLabel);
     menuIcons.insert(menuIcons.begin() + 2, Library);
   }
 
@@ -292,7 +287,7 @@ void HomeActivity::render(RenderLock&&) {
                          metrics.homeMenuTopOffset + metrics.buttonHintsHeight)},
       static_cast<int>(menuItems.size()),
       selectorIndex - menuSelectionOffset,
-      [&menuItems](int index) { return std::string(menuItems[index]); },
+      [&menuItems](int index) { return menuItems[index]; },
       [&menuIcons](int index) { return menuIcons[index]; });
 
   const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));

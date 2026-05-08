@@ -23,7 +23,7 @@
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
 constexpr const char* SERIES_VALUE = "SER";
-constexpr int PREVIEW_COVER_HEIGHT = 120;
+constexpr int PREVIEW_COVER_HEIGHT = 200;
 constexpr const char* NO_DESCRIPTION_TEXT = "No description";
 constexpr const char* CURRENT_READING_TEXT = "Current";
 
@@ -208,6 +208,61 @@ bool loadEpubForPreview(Epub& epub) {
   // Preview should still work for first-time selections that have no cache yet.
   return epub.load(true, true);
 }
+
+std::string preparePreviewEpubThumb(Epub& epub, const int thumbHeight) {
+  if (epub.generateThumbBmp(thumbHeight)) {
+    return epub.getThumbBmpPath(thumbHeight);
+  }
+  return epub.getThumbBmpPath();
+}
+
+std::string preparePreviewXtcThumb(Xtc& xtc, const int thumbHeight) {
+  if (xtc.generateThumbBmp(thumbHeight)) {
+    return xtc.getThumbBmpPath(thumbHeight);
+  }
+  return xtc.getThumbBmpPath();
+}
+
+std::string resolvePreviewCoverPath(const std::string& coverBmpPath, const int thumbHeight) {
+  if (coverBmpPath.empty()) {
+    return "";
+  }
+
+  const std::string thumbPath = UITheme::getCoverThumbPath(coverBmpPath, thumbHeight);
+  if (Storage.exists(thumbPath.c_str())) {
+    return thumbPath;
+  }
+  if (Storage.exists(coverBmpPath.c_str())) {
+    return coverBmpPath;
+  }
+  return "";
+}
+
+bool hasPreviewCoverBitmap(const std::string& coverBmpPath, const int thumbHeight) {
+  return !resolvePreviewCoverPath(coverBmpPath, thumbHeight).empty();
+}
+
+void drawBitmapCoverFill(GfxRenderer& renderer, const Bitmap& bitmap, const int x, const int y, const int width,
+                         const int height) {
+  if (bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0 || width <= 0 || height <= 0) {
+    return;
+  }
+
+  const float bitmapAspect = static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
+  const float targetAspect = static_cast<float>(width) / static_cast<float>(height);
+  float cropX = 0.0f;
+  float cropY = 0.0f;
+
+  if (bitmapAspect > targetAspect) {
+    const float targetWidth = static_cast<float>(bitmap.getHeight()) * targetAspect;
+    cropX = 1.0f - (targetWidth / static_cast<float>(bitmap.getWidth()));
+  } else if (bitmapAspect < targetAspect) {
+    const float targetHeight = static_cast<float>(bitmap.getWidth()) / targetAspect;
+    cropY = 1.0f - (targetHeight / static_cast<float>(bitmap.getHeight()));
+  }
+
+  renderer.drawBitmap(bitmap, x, y, width, height, cropX, cropY);
+}
 }  // namespace
 
 const RecentBook* FileBrowserActivity::findRecentBookForPath(const std::string& path, const std::string& seriesId) const {
@@ -306,14 +361,10 @@ void FileBrowserActivity::loadSeriesPreview(const FileBrowserEntry& entry, Previ
     preview.coverBmpPath = recent->coverBmpPath;
   }
 
-  if (preview.coverBmpPath.empty() && Storage.exists(entry.resumePath.c_str())) {
+  if (!hasPreviewCoverBitmap(preview.coverBmpPath, PREVIEW_COVER_HEIGHT) && Storage.exists(entry.resumePath.c_str())) {
     Epub epub(entry.resumePath, "/.crosspoint");
     if (loadEpubForPreview(epub)) {
-      preview.coverBmpPath = epub.getThumbBmpPath();
-      const std::string thumbPath = UITheme::getCoverThumbPath(preview.coverBmpPath, PREVIEW_COVER_HEIGHT);
-      if (!Storage.exists(thumbPath.c_str())) {
-        epub.generateThumbBmp(PREVIEW_COVER_HEIGHT);
-      }
+      preview.coverBmpPath = preparePreviewEpubThumb(epub, PREVIEW_COVER_HEIGHT);
     }
   }
 
@@ -336,32 +387,47 @@ void FileBrowserActivity::loadFilePreview(const FileBrowserEntry& entry, const s
 
   std::string_view filename{entry.rawName};
   const RecentBook* recent = findRecentBookForPath(fullPath);
+  if (recent) {
+    if (!recent->title.empty()) {
+      preview.title = recent->title;
+    }
+    preview.author = recent->author;
+    preview.coverBmpPath = recent->coverBmpPath;
+  }
 
   if (FsHelpers::hasEpubExtension(filename)) {
-    Epub epub(fullPath, "/.crosspoint");
-    if (loadEpubForPreview(epub)) {
-      preview.title = epub.getTitle().empty() ? entry.title : epub.getTitle();
-      preview.author = epub.getAuthor();
-      preview.coverBmpPath = epub.getThumbBmpPath();
-      const std::string thumbPath = UITheme::getCoverThumbPath(preview.coverBmpPath, PREVIEW_COVER_HEIGHT);
-      if (!preview.coverBmpPath.empty() && !Storage.exists(thumbPath.c_str())) {
-        epub.generateThumbBmp(PREVIEW_COVER_HEIGHT);
-      }
-      if (epub.getTocItemsCount() > 0) {
-        preview.summary = epub.getTocItem(0).title;
+    const bool shouldLoadMetadata =
+        preview.title == entry.title || preview.author.empty() || !hasPreviewCoverBitmap(preview.coverBmpPath, PREVIEW_COVER_HEIGHT);
+    if (shouldLoadMetadata) {
+      Epub epub(fullPath, "/.crosspoint");
+      if (loadEpubForPreview(epub)) {
+        preview.title = epub.getTitle().empty() ? preview.title : epub.getTitle();
+        if (preview.author.empty()) {
+          preview.author = epub.getAuthor();
+        }
+        if (!hasPreviewCoverBitmap(preview.coverBmpPath, PREVIEW_COVER_HEIGHT)) {
+          preview.coverBmpPath = preparePreviewEpubThumb(epub, PREVIEW_COVER_HEIGHT);
+        }
+        if (epub.getTocItemsCount() > 0) {
+          preview.summary = epub.getTocItem(0).title;
+        }
       }
     }
   } else if (FsHelpers::hasXtcExtension(filename)) {
-    Xtc xtc(fullPath, "/.crosspoint");
-    if (xtc.load()) {
-      preview.title = xtc.getTitle().empty() ? entry.title : xtc.getTitle();
-      preview.author = xtc.getAuthor();
-      preview.coverBmpPath = xtc.getThumbBmpPath();
-      const std::string thumbPath = UITheme::getCoverThumbPath(preview.coverBmpPath, PREVIEW_COVER_HEIGHT);
-      if (!preview.coverBmpPath.empty() && !Storage.exists(thumbPath.c_str())) {
-        xtc.generateThumbBmp(PREVIEW_COVER_HEIGHT);
+    const bool shouldLoadMetadata =
+        preview.title == entry.title || preview.author.empty() || !hasPreviewCoverBitmap(preview.coverBmpPath, PREVIEW_COVER_HEIGHT);
+    if (shouldLoadMetadata) {
+      Xtc xtc(fullPath, "/.crosspoint");
+      if (xtc.load()) {
+        preview.title = xtc.getTitle().empty() ? preview.title : xtc.getTitle();
+        if (preview.author.empty()) {
+          preview.author = xtc.getAuthor();
+        }
+        if (!hasPreviewCoverBitmap(preview.coverBmpPath, PREVIEW_COVER_HEIGHT)) {
+          preview.coverBmpPath = preparePreviewXtcThumb(xtc, PREVIEW_COVER_HEIGHT);
+        }
+        preview.summary = "XTC";
       }
-      preview.summary = "XTC";
     }
   } else if (FsHelpers::hasMarkdownExtension(filename)) {
     preview.summary = "Markdown";
@@ -688,25 +754,18 @@ void FileBrowserActivity::drawPreviewPanel(const Rect& rect, const PreviewData& 
 
   bool coverDrawn = false;
   if (!preview.coverBmpPath.empty()) {
-    const std::string coverPath = UITheme::getCoverThumbPath(preview.coverBmpPath, PREVIEW_COVER_HEIGHT);
-    LOG_DBG("FBA", "Preview cover candidate: %s", coverPath.c_str());
+    const std::string coverPath = resolvePreviewCoverPath(preview.coverBmpPath, PREVIEW_COVER_HEIGHT);
     FsFile file;
-    if (Storage.openFileForRead("FBA", coverPath, file)) {
+    if (!coverPath.empty() && Storage.openFileForRead("FBA", coverPath, file)) {
       Bitmap bitmap(file);
-      const BmpReaderError parseError = bitmap.parseHeaders();
-      LOG_DBG("FBA", "Preview cover parse result: %s", Bitmap::errorToString(parseError));
-      if (parseError == BmpReaderError::Ok) {
-        renderer.drawBitmap(bitmap, coverX, coverY, coverWidth, coverHeight);
+      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+        drawBitmapCoverFill(renderer, bitmap, coverX, coverY, coverWidth, coverHeight);
         coverDrawn = true;
-        LOG_DBG("FBA", "Preview cover drawn at %d,%d size %dx%d", coverX, coverY, coverWidth, coverHeight);
       }
       file.close();
-    } else {
-      LOG_DBG("FBA", "Preview cover open failed: %s", coverPath.c_str());
     }
   }
   if (!coverDrawn) {
-    LOG_DBG("FBA", "Preview cover fallback used for %s", preview.title.c_str());
     const char* noCoverText = "No cover";
     const int noCoverWidth = renderer.getTextWidth(UI_10_FONT_ID, noCoverText);
     const int noCoverX = coverX + std::max(0, (coverWidth - noCoverWidth) / 2);
