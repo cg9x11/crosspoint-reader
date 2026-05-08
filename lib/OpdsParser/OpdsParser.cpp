@@ -8,6 +8,14 @@
 namespace {
 constexpr size_t MAX_OPDS_TEXT_LEN = 1024;
 
+bool isBookAcquisitionType(const char* type) {
+  if (!type) {
+    return false;
+  }
+  return strcmp(type, "application/epub+zip") == 0 || strncmp(type, "text/plain", 10) == 0 ||
+         strncmp(type, "text/markdown", 13) == 0;
+}
+
 void appendCapped(std::string& target, const XML_Char* s, const int len) {
   if (len <= 0 || target.size() >= MAX_OPDS_TEXT_LEN) {
     return;
@@ -122,8 +130,7 @@ void XMLCALL OpdsParser::startElement(void* userData, const XML_Char* name, cons
       }
 
       if (self->inEntry) {
-        if (rel && type && strstr(rel, "opds-spec.org/acquisition") != nullptr &&
-            strcmp(type, "application/epub+zip") == 0) {
+        if (rel && type && strstr(rel, "opds-spec.org/acquisition") != nullptr && isBookAcquisitionType(type)) {
           self->currentEntry.type = OpdsEntryType::BOOK;
           self->currentEntry.href = href;
         } else if (type && strstr(type, "application/atom+xml") != nullptr && strstr(type, "kind=acquisition") != nullptr) {

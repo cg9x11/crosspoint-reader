@@ -12,6 +12,8 @@
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
+#include "SeriesManifest.h"
+#include "SeriesChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -20,6 +22,35 @@ constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
 constexpr uint8_t CACHE_VERSION = 2;          // Increment when cache format changes
+constexpr unsigned long skipChapterMs = 700;
+
+RecentBook buildRecentBookEntry(const Txt& txt, const std::optional<SeriesReadingContext>& seriesContext) {
+  RecentBook recent{seriesContext.has_value() ? seriesContext->seriesId : "", txt.getPath(), txt.getTitle(), "",
+                    txt.getCoverBmpPath()};
+  if (!seriesContext.has_value()) {
+    return recent;
+  }
+
+  SeriesManifest manifest;
+  if (!SeriesManifestStore::tryLoadForChapterPath(txt.getPath(), manifest)) {
+    return recent;
+  }
+
+  recent.seriesId = manifest.seriesId;
+  if (!manifest.title.empty()) {
+    recent.title = manifest.title;
+  }
+  if (!manifest.author.empty()) {
+    recent.author = manifest.author;
+  }
+  if (!manifest.coverPath.empty()) {
+    const std::string coverPath = SeriesManifestStore::buildChapterPath(manifest.seriesDir, manifest.coverPath);
+    if (Storage.exists(coverPath.c_str())) {
+      recent.coverBmpPath = coverPath;
+    }
+  }
+  return recent;
+}
 }  // namespace
 
 void TxtReaderActivity::onEnter() {
@@ -35,11 +66,14 @@ void TxtReaderActivity::onEnter() {
 
   // Save current txt as last opened file and add to recent books
   auto filePath = txt->getPath();
-  auto fileName = filePath.substr(filePath.rfind('/') + 1);
-  APP_STATE.clearOpenReadingState();
-  APP_STATE.openEpubPath = filePath;
+  if (seriesContext.has_value()) {
+    persistSeriesReadingState();
+  } else {
+    APP_STATE.clearOpenReadingState();
+    APP_STATE.openEpubPath = filePath;
+  }
   APP_STATE.saveToFile();
-  RECENT_BOOKS.addBook(filePath, fileName, "", "");
+  RECENT_BOOKS.addBook(buildRecentBookEntry(*txt, seriesContext));
 
   // Trigger first update
   requestUpdate();
@@ -59,6 +93,11 @@ void TxtReaderActivity::onExit() {
 }
 
 void TxtReaderActivity::loop() {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    openSeriesChapterSelection();
+    return;
+  }
+
   // Long press BACK (1s+) goes to file selection
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
     activityManager.goToFileBrowser(txt ? txt->getPath() : "");
@@ -72,18 +111,63 @@ void TxtReaderActivity::loop() {
     return;
   }
 
+  const bool longPressChapterSkip =
+      SETTINGS.longPressButtonBehavior == CrossPointSettings::LONG_PRESS_BUTTON_BEHAVIOR::CHAPTER_SKIP;
+
+  if (longPressChapterSkip && totalPages > 0) {
+    if (!consumeLeftRelease && mappedInput.isPressed(MappedInputManager::Button::Left) &&
+        mappedInput.getHeldTime() > skipChapterMs) {
+      consumeLeftRelease = true;
+      if (currentPage != 0) {
+        currentPage = 0;
+        requestUpdate();
+      }
+      return;
+    }
+    if (!consumeRightRelease && mappedInput.isPressed(MappedInputManager::Button::Right) &&
+        mappedInput.getHeldTime() > skipChapterMs) {
+      consumeRightRelease = true;
+      const int lastPage = totalPages - 1;
+      if (currentPage != lastPage) {
+        currentPage = lastPage;
+        requestUpdate();
+      }
+      return;
+    }
+  }
+
+  if (consumeLeftRelease && mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    consumeLeftRelease = false;
+    return;
+  }
+  if (consumeRightRelease && mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    consumeRightRelease = false;
+    return;
+  }
+
   const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
     return;
   }
 
-  if (prevTriggered && currentPage > 0) {
-    currentPage--;
-    requestUpdate();
+  const bool skipChapter = !fromTilt && longPressChapterSkip && mappedInput.getHeldTime() > skipChapterMs;
+  if (skipChapter) {
+    return;
+  }
+
+  if (prevTriggered) {
+    if (currentPage > 0) {
+      currentPage--;
+      requestUpdate();
+    } else if (tryNavigateAdjacentSeriesChapter(-1, true)) {
+      return;
+    }
   } else if (nextTriggered) {
     if (currentPage < totalPages - 1) {
       currentPage++;
       requestUpdate();
+    } else if (tryNavigateAdjacentSeriesChapter(1, false)) {
+      return;
     } else {
       onGoHome();
     }
@@ -128,6 +212,10 @@ void TxtReaderActivity::initializeReader() {
 
   // Load saved progress
   loadProgress();
+  if (openAtLastPage && totalPages > 0) {
+    currentPage = totalPages - 1;
+    openAtLastPage = false;
+  }
 
   initialized = true;
 }
@@ -393,8 +481,107 @@ void TxtReaderActivity::renderStatusBar() const {
   std::string title;
   if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
     title = txt->getTitle();
+    if (seriesContext.has_value() && seriesContext->chapterIndex > 0) {
+      title = std::to_string(seriesContext->chapterIndex) + ". " + title;
+    }
   }
   GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title);
+}
+
+void TxtReaderActivity::persistSeriesReadingState() const {
+  if (!seriesContext.has_value()) {
+    return;
+  }
+
+  SeriesReadingContext context = *seriesContext;
+  context.chapterPath = txt ? txt->getPath() : context.chapterPath;
+  if (context.chapterIndex <= 0) {
+    context.chapterIndex = getCurrentSeriesChapterIndex();
+  }
+  APP_STATE.setOpenReadingState(context);
+}
+
+int TxtReaderActivity::getCurrentSeriesChapterIndex() const {
+  if (!txt || !seriesContext.has_value()) {
+    return 0;
+  }
+  if (seriesContext->chapterIndex > 0) {
+    return seriesContext->chapterIndex;
+  }
+
+  SeriesManifest manifest;
+  if (!SeriesManifestStore::tryLoadForChapterPath(txt->getPath(), manifest)) {
+    return 0;
+  }
+  const auto chapter = SeriesManifestStore::findByPath(manifest, txt->getPath());
+  return chapter.has_value() ? chapter->chapterIndex : 0;
+}
+
+bool TxtReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta, const bool openChapterAtLastPage) {
+  if (!txt || !seriesContext.has_value()) {
+    return false;
+  }
+
+  SeriesManifest manifest;
+  if (!SeriesManifestStore::tryLoadForChapterPath(txt->getPath(), manifest)) {
+    return false;
+  }
+
+  int currentChapterIndex = seriesContext->chapterIndex;
+  if (currentChapterIndex <= 0) {
+    const auto chapter = SeriesManifestStore::findByPath(manifest, txt->getPath());
+    currentChapterIndex = chapter.has_value() ? chapter->chapterIndex : 0;
+  }
+  if (currentChapterIndex <= 0) {
+    return false;
+  }
+
+  std::string targetChapterPath;
+  const int targetChapterIndex = currentChapterIndex + chapterDelta;
+  if (!SeriesManifestStore::resolveChapterPath(manifest, targetChapterIndex, targetChapterPath)) {
+    return false;
+  }
+  if (!Storage.exists(targetChapterPath.c_str())) {
+    return false;
+  }
+
+  SeriesReadingContext nextContext;
+  nextContext.seriesId = manifest.seriesId;
+  nextContext.seriesDir = manifest.seriesDir;
+  nextContext.chapterPath = targetChapterPath;
+  nextContext.chapterIndex = targetChapterIndex;
+  APP_STATE.setOpenReadingState(nextContext);
+  APP_STATE.saveToFile();
+  activityManager.goToReader(nextContext, openChapterAtLastPage);
+  return true;
+}
+
+void TxtReaderActivity::openSeriesChapterSelection() {
+  if (!seriesContext.has_value() || !seriesContext->hasSeriesIdentity()) {
+    return;
+  }
+
+  SeriesManifest manifest;
+  if (!SeriesManifestStore::loadFromSeriesDir(seriesContext->seriesDir, manifest)) {
+    return;
+  }
+
+  const int currentChapterIndex = getCurrentSeriesChapterIndex();
+  startActivityForResult(
+      std::make_unique<SeriesChapterSelectionActivity>(renderer, mappedInput, std::move(manifest), currentChapterIndex),
+      [this](const ActivityResult& result) {
+        if (result.isCancelled || !seriesContext.has_value() || !txt) {
+          return;
+        }
+
+        const auto& seriesChapter = std::get<SeriesChapterResult>(result.data);
+        SeriesReadingContext context = *seriesContext;
+        context.chapterPath = seriesChapter.chapterPath;
+        context.chapterIndex = seriesChapter.chapterIndex;
+        if (context.chapterPath != txt->getPath()) {
+          activityManager.goToReader(std::move(context));
+        }
+      });
 }
 
 void TxtReaderActivity::saveProgress() const {

@@ -16,13 +16,13 @@
 #include "activities/util/FullScreenMessageActivity.h"
 
 namespace {
-std::optional<SeriesReadingContext> inferSeriesContextForEpub(const std::string& epubPath) {
+std::optional<SeriesReadingContext> inferSeriesContextForBook(const std::string& bookPath) {
   SeriesManifest manifest;
-  if (!SeriesManifestStore::tryLoadForChapterPath(epubPath, manifest)) {
+  if (!SeriesManifestStore::tryLoadForChapterPath(bookPath, manifest)) {
     return std::nullopt;
   }
 
-  const auto chapter = SeriesManifestStore::findByPath(manifest, epubPath);
+  const auto chapter = SeriesManifestStore::findByPath(manifest, bookPath);
   if (!chapter.has_value()) {
     return std::nullopt;
   }
@@ -30,7 +30,7 @@ std::optional<SeriesReadingContext> inferSeriesContextForEpub(const std::string&
   SeriesReadingContext context;
   context.seriesId = manifest.seriesId;
   context.seriesDir = manifest.seriesDir;
-  context.chapterPath = epubPath;
+  context.chapterPath = bookPath;
   context.chapterIndex = chapter->chapterIndex;
   return context;
 }
@@ -100,7 +100,7 @@ void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
   const auto epubPath = epub->getPath();
   currentBookPath = epubPath;
   if (!seriesContext.has_value()) {
-    seriesContext = inferSeriesContextForEpub(epubPath);
+    seriesContext = inferSeriesContextForBook(epubPath);
   }
   if (seriesContext.has_value()) {
     SeriesReadingContext context = *seriesContext;
@@ -126,7 +126,18 @@ void ReaderActivity::onGoToXtcReader(std::unique_ptr<Xtc> xtc) {
 void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
   const auto txtPath = txt->getPath();
   currentBookPath = txtPath;
-  activityManager.replaceActivity(std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt)));
+  if (!seriesContext.has_value()) {
+    seriesContext = inferSeriesContextForBook(txtPath);
+  }
+  if (seriesContext.has_value()) {
+    SeriesReadingContext context = *seriesContext;
+    context.chapterPath = txtPath;
+    APP_STATE.setOpenReadingState(context);
+    activityManager.replaceActivity(
+        std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt), context, openAtLastPage));
+  } else {
+    activityManager.replaceActivity(std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt)));
+  }
 }
 
 void ReaderActivity::onEnter() {

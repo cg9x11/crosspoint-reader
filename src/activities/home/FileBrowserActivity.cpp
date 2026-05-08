@@ -28,10 +28,18 @@ constexpr const char* NO_DESCRIPTION_TEXT = "No description";
 constexpr const char* CURRENT_READING_TEXT = "Current";
 
 bool isSeriesChapterFilename(std::string_view filename) {
-  if (filename.size() < 10 || filename.rfind("ch_", 0) != 0 || filename.substr(filename.size() - 5) != ".epub") {
+  if (filename.size() < 8 || filename.rfind("ch_", 0) != 0) {
     return false;
   }
-  for (size_t i = 3; i < filename.size() - 5; ++i) {
+  const size_t extPos = filename.find_last_of('.');
+  if (extPos == std::string_view::npos) {
+    return false;
+  }
+  const std::string_view ext = filename.substr(extPos);
+  if (ext != ".epub" && ext != ".txt" && ext != ".md") {
+    return false;
+  }
+  for (size_t i = 3; i < extPos; ++i) {
     if (!isdigit(static_cast<unsigned char>(filename[i]))) {
       return false;
     }

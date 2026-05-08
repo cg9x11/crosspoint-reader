@@ -2,17 +2,23 @@
 
 #include <Txt.h>
 
+#include <optional>
 #include <vector>
 
 #include "CrossPointSettings.h"
+#include "SeriesReadingContext.h"
 #include "activities/Activity.h"
 
 class TxtReaderActivity final : public Activity {
   std::unique_ptr<Txt> txt;
+  std::optional<SeriesReadingContext> seriesContext;
+  bool openAtLastPage = false;
 
   int currentPage = 0;
   int totalPages = 1;
   int pagesUntilFullRefresh = 0;
+  bool consumeLeftRelease = false;
+  bool consumeRightRelease = false;
 
   // Streaming text reader - stores file offsets for each page
   std::vector<size_t> pageOffsets;  // File offset for start of each page
@@ -38,12 +44,21 @@ class TxtReaderActivity final : public Activity {
   void buildPageIndex();
   bool loadPageIndexCache();
   void savePageIndexCache() const;
+  void persistSeriesReadingState() const;
+  int getCurrentSeriesChapterIndex() const;
+  bool tryNavigateAdjacentSeriesChapter(int chapterDelta, bool openChapterAtLastPage);
+  void openSeriesChapterSelection();
   void saveProgress() const;
   void loadProgress();
 
  public:
-  explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Txt> txt)
-      : Activity("TxtReader", renderer, mappedInput), txt(std::move(txt)) {}
+  explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Txt> txt,
+                             std::optional<SeriesReadingContext> seriesContext = std::nullopt,
+                             bool openAtLastPage = false)
+      : Activity("TxtReader", renderer, mappedInput),
+        txt(std::move(txt)),
+        seriesContext(std::move(seriesContext)),
+        openAtLastPage(openAtLastPage) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <Bitmap.h>
 #include <Epub.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -93,10 +94,15 @@ bool isSeriesChapterFilename(const std::string& filename) {
   if (filename.size() < 10 || filename.rfind("ch_", 0) != 0) {
     return false;
   }
-  if (filename.substr(filename.size() - 5) != ".epub") {
+  const size_t extPos = filename.find_last_of('.');
+  if (extPos == std::string::npos) {
     return false;
   }
-  for (size_t i = 3; i < filename.size() - 5; i++) {
+  const std::string ext = filename.substr(extPos);
+  if (ext != ".epub" && ext != ".txt" && ext != ".md") {
+    return false;
+  }
+  for (size_t i = 3; i < extPos; i++) {
     if (!isdigit(static_cast<unsigned char>(filename[i]))) {
       return false;
     }
@@ -108,7 +114,8 @@ int parseChapterIndexFromFilename(const std::string& filename) {
   if (!isSeriesChapterFilename(filename)) {
     return 0;
   }
-  return atoi(filename.substr(3, filename.size() - 8).c_str());
+  const size_t extPos = filename.find_last_of('.');
+  return atoi(filename.substr(3, extPos - 3).c_str());
 }
 
 std::string chooseLegacySeriesDirectoryName(const std::string& feedTitle, const OpdsEntry& entry) {
@@ -886,7 +893,9 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
       server.username, server.password);
 
   if (result == HttpDownloader::OK) {
-    Epub(filename, "/.crosspoint").clearCache();
+    if (FsHelpers::hasEpubExtension(filename)) {
+      Epub(filename, "/.crosspoint").clearCache();
+    }
     if (looksLikeSeriesChapter) {
       ensureSeriesArtifacts(book, feedUrl, entries, downloadUrl, localSeriesDir);
     }
@@ -998,7 +1007,9 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
       return;
     }
 
-    Epub(localChapterPath, "/.crosspoint").clearCache();
+    if (FsHelpers::hasEpubExtension(localChapterPath)) {
+      Epub(localChapterPath, "/.crosspoint").clearCache();
+    }
     downloadProgress += 1;
     requestUpdate(true);
   }
@@ -1062,7 +1073,6 @@ bool OpdsBookBrowserActivity::synthesizeSeriesManifest(const std::string& feedUr
   }
 
   JsonArray chapters = doc["chapters"].to<JsonArray>();
-  std::string firstChapterFile;
   for (const auto& entry : seriesEntries) {
     if (entry.type != OpdsEntryType::BOOK) {
       continue;
@@ -1072,10 +1082,6 @@ bool OpdsBookBrowserActivity::synthesizeSeriesManifest(const std::string& feedUr
     const int chapterIndex = parseChapterIndexFromFilename(chapterFile);
     if (chapterIndex <= 0) {
       continue;
-    }
-
-    if (firstChapterFile.empty()) {
-      firstChapterFile = chapterFile;
     }
 
     JsonObject chapter = chapters.add<JsonObject>();
@@ -1091,8 +1097,6 @@ bool OpdsBookBrowserActivity::synthesizeSeriesManifest(const std::string& feedUr
 
   if (Storage.exists((localSeriesDir + "/cover.bmp").c_str())) {
     doc["coverPath"] = "cover.bmp";
-  } else if (!firstChapterFile.empty()) {
-    doc["coverPath"] = firstChapterFile;
   }
 
   String manifestJson;
