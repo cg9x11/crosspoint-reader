@@ -33,6 +33,9 @@ interface FailedChapterSnapshot {
 interface ChapterTaskStats {
   failed: number;
   pending: number;
+  queuedBuild: number;
+  building: number;
+  buildFailed: number;
   lastFailedChapter: FailedChapterSnapshot | null;
 }
 
@@ -115,10 +118,23 @@ function mergeQueueActivity(activityMaps: Array<Map<string, QueueNovelActivity>>
 function buildTaskState(input: {
   syncStatus: string;
   triggerType: string | null;
+  lastRunStatus: string | null;
   hasRunningJobs: boolean;
   failedChapters: number;
   remainingChapters: number;
 }) {
+  if (input.triggerType === "export") {
+    if (input.lastRunStatus === "running") {
+      return "running";
+    }
+    if (input.lastRunStatus === "failed") {
+      return "stopped";
+    }
+    if (input.lastRunStatus === "completed") {
+      return "completed";
+    }
+  }
+
   if (input.hasRunningJobs || input.syncStatus === "queued" || input.syncStatus === "syncing") {
     return input.syncStatus === "queued" ? "queued" : "running";
   }
@@ -204,9 +220,19 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
       const entry = chapterStats.get(chapter.novelId) ?? {
         failed: 0,
         pending: 0,
+        queuedBuild: 0,
+        building: 0,
+        buildFailed: 0,
         lastFailedChapter: null
       };
       entry.pending += 1;
+      if (chapter.status === "queued_build") {
+        entry.queuedBuild += 1;
+      } else if (chapter.status === "building") {
+        entry.building += 1;
+      } else if (chapter.status === "build_failed") {
+        entry.buildFailed += 1;
+      }
       if (chapter.status === "fetch_failed" || chapter.status === "build_failed") {
         entry.failed += 1;
         if (
@@ -239,6 +265,9 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
         const stats = chapterStats.get(novel.id) ?? {
           failed: 0,
           pending: 0,
+          queuedBuild: 0,
+          building: 0,
+          buildFailed: 0,
           lastFailedChapter: null
         };
         const queue = queueActivity.get(novel.id);
@@ -250,6 +279,7 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
         const state = buildTaskState({
           syncStatus: novel.syncStatus,
           triggerType: latestRun?.triggerType || null,
+          lastRunStatus: latestRun?.status || null,
           hasRunningJobs: Boolean(queue?.totalJobs),
           failedChapters: stats.failed,
           remainingChapters
@@ -271,6 +301,24 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
           novel.lastSyncEndedAt?.toISOString() ||
           novel.lastSyncStartedAt?.toISOString() ||
           novel.updatedAt.toISOString();
+        const rebuildTargetChapters =
+          latestRun?.triggerType === "rebuild" ? Math.max(0, latestRun.totalFound ?? 0) : 0;
+        const rebuildRemainingChapters =
+          latestRun?.triggerType === "rebuild"
+            ? Math.min(rebuildTargetChapters, stats.queuedBuild + stats.building + stats.buildFailed)
+            : 0;
+        const rebuildCompletedChapters =
+          latestRun?.triggerType === "rebuild"
+            ? Math.max(0, rebuildTargetChapters - rebuildRemainingChapters)
+            : 0;
+        const exportTargetChapters =
+          latestRun?.triggerType === "export" ? Math.max(0, latestRun.totalFound ?? 0) : 0;
+        const exportCompletedChapters =
+          latestRun?.triggerType === "export" ? Math.max(0, latestRun.newChapters ?? 0) : 0;
+        const exportRemainingChapters =
+          latestRun?.triggerType === "export"
+            ? Math.max(0, exportTargetChapters - exportCompletedChapters)
+            : 0;
 
         return {
           id: novel.id,
@@ -288,6 +336,12 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
           activeJobs: queue?.activeJobs ?? 0,
           waitingJobs: queue?.waitingJobs ?? 0,
           activeQueues: queue ? Array.from(queue.queues) : [],
+          rebuildTargetChapters,
+          rebuildCompletedChapters,
+          rebuildRemainingChapters,
+          exportTargetChapters,
+          exportCompletedChapters,
+          exportRemainingChapters,
           retryable: state === "stopped",
           lastError,
           lastErrorSource,

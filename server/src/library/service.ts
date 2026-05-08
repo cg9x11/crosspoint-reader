@@ -19,6 +19,10 @@ export function getPublishedChapterPath(storagePaths: StorageLayout, novelId: st
   return path.join(getPublishedSeriesDir(storagePaths, novelId), formatChapterFilename(chapterIndex, 3));
 }
 
+export function getLegacyPublishedChapterPath(storagePaths: StorageLayout, novelId: string, chapterIndex: number) {
+  return path.join(getPublishedSeriesDir(storagePaths, novelId), `${formatChapterStem(chapterIndex, 3)}.epub`);
+}
+
 export function getPublishedManifestPath(storagePaths: StorageLayout, novelId: string) {
   return path.join(getPublishedSeriesDir(storagePaths, novelId), "_series.json");
 }
@@ -29,6 +33,46 @@ export function getPublishedCoverBmpPath(storagePaths: StorageLayout, novelId: s
 
 export function getPublishedChapterRelativePath(novelId: string, chapterIndex: number) {
   return path.posix.join("series", novelId, formatChapterFilename(chapterIndex, 3));
+}
+
+export function getLegacyPublishedChapterRelativePath(novelId: string, chapterIndex: number) {
+  return path.posix.join("series", novelId, `${formatChapterStem(chapterIndex, 3)}.epub`);
+}
+
+export function getPublishedChapterCandidates(
+  storagePaths: StorageLayout,
+  novelId: string,
+  chapterIndex: number,
+  storedRelativePath?: string | null
+) {
+  const candidates: Array<{ path: string; relativePath: string; fileName: string }> = [];
+
+  if (storedRelativePath) {
+    const normalizedRelativePath = storedRelativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+    candidates.push({
+      path: path.join(storagePaths.opdsDir, normalizedRelativePath),
+      relativePath: normalizedRelativePath,
+      fileName: path.posix.basename(normalizedRelativePath)
+    });
+  }
+
+  const currentRelativePath = getPublishedChapterRelativePath(novelId, chapterIndex);
+  candidates.push({
+    path: path.join(storagePaths.opdsDir, currentRelativePath),
+    relativePath: currentRelativePath,
+    fileName: path.posix.basename(currentRelativePath)
+  });
+
+  const legacyRelativePath = getLegacyPublishedChapterRelativePath(novelId, chapterIndex);
+  if (!candidates.some((candidate) => candidate.relativePath === legacyRelativePath)) {
+    candidates.push({
+      path: path.join(storagePaths.opdsDir, legacyRelativePath),
+      relativePath: legacyRelativePath,
+      fileName: path.posix.basename(legacyRelativePath)
+    });
+  }
+
+  return candidates;
 }
 
 export function getPublishedCoverRelativePath(novelId: string) {

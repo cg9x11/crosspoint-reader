@@ -729,6 +729,9 @@
     if (value === "rebuild") {
       return "Rebuild local";
     }
+    if (value === "export") {
+      return "Xuất EPUB";
+    }
     if (value === "manual") {
       return "Đồng bộ tay";
     }
@@ -757,9 +760,26 @@
   }
 
   function buildTaskSummary(task) {
-    const parts = [taskTriggerLabel(task), formatChapterProgress(task.downloadedChapters, task.totalChapters)];
-    if (task.remainingChapters > 0) {
-      parts.push(`còn ${formatCount(task.remainingChapters)}`);
+    const parts = [taskTriggerLabel(task)];
+    if (task?.triggerType === "rebuild" && Number(task.rebuildTargetChapters) > 0) {
+      parts.push(
+        `${formatCount(task.rebuildCompletedChapters)}/${formatCount(task.rebuildTargetChapters)} chap built`
+      );
+      if (Number(task.rebuildRemainingChapters) > 0) {
+        parts.push(`còn ${formatCount(task.rebuildRemainingChapters)}`);
+      }
+    } else if (task?.triggerType === "export" && Number(task.exportTargetChapters) > 0) {
+      parts.push(
+        `${formatCount(task.exportCompletedChapters)}/${formatCount(task.exportTargetChapters)} chap exported`
+      );
+      if (Number(task.exportRemainingChapters) > 0) {
+        parts.push(`cÃ²n ${formatCount(task.exportRemainingChapters)}`);
+      }
+    } else {
+      parts.push(formatChapterProgress(task.downloadedChapters, task.totalChapters));
+      if (task.remainingChapters > 0) {
+        parts.push(`còn ${formatCount(task.remainingChapters)}`);
+      }
     }
     if (task.failedChapters > 0) {
       parts.push(`lỗi ${formatCount(task.failedChapters)}`);

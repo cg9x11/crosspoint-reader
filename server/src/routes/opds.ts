@@ -6,7 +6,7 @@ import path from "node:path";
 import { resolvePublicBaseUrl } from "../lib/requestBaseUrl.js";
 import { buildOpdsFeed } from "../opds/feed.js";
 import {
-  getPublishedChapterPath,
+  getPublishedChapterCandidates,
   getPublishedCoverBmpPath,
   getPublishedManifestPath
 } from "../library/service.js";
@@ -15,10 +15,6 @@ import { repairJsonStringsDeep } from "../lib/text.js";
 
 function absoluteUrl(baseUrl: string, routePath: string) {
   return new URL(routePath, `${baseUrl}/`).toString();
-}
-
-function chapterFilename(chapterIndex: number) {
-  return `ch_${String(chapterIndex).padStart(3, "0")}.txt`;
 }
 
 function parseChapterIndex(input: string) {
@@ -51,6 +47,20 @@ function repairSeriesManifestPayload(payload: unknown, hasCoverBmp: boolean) {
 }
 
 export async function registerOpdsRoutes(app: FastifyInstance) {
+  const resolveChapterDownloadAsset = async (
+    novelId: string,
+    chapterIndex: number,
+    storedRelativePath?: string | null
+  ) => {
+    const candidates = getPublishedChapterCandidates(app.storagePaths, novelId, chapterIndex, storedRelativePath);
+    for (const candidate of candidates) {
+      if (await fileExists(candidate.path)) {
+        return candidate;
+      }
+    }
+    return candidates[0] ?? null;
+  };
+
   app.get("/opds", async (request, reply) => {
     const baseUrl = resolvePublicBaseUrl(request, app.appConfig.APP_BASE_URL);
     const updatedAt = new Date().toISOString();
@@ -181,20 +191,30 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
           type: "application/atom+xml;profile=opds-catalog;kind=navigation"
         }
       ],
-      entries: novel.chapters.map((chapter) => ({
-        id: `urn:chapter:${chapter.id}`,
-        title: chapter.title,
-        updatedAt: (chapter.publishedAt ?? chapter.updatedAt).toISOString(),
-        summary: novel.description ?? undefined,
-        author: novel.author ?? undefined,
-        links: [
-          {
-            href: absoluteUrl(baseUrl, `/opds/download/${novelId}/${chapterFilename(chapter.chapterIndex)}`),
-            rel: "http://opds-spec.org/acquisition",
-            type: "text/plain; charset=utf-8"
-          }
-        ]
-      }))
+      entries: await Promise.all(
+        novel.chapters.map(async (chapter) => {
+          const asset = await resolveChapterDownloadAsset(novelId, chapter.chapterIndex, chapter.epubPath);
+          const fileName = asset?.fileName || `ch_${String(chapter.chapterIndex).padStart(3, "0")}.txt`;
+          const mediaType = fileName.toLowerCase().endsWith(".epub")
+            ? "application/epub+zip"
+            : "text/plain; charset=utf-8";
+
+          return {
+            id: `urn:chapter:${chapter.id}`,
+            title: chapter.title,
+            updatedAt: (chapter.publishedAt ?? chapter.updatedAt).toISOString(),
+            summary: novel.description ?? undefined,
+            author: novel.author ?? undefined,
+            links: [
+              {
+                href: absoluteUrl(baseUrl, `/opds/download/${novelId}/${fileName}`),
+                rel: "http://opds-spec.org/acquisition",
+                type: mediaType
+              }
+            ]
+          };
+        })
+      )
     });
 
     reply.type("application/atom+xml; charset=utf-8");
@@ -257,12 +277,30 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
       };
     }
 
-    const filePath = getPublishedChapterPath(app.storagePaths, novelId, chapterIndex);
+    const chapter = await app.prisma.chapter.findFirst({
+      where: {
+        novelId,
+        chapterIndex,
+        status: "published"
+      },
+      select: {
+        epubPath: true
+      }
+    });
+
+    const asset = await resolveChapterDownloadAsset(novelId, chapterIndex, chapter?.epubPath);
+    if (!asset || !(await fileExists(asset.path))) {
+      reply.code(404);
+      return {
+        ok: false,
+        error: "CHAPTER_NOT_FOUND"
+      };
+    }
 
     try {
-      const file = await fs.readFile(filePath);
-      reply.header("Content-Disposition", `attachment; filename="${path.basename(filePath)}"`);
-      if (filePath.toLowerCase().endsWith(".txt")) {
+      const file = await fs.readFile(asset.path);
+      reply.header("Content-Disposition", `attachment; filename="${path.basename(asset.path)}"`);
+      if (asset.path.toLowerCase().endsWith(".txt")) {
         reply.type("text/plain; charset=utf-8");
       } else {
         reply.type("application/epub+zip");

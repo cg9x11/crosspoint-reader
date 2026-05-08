@@ -13,6 +13,7 @@ import {
 import {
   buildSeriesId,
   getChapterHtmlPath,
+  getPublishedChapterCandidates,
   getPublishedChapterPath,
   getPublishedChapterRelativePath,
   getPublishedManifestPath,
@@ -230,6 +231,21 @@ async function moveFile(tempPath: string, targetPath: string) {
     await fs.rm(targetPath, { force: true });
     await fs.rename(tempPath, targetPath);
   }
+}
+
+async function removeStalePublishedChapterArtifacts(
+  storagePaths: StorageLayout,
+  novelId: string,
+  chapterIndex: number,
+  keepRelativePath: string
+) {
+  const keepNormalized = keepRelativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const candidates = getPublishedChapterCandidates(storagePaths, novelId, chapterIndex, keepNormalized);
+  await Promise.all(
+    candidates
+      .filter((candidate) => candidate.relativePath !== keepNormalized)
+      .map((candidate) => fs.rm(candidate.path, { force: true }).catch(() => undefined))
+  );
 }
 
 async function closeRunningRebuildRunIfSettled(prisma: PrismaClient, novelId: string) {
@@ -484,6 +500,10 @@ export async function rebuildNovelPipeline(
   }
 
   const now = new Date();
+  await fs.rm(path.join(storagePaths.tempEpubBuildDir, novelId), {
+    recursive: true,
+    force: true
+  }).catch(() => undefined);
   await prisma.syncRun.updateMany({
     where: {
       novelId,
@@ -526,7 +546,7 @@ export async function rebuildNovelPipeline(
       status: chapterJobs > 0 ? "running" : "completed",
       startedAt: now,
       endedAt: chapterJobs > 0 ? null : now,
-      totalFound: novel.chapters.length,
+      totalFound: chapterJobs,
       newChapters: 0
     }
   });
@@ -864,6 +884,12 @@ export async function processChapterBuildJob(
     await moveFile(tempPath, targetPath);
 
     const epubPath = getPublishedChapterRelativePath(chapter.novelId, chapter.chapterIndex);
+    await removeStalePublishedChapterArtifacts(
+      context.storagePaths,
+      chapter.novelId,
+      chapter.chapterIndex,
+      epubPath
+    );
     try {
       await context.prisma.chapter.update({
         where: { id: chapter.id },

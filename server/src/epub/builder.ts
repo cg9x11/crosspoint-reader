@@ -68,6 +68,7 @@ export interface BuildBookEpubOptions {
     contentHtml: string;
     sourceUrl?: string | null;
   }>;
+  onProgress?: ((completedChapters: number, totalChapters: number) => Promise<void> | void) | null;
 }
 
 async function localizeChapterImages(contentHtml: string, sourceUrl?: string | null) {
@@ -272,7 +273,8 @@ export async function buildBookEpub({
   author,
   description,
   coverImage,
-  chapters
+  chapters,
+  onProgress
 }: BuildBookEpubOptions) {
   await ensureDir(path.dirname(outputPath));
 
@@ -289,20 +291,27 @@ export async function buildBookEpub({
     ".book-meta{color:#555;font-size:0.95rem;margin-bottom:1.5rem;}"
   ].join("");
 
-  const localizedChapters = await Promise.all(
-    chapters.map(async (chapter, index) => {
-      const localized = await localizeChapterImages(chapter.contentHtml, chapter.sourceUrl);
-      return {
-        title: chapter.title,
-        xhtmlPath: `chapter_${String(index + 1).padStart(3, "0")}.xhtml`,
-        xhtml: buildXhtmlDocument(
-          chapter.title,
-          `<h1 class="chapter-title">${escapeXml(chapter.title)}</h1>\n${localized.contentHtml}`
-        ),
-        assets: localized.assets
-      };
-    })
-  );
+  const localizedChapters = [];
+  for (let index = 0; index < chapters.length; index += 1) {
+    const chapter = chapters[index];
+    if (!chapter) {
+      continue;
+    }
+    const localized = await localizeChapterImages(chapter.contentHtml, chapter.sourceUrl);
+    localizedChapters.push({
+      title: chapter.title,
+      xhtmlPath: `chapter_${String(index + 1).padStart(3, "0")}.xhtml`,
+      xhtml: buildXhtmlDocument(
+        chapter.title,
+        `<h1 class="chapter-title">${escapeXml(chapter.title)}</h1>\n${localized.contentHtml}`
+      ),
+      assets: localized.assets
+    });
+
+    if (onProgress) {
+      await onProgress(index + 1, chapters.length);
+    }
+  }
 
   const descriptionMeta = description?.trim()
     ? `<dc:description>${escapeXml(description.trim())}</dc:description>`

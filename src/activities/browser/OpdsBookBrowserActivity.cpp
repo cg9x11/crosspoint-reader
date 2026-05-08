@@ -58,6 +58,30 @@ std::string buildFetchErrorText(const std::string& url) {
   return message;
 }
 
+std::string buildDownloadErrorText(const std::string& url, const HttpDownloader::DownloadError result) {
+  std::string prefix;
+  switch (result) {
+    case HttpDownloader::FILE_ERROR:
+      prefix = "FILE ";
+      break;
+    case HttpDownloader::ABORTED:
+      prefix = "ABORT ";
+      break;
+    case HttpDownloader::HTTP_ERROR:
+    default: {
+      const int httpCode = HttpDownloader::getLastHttpCode();
+      prefix = std::to_string(httpCode) + " ";
+      break;
+    }
+  }
+
+  std::string message = prefix + summarizeFetchUrl(url);
+  if (message.size() > 48) {
+    message.resize(48);
+  }
+  return message;
+}
+
 std::string getUrlBasename(const std::string& url) {
   size_t end = url.find('?');
   if (end == std::string::npos) {
@@ -773,10 +797,15 @@ std::string OpdsBookBrowserActivity::getPreviewCoverPath(const OpdsEntry& entry,
     return localPath;
   }
 
-  Storage.ensureDirectoryExists("/.crosspoint");
-  Storage.ensureDirectoryExists("/.crosspoint/opds");
+  if (!Storage.ensureDirectoryExists("/.crosspoint") || !Storage.ensureDirectoryExists("/.crosspoint/opds")) {
+    LOG_ERR("OPDS", "Failed to prepare preview cache directory");
+    return "";
+  }
   const std::string remoteUrl = UrlUtils::buildUrl(baseUrl, entry.imageHref);
   const auto result = HttpDownloader::downloadToFile(remoteUrl, localPath, nullptr, server.username, server.password);
+  if (result != HttpDownloader::OK) {
+    LOG_ERR("OPDS", "Preview cover download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
+  }
   return result == HttpDownloader::OK ? localPath : "";
 }
 
@@ -875,7 +904,13 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
 
   if (looksLikeSeriesChapter) {
     localSeriesDir = resolveExistingSeriesDirectoryName(feedUrl, currentFeedTitle, book);
-    Storage.ensureDirectoryExists(localSeriesDir.c_str());
+    if (!Storage.ensureDirectoryExists(localSeriesDir.c_str())) {
+      LOG_ERR("OPDS", "Failed to create series dir: %s", localSeriesDir.c_str());
+      state = BrowserState::ERROR;
+      errorMessage = "FILE " + localSeriesDir.substr(1, std::min<size_t>(42, localSeriesDir.size() > 1 ? localSeriesDir.size() - 1 : 0));
+      requestUpdate();
+      return;
+    }
     filename = localSeriesDir + "/" + remoteFilename;
   } else {
     filename = "/" +
@@ -902,7 +937,8 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
     state = BrowserState::BROWSING;
   } else {
     state = BrowserState::ERROR;
-    errorMessage = tr(STR_DOWNLOAD_FAILED);
+    errorMessage = buildDownloadErrorText(downloadUrl, result);
+    LOG_ERR("OPDS", "Book download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
   }
   requestUpdate();
 }
@@ -940,7 +976,13 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   }
 
   const std::string localSeriesDir = resolveExistingSeriesDirectoryName(seriesFeedUrl, seriesFeedTitle, entry);
-  Storage.ensureDirectoryExists(localSeriesDir.c_str());
+  if (!Storage.ensureDirectoryExists(localSeriesDir.c_str())) {
+    LOG_ERR("OPDS", "Failed to create series dir: %s", localSeriesDir.c_str());
+    state = BrowserState::ERROR;
+    errorMessage = "FILE " + localSeriesDir.substr(1, std::min<size_t>(42, localSeriesDir.size() > 1 ? localSeriesDir.size() - 1 : 0));
+    requestUpdate();
+    return;
+  }
 
   const bool hasStoryCover = !entry.imageHref.empty();
   downloadProgress = 0;
@@ -985,6 +1027,8 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
       if (coverResult == HttpDownloader::OK) {
         downloadProgress += 1;
         requestUpdate(true);
+      } else {
+        LOG_ERR("OPDS", "Series cover download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
       }
     }
   }
@@ -1002,7 +1046,8 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
         HttpDownloader::downloadToFile(chapterUrl, localChapterPath, nullptr, server.username, server.password);
     if (result != HttpDownloader::OK) {
       state = BrowserState::ERROR;
-      errorMessage = tr(STR_DOWNLOAD_FAILED);
+      errorMessage = buildDownloadErrorText(chapterUrl, result);
+      LOG_ERR("OPDS", "Series chapter download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
       requestUpdate();
       return;
     }
