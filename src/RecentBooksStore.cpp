@@ -63,6 +63,44 @@ void RecentBooksStore::updateBook(const RecentBook& updatedBook) {
   }
 }
 
+void RecentBooksStore::removeByPath(const std::string& path) {
+  const auto oldSize = recentBooks.size();
+  recentBooks.erase(std::remove_if(recentBooks.begin(), recentBooks.end(),
+                                   [&](const RecentBook& book) { return book.path == path; }),
+                    recentBooks.end());
+  if (recentBooks.size() != oldSize) {
+    saveToFile();
+  }
+}
+
+void RecentBooksStore::removeBySeriesId(const std::string& seriesId) {
+  if (seriesId.empty()) {
+    return;
+  }
+  const auto oldSize = recentBooks.size();
+  recentBooks.erase(std::remove_if(recentBooks.begin(), recentBooks.end(),
+                                   [&](const RecentBook& book) { return book.seriesId == seriesId; }),
+                    recentBooks.end());
+  if (recentBooks.size() != oldSize) {
+    saveToFile();
+  }
+}
+
+void RecentBooksStore::removeByPathPrefix(const std::string& pathPrefix) {
+  if (pathPrefix.empty()) {
+    return;
+  }
+  const auto oldSize = recentBooks.size();
+  recentBooks.erase(
+      std::remove_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) {
+        return book.path == pathPrefix || book.path.rfind(pathPrefix + "/", 0) == 0;
+      }),
+      recentBooks.end());
+  if (recentBooks.size() != oldSize) {
+    saveToFile();
+  }
+}
+
 bool RecentBooksStore::saveToFile() const {
   Storage.mkdir("/.crosspoint");
   return JsonSettingsIO::saveRecentBooks(*this, RECENT_BOOKS_FILE_JSON);

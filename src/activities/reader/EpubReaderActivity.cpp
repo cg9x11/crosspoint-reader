@@ -366,7 +366,12 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
       if (seriesContext.has_value() && seriesContext->hasSeriesIdentity()) {
         SeriesManifest manifest;
-        if (SeriesManifestStore::loadFromSeriesDir(seriesContext->seriesDir, manifest)) {
+        bool manifestLoaded = false;
+        {
+          RenderLock lock(*this);
+          manifestLoaded = SeriesManifestStore::loadFromSeriesDir(seriesContext->seriesDir, manifest);
+        }
+        if (manifestLoaded) {
           const int currentChapterIndex = getCurrentSeriesChapterIndex();
           startActivityForResult(
               std::make_unique<SeriesChapterSelectionActivity>(renderer, mappedInput, std::move(manifest),
@@ -616,8 +621,11 @@ int EpubReaderActivity::getCurrentSeriesChapterIndex() const {
     return 0;
   }
   SeriesManifest manifest;
-  if (!SeriesManifestStore::tryLoadForChapterPath(epub->getPath(), manifest)) {
-    return 0;
+  {
+    RenderLock lock(const_cast<EpubReaderActivity&>(*this));
+    if (!SeriesManifestStore::tryLoadForChapterPath(epub->getPath(), manifest)) {
+      return 0;
+    }
   }
   const auto chapter = SeriesManifestStore::findByPath(manifest, epub->getPath());
   return chapter.has_value() ? chapter->chapterIndex : 0;
@@ -647,34 +655,42 @@ bool EpubReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta
   }
 
   SeriesManifest manifest;
-  if (!SeriesManifestStore::tryLoadForChapterPath(epub->getPath(), manifest)) {
-    LOG_DBG("ERS", "No valid series manifest for: %s", epub->getPath().c_str());
-    return false;
-  }
-
-  int currentChapterIndex = seriesContext->chapterIndex > 0 ? seriesContext->chapterIndex : getCurrentSeriesChapterIndex();
-  if (currentChapterIndex <= 0) {
-    LOG_DBG("ERS", "Cannot resolve current series chapter index");
-    return false;
-  }
-
-  const int targetChapterIndex = currentChapterIndex + chapterDelta;
+  int currentChapterIndex = 0;
   std::string targetChapterPath;
-  if (!SeriesManifestStore::resolveChapterPath(manifest, targetChapterIndex, targetChapterPath)) {
-    LOG_DBG("ERS", "Series chapter %d not found", targetChapterIndex);
-    return false;
-  }
+  {
+    RenderLock lock(*this);
+    if (!SeriesManifestStore::tryLoadForChapterPath(epub->getPath(), manifest)) {
+      LOG_DBG("ERS", "No valid series manifest for: %s", epub->getPath().c_str());
+      return false;
+    }
 
-  if (!Storage.exists(targetChapterPath.c_str())) {
-    LOG_ERR("ERS", "Series chapter file missing: %s", targetChapterPath.c_str());
-    return false;
+    currentChapterIndex = seriesContext->chapterIndex;
+    if (currentChapterIndex <= 0) {
+      const auto chapter = SeriesManifestStore::findByPath(manifest, epub->getPath());
+      currentChapterIndex = chapter.has_value() ? chapter->chapterIndex : 0;
+    }
+    if (currentChapterIndex <= 0) {
+      LOG_DBG("ERS", "Cannot resolve current series chapter index");
+      return false;
+    }
+
+    const int targetChapterIndex = currentChapterIndex + chapterDelta;
+    if (!SeriesManifestStore::resolveChapterPath(manifest, targetChapterIndex, targetChapterPath)) {
+      LOG_DBG("ERS", "Series chapter %d not found", targetChapterIndex);
+      return false;
+    }
+
+    if (!Storage.exists(targetChapterPath.c_str())) {
+      LOG_ERR("ERS", "Series chapter file missing: %s", targetChapterPath.c_str());
+      return false;
+    }
   }
 
   SeriesReadingContext nextContext;
   nextContext.seriesId = manifest.seriesId;
   nextContext.seriesDir = manifest.seriesDir;
   nextContext.chapterPath = targetChapterPath;
-  nextContext.chapterIndex = targetChapterIndex;
+  nextContext.chapterIndex = currentChapterIndex + chapterDelta;
   APP_STATE.setOpenReadingState(nextContext);
   APP_STATE.saveToFile();
   activityManager.goToReader(nextContext, openChapterAtLastPage);

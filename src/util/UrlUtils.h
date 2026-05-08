@@ -4,6 +4,11 @@
 namespace UrlUtils {
 
 /**
+ * Remove leading/trailing whitespace and invalid control characters from a URL.
+ */
+std::string sanitizeUrl(const std::string& url);
+
+/**
  * Check if URL uses HTTPS protocol
  */
 bool isHttpsUrl(const std::string& url);

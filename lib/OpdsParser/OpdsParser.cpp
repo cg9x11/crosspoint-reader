@@ -18,7 +18,7 @@ void appendCapped(std::string& target, const XML_Char* s, const int len) {
 }
 }  // namespace
 
-OpdsParser::OpdsParser() {
+OpdsParser::OpdsParser(const bool captureExtendedMetadata) : captureExtendedMetadata(captureExtendedMetadata) {
   parser = XML_ParserCreate(nullptr);
   if (!parser) {
     errorOccured = true;
@@ -131,8 +131,10 @@ void XMLCALL OpdsParser::startElement(void* userData, const XML_Char* name, cons
             self->currentEntry.type = OpdsEntryType::SERIES;
             self->currentEntry.href = href;
           }
-        } else if (rel && (strcmp(rel, "http://opds-spec.org/image") == 0 ||
-                           strcmp(rel, "http://opds-spec.org/image/thumbnail") == 0)) {
+        } else if (self->captureExtendedMetadata &&
+                   rel &&
+                   (strcmp(rel, "http://opds-spec.org/image") == 0 ||
+                    strcmp(rel, "http://opds-spec.org/image/thumbnail") == 0)) {
           if (self->currentEntry.imageHref.empty()) {
             self->currentEntry.imageHref = href;
           }
@@ -163,18 +165,19 @@ void XMLCALL OpdsParser::startElement(void* userData, const XML_Char* name, cons
   if (strcmp(name, "title") == 0 || strstr(name, ":title") != nullptr) {
     self->inTitle = true;
     self->currentText.clear();
-  } else if (strcmp(name, "author") == 0 || strstr(name, ":author") != nullptr) {
+  } else if (self->captureExtendedMetadata && (strcmp(name, "author") == 0 || strstr(name, ":author") != nullptr)) {
     self->inAuthor = true;
-  } else if (self->inAuthor && (strcmp(name, "name") == 0 || strstr(name, ":name") != nullptr)) {
+  } else if (self->captureExtendedMetadata && self->inAuthor &&
+             (strcmp(name, "name") == 0 || strstr(name, ":name") != nullptr)) {
     self->inAuthorName = true;
     self->currentText.clear();
-  } else if (strcmp(name, "id") == 0 || strstr(name, ":id") != nullptr) {
+  } else if (self->captureExtendedMetadata && (strcmp(name, "id") == 0 || strstr(name, ":id") != nullptr)) {
     self->inId = true;
     self->currentText.clear();
-  } else if (strcmp(name, "summary") == 0 || strstr(name, ":summary") != nullptr) {
+  } else if (self->captureExtendedMetadata && (strcmp(name, "summary") == 0 || strstr(name, ":summary") != nullptr)) {
     self->inSummary = true;
     self->currentText.clear();
-  } else if (strcmp(name, "content") == 0 || strstr(name, ":content") != nullptr) {
+  } else if (self->captureExtendedMetadata && (strcmp(name, "content") == 0 || strstr(name, ":content") != nullptr)) {
     self->inContent = true;
     self->currentText.clear();
   }

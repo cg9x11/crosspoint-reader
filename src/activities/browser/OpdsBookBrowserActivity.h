@@ -50,6 +50,8 @@ class OpdsBookBrowserActivity final : public Activity {
   bool consumeConfirm = false;
   bool consumeBack = false;
   int selectorIndex = 0;
+  int previewSelectorIndex = -1;
+  unsigned long previewReadyAt = 0;
   std::string errorMessage;
   std::string statusMessage;
   size_t downloadProgress = 0;
@@ -65,7 +67,7 @@ class OpdsBookBrowserActivity final : public Activity {
   void fetchFeed(const std::string& path);
   bool fetchFeedData(const std::string& url, std::vector<OpdsEntry>& outEntries, std::string* outFeedTitle = nullptr,
                      std::string* outSearchTemplate = nullptr, std::string* outNextUrl = nullptr,
-                     std::string* outPrevUrl = nullptr) const;
+                     std::string* outPrevUrl = nullptr, bool lightweightEntries = false) const;
   void navigateToEntry(const OpdsEntry& entry);
   void navigateBack();
   void downloadBook(const OpdsEntry& book);
@@ -78,6 +80,7 @@ class OpdsBookBrowserActivity final : public Activity {
   bool synthesizeSeriesManifest(const std::string& feedUrl, const std::vector<OpdsEntry>& seriesEntries,
                                 const std::string& localSeriesDir, const OpdsEntry& seriesEntry) const;
   void updatePreviewForSelection();
+  void schedulePreviewUpdate();
   std::string getPreviewCoverPath(const OpdsEntry& entry, const std::string& baseUrl);
   void drawPreviewPanel(const Rect& rect, const PreviewData& preview);
   bool preventAutoSleep() override { return true; }

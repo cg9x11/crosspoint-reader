@@ -29,7 +29,33 @@ constexpr int FULL_LIST_PAGE_ITEMS = 23;
 constexpr int PREVIEW_LIST_PAGE_ITEMS = 9;
 constexpr int LIST_TOP = 60;
 constexpr int LIST_ITEM_HEIGHT = 30;
+constexpr unsigned long PREVIEW_DWELL_MS = 450;
 constexpr const char* NO_DESCRIPTION_TEXT = "No description";
+
+std::string summarizeFetchUrl(const std::string& url) {
+  std::string summary = url;
+  const size_t protocolPos = summary.find("://");
+  if (protocolPos != std::string::npos) {
+    summary.erase(0, protocolPos + 3);
+  }
+  const size_t queryPos = summary.find('?');
+  if (queryPos != std::string::npos) {
+    summary.resize(queryPos);
+  }
+  if (summary.size() > 36) {
+    summary = summary.substr(0, 36);
+  }
+  return summary;
+}
+
+std::string buildFetchErrorText(const std::string& url) {
+  const int httpCode = HttpDownloader::getLastHttpCode();
+  std::string message = std::to_string(httpCode) + " " + summarizeFetchUrl(url);
+  if (message.size() > 48) {
+    message.resize(48);
+  }
+  return message;
+}
 
 std::string getUrlBasename(const std::string& url) {
   size_t end = url.find('?');
@@ -251,6 +277,46 @@ size_t countExistingSeriesChapters(const std::string& seriesDir, const std::vect
   return count;
 }
 
+size_t countLocalSeriesChapterFiles(const std::string& seriesDir) {
+  if (seriesDir.empty()) {
+    return 0;
+  }
+
+  auto dir = Storage.open(seriesDir.c_str());
+  if (!dir || !dir.isDirectory()) {
+    return 0;
+  }
+
+  dir.rewindDirectory();
+  char name[256];
+  size_t count = 0;
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    if (file.isDirectory()) {
+      continue;
+    }
+    file.getName(name, sizeof(name));
+    if (isSeriesChapterFilename(name)) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+std::string buildLocalSeriesPreviewStatus(const std::string& seriesDir) {
+  SeriesManifest manifest;
+  if (SeriesManifestStore::loadFromSeriesDir(seriesDir, manifest) && !manifest.chapters.empty()) {
+    return std::to_string(countLocalSeriesChapterFiles(seriesDir)) + "/" + std::to_string(manifest.chapters.size()) +
+           " chapters";
+  }
+
+  const size_t localChapterCount = countLocalSeriesChapterFiles(seriesDir);
+  if (localChapterCount == 0) {
+    return "";
+  }
+
+  return std::to_string(localChapterCount) + " downloaded";
+}
+
 std::string buildSeriesPreviewStatus(const size_t localChapterCount, const size_t serverChapterCount) {
   if (serverChapterCount == 0) {
     return "";
@@ -278,6 +344,8 @@ void OpdsBookBrowserActivity::onEnter() {
   selectorIndex = 0;
   consumeConfirm = false;
   consumeBack = false;
+  previewSelectorIndex = -1;
+  previewReadyAt = 0;
   currentPreview = {};
   seriesStatusCache.clear();
   errorMessage.clear();
@@ -297,18 +365,21 @@ void OpdsBookBrowserActivity::onExit() {
 
 bool OpdsBookBrowserActivity::fetchFeedData(const std::string& url, std::vector<OpdsEntry>& outEntries,
                                             std::string* outFeedTitle, std::string* outSearchTemplate,
-                                            std::string* outNextUrl, std::string* outPrevUrl) const {
+                                            std::string* outNextUrl, std::string* outPrevUrl,
+                                            const bool lightweightEntries) const {
   LOG_DBG("OPDS", "Fetching: %s", url.c_str());
 
-  OpdsParser parser;
+  OpdsParser parser(!lightweightEntries);
   {
     OpdsParserStream stream{parser};
     if (!HttpDownloader::fetchUrl(url, stream, server.username, server.password)) {
+      LOG_ERR("OPDS", "Fetch feed failed: %s", HttpDownloader::getLastErrorMessage().c_str());
       return false;
     }
   }
 
   if (!parser) {
+    LOG_ERR("OPDS", "Parser rejected feed: %s", url.c_str());
     return false;
   }
 
@@ -403,25 +474,33 @@ void OpdsBookBrowserActivity::loop() {
     return;
   }
 
+  if (previewSelectorIndex == selectorIndex && previewReadyAt > 0 && millis() >= previewReadyAt &&
+      (!currentPreview.available || currentPreview.key != (!entries[selectorIndex].id.empty() ? entries[selectorIndex].id
+                                                                                              : entries[selectorIndex].href))) {
+    updatePreviewForSelection();
+    previewReadyAt = 0;
+    requestUpdate();
+  }
+
   const int pageItems = currentPreview.available ? PREVIEW_LIST_PAGE_ITEMS : FULL_LIST_PAGE_ITEMS;
   buttonNavigator.onNextRelease([this] {
     selectorIndex = ButtonNavigator::nextIndex(selectorIndex, entries.size());
-    updatePreviewForSelection();
+    schedulePreviewUpdate();
     requestUpdate();
   });
   buttonNavigator.onPreviousRelease([this] {
     selectorIndex = ButtonNavigator::previousIndex(selectorIndex, entries.size());
-    updatePreviewForSelection();
+    schedulePreviewUpdate();
     requestUpdate();
   });
   buttonNavigator.onNextContinuous([this, pageItems] {
     selectorIndex = ButtonNavigator::nextPageIndex(selectorIndex, entries.size(), pageItems);
-    updatePreviewForSelection();
+    schedulePreviewUpdate();
     requestUpdate();
   });
   buttonNavigator.onPreviousContinuous([this, pageItems] {
     selectorIndex = ButtonNavigator::previousPageIndex(selectorIndex, entries.size(), pageItems);
-    updatePreviewForSelection();
+    schedulePreviewUpdate();
     requestUpdate();
   });
 }
@@ -652,29 +731,29 @@ void OpdsBookBrowserActivity::updatePreviewForSelection() {
     return;
   }
 
-  std::vector<OpdsEntry> seriesEntries;
-  std::string seriesFeedTitle;
-  if (!fetchFeedData(seriesFeedUrl, seriesEntries, &seriesFeedTitle)) {
+  const std::string seriesDir = resolveExistingSeriesDirectoryName(seriesFeedUrl, currentFeedTitle, entry);
+  currentPreview.status = buildLocalSeriesPreviewStatus(seriesDir);
+  seriesStatusCache[cacheKey] = SeriesStatusSnapshot{currentPreview.title, currentPreview.status};
+}
+
+void OpdsBookBrowserActivity::schedulePreviewUpdate() {
+  currentPreview = {};
+  if (state != BrowserState::BROWSING || entries.empty() || selectorIndex < 0 ||
+      selectorIndex >= static_cast<int>(entries.size())) {
+    previewSelectorIndex = -1;
+    previewReadyAt = 0;
     return;
   }
 
-  size_t serverChapterCount = 0;
-  for (const auto& seriesEntry : seriesEntries) {
-    if (seriesEntry.type != OpdsEntryType::BOOK) {
-      continue;
-    }
-
-    if (isSeriesChapterFilename(getUrlBasename(seriesEntry.href))) {
-      ++serverChapterCount;
-    }
+  const auto& entry = entries[selectorIndex];
+  if (entry.type == OpdsEntryType::NAVIGATION) {
+    previewSelectorIndex = -1;
+    previewReadyAt = 0;
+    return;
   }
 
-  if (!seriesFeedTitle.empty()) {
-    currentPreview.title = seriesFeedTitle;
-  }
-  const std::string seriesDir = resolveExistingSeriesDirectoryName(seriesFeedUrl, seriesFeedTitle, entry);
-  currentPreview.status = buildSeriesPreviewStatus(countExistingSeriesChapters(seriesDir, seriesEntries), serverChapterCount);
-  seriesStatusCache[cacheKey] = SeriesStatusSnapshot{currentPreview.title, currentPreview.status};
+  previewSelectorIndex = selectorIndex;
+  previewReadyAt = millis() + PREVIEW_DWELL_MS;
 }
 
 std::string OpdsBookBrowserActivity::getPreviewCoverPath(const OpdsEntry& entry, const std::string& baseUrl) {
@@ -710,7 +789,7 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   std::string parsedSearchTemplate;
   if (!fetchFeedData(url, parsedEntries, &parsedFeedTitle, &parsedSearchTemplate, &nextUrl, &prevUrl)) {
     state = BrowserState::ERROR;
-    errorMessage = tr(STR_FETCH_FEED_FAILED);
+    errorMessage = buildFetchErrorText(url);
     requestUpdate();
     return;
   }
@@ -739,7 +818,7 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   if (entries.empty()) {
     errorMessage = tr(STR_NO_ENTRIES);
   } else {
-    updatePreviewForSelection();
+    schedulePreviewUpdate();
   }
   requestUpdate();
 }
@@ -830,7 +909,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   const std::string seriesFeedUrl = UrlUtils::buildUrl(browseFeedUrl, entry.href);
   std::vector<OpdsEntry> seriesEntries;
   std::string seriesFeedTitle;
-  if (!fetchFeedData(seriesFeedUrl, seriesEntries, &seriesFeedTitle)) {
+  if (!fetchFeedData(seriesFeedUrl, seriesEntries, &seriesFeedTitle, nullptr, nullptr, nullptr, true)) {
     state = BrowserState::ERROR;
     errorMessage = tr(STR_FETCH_FEED_FAILED);
     requestUpdate();
@@ -933,7 +1012,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   seriesStatusCache[cacheKey] =
       SeriesStatusSnapshot{seriesFeedTitle.empty() ? entry.title : seriesFeedTitle,
                            buildSeriesPreviewStatus(serverChapterCount, serverChapterCount)};
-  updatePreviewForSelection();
+  schedulePreviewUpdate();
   requestUpdate();
 }
 

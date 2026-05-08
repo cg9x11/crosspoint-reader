@@ -14,6 +14,39 @@
 #include "util/UrlUtils.h"
 
 namespace {
+int g_lastHttpCode = 0;
+std::string g_lastErrorMessage;
+
+std::string escapeUrlForLog(const std::string& text) {
+  std::string escaped;
+  escaped.reserve(text.size());
+  for (unsigned char ch : text) {
+    if (ch >= 32 && ch <= 126) {
+      escaped.push_back(static_cast<char>(ch));
+      continue;
+    }
+    char buf[5];
+    snprintf(buf, sizeof(buf), "\\x%02X", ch);
+    escaped += buf;
+  }
+  return escaped;
+}
+
+void clearLastHttpError() {
+  g_lastHttpCode = 0;
+  g_lastErrorMessage.clear();
+}
+
+void setLastHttpError(const std::string& phase, const std::string& url, const int httpCode,
+                      const String& detail = String()) {
+  g_lastHttpCode = httpCode;
+  g_lastErrorMessage = phase + " " + url + " code=" + std::to_string(httpCode);
+  if (detail.length() > 0) {
+    g_lastErrorMessage += " ";
+    g_lastErrorMessage += detail.c_str();
+  }
+}
+
 class FileWriteStream final : public Stream {
  public:
   FileWriteStream(FsFile& file, size_t total, HttpDownloader::ProgressCallback progress)
@@ -53,8 +86,10 @@ class FileWriteStream final : public Stream {
 
 bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const std::string& username,
                               const std::string& password) {
+  clearLastHttpError();
+  const std::string sanitizedUrl = UrlUtils::sanitizeUrl(url);
   std::unique_ptr<NetworkClient> client;
-  if (UrlUtils::isHttpsUrl(url)) {
+  if (UrlUtils::isHttpsUrl(sanitizedUrl)) {
     auto* secureClient = new NetworkClientSecure();
     secureClient->setInsecure();
     client.reset(secureClient);
@@ -63,9 +98,17 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
   }
   HTTPClient http;
 
-  LOG_DBG("HTTP", "Fetching: %s", url.c_str());
+  if (sanitizedUrl != url) {
+    LOG_DBG("HTTP", "Sanitized fetch URL: raw=%s sanitized=%s", escapeUrlForLog(url).c_str(),
+            sanitizedUrl.c_str());
+  }
+  LOG_DBG("HTTP", "Fetching: %s", sanitizedUrl.c_str());
 
-  http.begin(*client, url.c_str());
+  if (!http.begin(*client, sanitizedUrl.c_str())) {
+    setLastHttpError("begin", sanitizedUrl, -1000);
+    LOG_ERR("HTTP", "Fetch begin failed: %s", escapeUrlForLog(sanitizedUrl).c_str());
+    return false;
+  }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.addHeader("User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
 
@@ -77,7 +120,9 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
 
   const int httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {
-    LOG_ERR("HTTP", "Fetch failed: %d", httpCode);
+    const String detail = HTTPClient::errorToString(httpCode);
+    setLastHttpError("GET", sanitizedUrl, httpCode, detail);
+    LOG_ERR("HTTP", "Fetch failed: %d (%s) url=%s", httpCode, detail.c_str(), sanitizedUrl.c_str());
     http.end();
     return false;
   }
@@ -85,6 +130,7 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
   http.writeToStream(&outContent);
 
   http.end();
+  clearLastHttpError();
 
   LOG_DBG("HTTP", "Fetch success");
   return true;
@@ -103,8 +149,10 @@ bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, c
 HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& url, const std::string& destPath,
                                                              ProgressCallback progress, const std::string& username,
                                                              const std::string& password) {
+  clearLastHttpError();
+  const std::string sanitizedUrl = UrlUtils::sanitizeUrl(url);
   std::unique_ptr<NetworkClient> client;
-  if (UrlUtils::isHttpsUrl(url)) {
+  if (UrlUtils::isHttpsUrl(sanitizedUrl)) {
     auto* secureClient = new NetworkClientSecure();
     secureClient->setInsecure();
     client.reset(secureClient);
@@ -113,10 +161,18 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   }
   HTTPClient http;
 
-  LOG_DBG("HTTP", "Downloading: %s", url.c_str());
+  if (sanitizedUrl != url) {
+    LOG_DBG("HTTP", "Sanitized download URL: raw=%s sanitized=%s", escapeUrlForLog(url).c_str(),
+            sanitizedUrl.c_str());
+  }
+  LOG_DBG("HTTP", "Downloading: %s", sanitizedUrl.c_str());
   LOG_DBG("HTTP", "Destination: %s", destPath.c_str());
 
-  http.begin(*client, url.c_str());
+  if (!http.begin(*client, sanitizedUrl.c_str())) {
+    setLastHttpError("begin", sanitizedUrl, -1000);
+    LOG_ERR("HTTP", "Download begin failed: %s", escapeUrlForLog(sanitizedUrl).c_str());
+    return HTTP_ERROR;
+  }
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.addHeader("User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
 
@@ -128,7 +184,9 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
 
   const int httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {
-    LOG_ERR("HTTP", "Download failed: %d", httpCode);
+    const String detail = HTTPClient::errorToString(httpCode);
+    setLastHttpError("GET", sanitizedUrl, httpCode, detail);
+    LOG_ERR("HTTP", "Download failed: %d (%s) url=%s", httpCode, detail.c_str(), sanitizedUrl.c_str());
     http.end();
     return HTTP_ERROR;
   }
@@ -162,6 +220,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   http.end();
 
   if (writeResult < 0) {
+    setLastHttpError("write", sanitizedUrl, writeResult);
     LOG_ERR("HTTP", "writeToStream error: %d", writeResult);
     Storage.remove(destPath.c_str());
     return HTTP_ERROR;
@@ -178,6 +237,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   }
 
   if (contentLength == 0 && downloaded == 0) {
+    setLastHttpError("empty", sanitizedUrl, -1001);
     LOG_ERR("HTTP", "Download failed: no data received");
     Storage.remove(destPath.c_str());
     return HTTP_ERROR;
@@ -185,10 +245,16 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
 
   // Verify download size if known
   if (contentLength > 0 && downloaded != contentLength) {
+    setLastHttpError("size", sanitizedUrl, -1002);
     LOG_ERR("HTTP", "Size mismatch: got %zu, expected %zu", downloaded, contentLength);
     Storage.remove(destPath.c_str());
     return HTTP_ERROR;
   }
 
+  clearLastHttpError();
   return OK;
 }
+
+int HttpDownloader::getLastHttpCode() { return g_lastHttpCode; }
+
+std::string HttpDownloader::getLastErrorMessage() { return g_lastErrorMessage; }

@@ -15,6 +15,7 @@
 #include "RecentBooksStore.h"
 #include "SettingsList.h"
 #include "WifiCredentialStore.h"
+#include "util/UrlUtils.h"
 
 // Convert legacy settings.
 void applyLegacyStatusBarSettings(CrossPointSettings& settings) {
@@ -386,7 +387,7 @@ bool JsonSettingsIO::saveOpds(const OpdsServerStore& store, const char* path) {
   for (const auto& server : store.getServers()) {
     JsonObject obj = arr.add<JsonObject>();
     obj["name"] = server.name;
-    obj["url"] = server.url;
+    obj["url"] = UrlUtils::sanitizeUrl(server.url);
     obj["username"] = server.username;
     obj["password_obf"] = obfuscation::obfuscateToBase64(server.password);
   }
@@ -411,7 +412,7 @@ bool JsonSettingsIO::loadOpds(OpdsServerStore& store, const char* json, bool* ne
     if (store.servers.size() >= OpdsServerStore::MAX_SERVERS) break;
     OpdsServer server;
     server.name = obj["name"] | std::string("");
-    server.url = obj["url"] | std::string("");
+    server.url = UrlUtils::sanitizeUrl(obj["url"] | std::string(""));
     server.username = obj["username"] | std::string("");
     // Try the obfuscated key first; fall back to plaintext "password" for
     // files written before obfuscation was added (or hand-edited JSON).

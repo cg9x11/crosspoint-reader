@@ -27,6 +27,18 @@ constexpr int PREVIEW_COVER_HEIGHT = 200;
 constexpr const char* NO_DESCRIPTION_TEXT = "No description";
 constexpr const char* CURRENT_READING_TEXT = "Current";
 
+bool isSeriesChapterFilename(std::string_view filename) {
+  if (filename.size() < 10 || filename.rfind("ch_", 0) != 0 || filename.substr(filename.size() - 5) != ".epub") {
+    return false;
+  }
+  for (size_t i = 3; i < filename.size() - 5; ++i) {
+    if (!isdigit(static_cast<unsigned char>(filename[i]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool containsNonAscii(const char* text) {
   if (!text) {
     return false;
@@ -102,8 +114,7 @@ bool looksLikeSeriesDirectory(FsFile& dir) {
     }
     if (!hasSeriesChapter) {
       std::string_view filename{childName};
-      hasSeriesChapter = filename.size() > 8 && filename.rfind("ch_", 0) == 0 &&
-                         filename.substr(filename.size() - 5) == ".epub";
+      hasSeriesChapter = isSeriesChapterFilename(filename);
     }
     if (hasManifest || hasSeriesChapter) {
       dir.rewindDirectory();
@@ -331,6 +342,13 @@ bool FileBrowserActivity::isPreviewable(const FileBrowserEntry& entry) const {
     return false;
   }
 
+  if (isSeriesChapterFilename(entry.rawName)) {
+    SeriesManifest manifest;
+    if (SeriesManifestStore::loadFromSeriesDir(basepath, manifest)) {
+      return false;
+    }
+  }
+
   std::string_view filename{entry.rawName};
   return FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
          FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename);
@@ -351,7 +369,7 @@ void FileBrowserActivity::loadSeriesPreview(const FileBrowserEntry& entry, Previ
 
   if (!manifest.coverPath.empty()) {
     const std::string manifestCoverPath = SeriesManifestStore::buildChapterPath(manifest.seriesDir, manifest.coverPath);
-    if (Storage.exists(manifestCoverPath.c_str())) {
+    if (Storage.exists(manifestCoverPath.c_str()) && FsHelpers::hasBmpExtension(manifestCoverPath)) {
       preview.coverBmpPath = manifestCoverPath;
     }
   }
@@ -361,10 +379,10 @@ void FileBrowserActivity::loadSeriesPreview(const FileBrowserEntry& entry, Previ
     preview.coverBmpPath = recent->coverBmpPath;
   }
 
-  if (!hasPreviewCoverBitmap(preview.coverBmpPath, PREVIEW_COVER_HEIGHT) && Storage.exists(entry.resumePath.c_str())) {
-    Epub epub(entry.resumePath, "/.crosspoint");
-    if (loadEpubForPreview(epub)) {
-      preview.coverBmpPath = preparePreviewEpubThumb(epub, PREVIEW_COVER_HEIGHT);
+  if (!hasPreviewCoverBitmap(preview.coverBmpPath, PREVIEW_COVER_HEIGHT)) {
+    const std::string seriesCoverPath = SeriesManifestStore::buildChapterPath(manifest.seriesDir, "cover.bmp");
+    if (Storage.exists(seriesCoverPath.c_str())) {
+      preview.coverBmpPath = seriesCoverPath;
     }
   }
 
@@ -574,6 +592,51 @@ void FileBrowserActivity::clearFileMetadata(const std::string& fullPath) {
   }
 }
 
+void FileBrowserActivity::clearSeriesMetadata(const FileBrowserEntry& entry) {
+  RECENT_BOOKS.removeBySeriesId(entry.seriesContext.seriesId);
+  RECENT_BOOKS.removeByPathPrefix(entry.seriesContext.seriesDir);
+
+  if ((!entry.seriesContext.seriesId.empty() && APP_STATE.openSeriesId == entry.seriesContext.seriesId) ||
+      (!entry.seriesContext.seriesDir.empty() &&
+       APP_STATE.openChapterPath.rfind(entry.seriesContext.seriesDir + "/", 0) == 0)) {
+    APP_STATE.clearOpenReadingState();
+    APP_STATE.saveToFile();
+  }
+}
+
+bool FileBrowserActivity::deletePathRecursive(const std::string& fullPath) {
+  auto file = Storage.open(fullPath.c_str());
+  if (!file) {
+    return Storage.remove(fullPath.c_str());
+  }
+
+  if (!file.isDirectory()) {
+    file.close();
+    return Storage.remove(fullPath.c_str());
+  }
+
+  file.rewindDirectory();
+  char childName[256];
+  for (auto child = file.openNextFile(); child; child = file.openNextFile()) {
+    child.getName(childName, sizeof(childName));
+    const std::string childPath = joinPath(fullPath, childName);
+    const bool isDir = child.isDirectory();
+    child.close();
+    if (isDir) {
+      if (!deletePathRecursive(childPath)) {
+        file.close();
+        return false;
+      }
+    } else if (!Storage.remove(childPath.c_str())) {
+      file.close();
+      return false;
+    }
+  }
+
+  file.close();
+  return Storage.rmdir(fullPath.c_str());
+}
+
 void FileBrowserActivity::openDirectory(const std::string& rawName) {
   basepath = joinPath(basepath, rawName.substr(0, rawName.length() - 1));
   loadFiles();
@@ -637,7 +700,31 @@ void FileBrowserActivity::loop() {
     }
 
     if (isLongPress && entry.kind == EntryKind::SeriesDirectory) {
-      openSeriesChapterList(entry);
+      auto handler = [this, entry, fullPath](const ActivityResult& res) {
+        if (res.isCancelled) {
+          LOG_DBG("FileBrowser", "Series delete cancelled by user");
+          return;
+        }
+
+        clearSeriesMetadata(entry);
+        if (deletePathRecursive(fullPath)) {
+          LOG_DBG("FileBrowser", "Deleted series directory: %s", fullPath.c_str());
+          loadFiles();
+          if (files.empty()) {
+            selectorIndex = 0;
+          } else if (selectorIndex >= files.size()) {
+            selectorIndex = files.size() - 1;
+          }
+          loadPreviewForSelection();
+          requestUpdate(true);
+        } else {
+          LOG_ERR("FileBrowser", "Failed to delete series directory: %s", fullPath.c_str());
+        }
+      };
+
+      std::string heading = tr(STR_DELETE) + std::string("? ");
+      startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, entry.title),
+                             handler);
       return;
     }
 

@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "CrossPointSettings.h"
+#include "util/UrlUtils.h"
 
 OpdsServerStore OpdsServerStore::instance;
 
@@ -51,7 +52,7 @@ bool OpdsServerStore::migrateFromSettings() {
 
   OpdsServer server;
   server.name = "OPDS Server";
-  server.url = SETTINGS.opdsServerUrl;
+  server.url = UrlUtils::sanitizeUrl(SETTINGS.opdsServerUrl);
   server.username = SETTINGS.opdsUsername;
   server.password = SETTINGS.opdsPassword;
   servers.push_back(std::move(server));
@@ -77,8 +78,10 @@ bool OpdsServerStore::addServer(const OpdsServer& server) {
     return false;
   }
 
-  servers.push_back(server);
-  LOG_DBG("OPS", "Added server: %s", server.name.c_str());
+  OpdsServer sanitized = server;
+  sanitized.url = UrlUtils::sanitizeUrl(sanitized.url);
+  servers.push_back(std::move(sanitized));
+  LOG_DBG("OPS", "Added server: %s", servers.back().name.c_str());
   return saveToFile();
 }
 
@@ -87,8 +90,10 @@ bool OpdsServerStore::updateServer(size_t index, const OpdsServer& server) {
     return false;
   }
 
-  servers[index] = server;
-  LOG_DBG("OPS", "Updated server: %s", server.name.c_str());
+  OpdsServer sanitized = server;
+  sanitized.url = UrlUtils::sanitizeUrl(sanitized.url);
+  servers[index] = std::move(sanitized);
+  LOG_DBG("OPS", "Updated server: %s", servers[index].name.c_str());
   return saveToFile();
 }
 

@@ -48,7 +48,7 @@ using OpdsBook = OpdsEntry;
  */
 class OpdsParser final : public Print {
  public:
-  OpdsParser();
+  explicit OpdsParser(bool captureExtendedMetadata = true);
   ~OpdsParser();
 
   // Disable copy
@@ -115,4 +115,5 @@ class OpdsParser final : public Print {
   bool inContent = false;
 
   bool errorOccured = false;
+  bool captureExtendedMetadata = true;
 };

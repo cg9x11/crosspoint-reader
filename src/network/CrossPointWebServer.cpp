@@ -18,6 +18,7 @@
 #include "html/HomePageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
+#include "util/UrlUtils.h"
 
 namespace {
 // Folders/files to hide from the web interface file browser
@@ -1303,7 +1304,7 @@ void CrossPointWebServer::handlePostOpdsServer() {
 
   OpdsServer opdsServer;
   opdsServer.name = doc["name"] | std::string("");
-  opdsServer.url = doc["url"] | std::string("");
+  opdsServer.url = UrlUtils::sanitizeUrl(doc["url"] | std::string(""));
   opdsServer.username = doc["username"] | std::string("");
 
   // The password field is optional in the JSON payload. When absent (vs. present but empty),

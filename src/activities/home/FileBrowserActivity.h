@@ -43,6 +43,8 @@ class FileBrowserActivity final : public Activity {
 
   // Deletion
   void clearFileMetadata(const std::string& fullPath);
+  void clearSeriesMetadata(const FileBrowserEntry& entry);
+  bool deletePathRecursive(const std::string& fullPath);
   bool tryBuildSeriesEntry(const std::string& directoryName, FileBrowserEntry& entry) const;
   bool isPreviewable(const FileBrowserEntry& entry) const;
   std::string getEntryFullPath(const FileBrowserEntry& entry) const;
