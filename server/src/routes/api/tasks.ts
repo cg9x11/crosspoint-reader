@@ -114,6 +114,7 @@ function mergeQueueActivity(activityMaps: Array<Map<string, QueueNovelActivity>>
 
 function buildTaskState(input: {
   syncStatus: string;
+  triggerType: string | null;
   hasRunningJobs: boolean;
   failedChapters: number;
   remainingChapters: number;
@@ -122,7 +123,15 @@ function buildTaskState(input: {
     return input.syncStatus === "queued" ? "queued" : "running";
   }
 
-  if (input.failedChapters > 0 || input.syncStatus === "error" || input.remainingChapters > 0) {
+  if (input.failedChapters > 0 || input.syncStatus === "error") {
+    return "stopped";
+  }
+
+  if (input.triggerType === "rebuild") {
+    return "completed";
+  }
+
+  if (input.remainingChapters > 0) {
     return "stopped";
   }
 
@@ -237,13 +246,14 @@ export async function registerTasksApiRoutes(app: FastifyInstance) {
           stats.pending,
           Math.max(0, Number(novel.totalChapters) - Number(novel.downloadedChapters))
         );
+        const latestRun = novel.syncRuns[0] ?? null;
         const state = buildTaskState({
           syncStatus: novel.syncStatus,
+          triggerType: latestRun?.triggerType || null,
           hasRunningJobs: Boolean(queue?.totalJobs),
           failedChapters: stats.failed,
           remainingChapters
         });
-        const latestRun = novel.syncRuns[0] ?? null;
         const lastFailedChapter = stats.lastFailedChapter;
         const lastError =
           lastFailedChapter?.lastError || novel.lastError || latestRun?.errorMessage || null;

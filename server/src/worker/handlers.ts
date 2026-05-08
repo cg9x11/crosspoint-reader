@@ -232,6 +232,59 @@ async function moveFile(tempPath: string, targetPath: string) {
   }
 }
 
+async function closeRunningRebuildRunIfSettled(prisma: PrismaClient, novelId: string) {
+  const runningRebuild = await prisma.syncRun.findFirst({
+    where: {
+      novelId,
+      triggerType: "rebuild",
+      status: "running"
+    },
+    orderBy: { createdAt: "desc" }
+  });
+
+  if (!runningRebuild) {
+    return null;
+  }
+
+  const [unfinishedBuilds, failedBuilds] = await Promise.all([
+    prisma.chapter.count({
+      where: {
+        novelId,
+        status: { in: ["queued_build", "building"] }
+      }
+    }),
+    prisma.chapter.count({
+      where: {
+        novelId,
+        status: "build_failed"
+      }
+    })
+  ]);
+
+  if (unfinishedBuilds > 0) {
+    return null;
+  }
+
+  const endedAt = new Date();
+  const status = failedBuilds > 0 ? "failed" : "completed";
+  await prisma.syncRun.update({
+    where: { id: runningRebuild.id },
+    data: {
+      status,
+      errorMessage: failedBuilds > 0 ? "One or more chapters failed during rebuild." : null,
+      endedAt
+    }
+  });
+  await prisma.novel.update({
+    where: { id: novelId },
+    data: {
+      lastSyncEndedAt: endedAt
+    }
+  });
+
+  return status;
+}
+
 export async function scheduleNovelSync(
   queues: AppQueues,
   prisma: PrismaClient,
@@ -430,6 +483,20 @@ export async function rebuildNovelPipeline(
     throw new Error("Novel not found");
   }
 
+  const now = new Date();
+  await prisma.syncRun.updateMany({
+    where: {
+      novelId,
+      triggerType: "rebuild",
+      status: "running"
+    },
+    data: {
+      status: "failed",
+      errorMessage: "Superseded by a newer rebuild request.",
+      endedAt: now
+    }
+  });
+
   let chapterJobs = 0;
   for (const chapter of novel.chapters) {
     const htmlPath = getChapterHtmlPath(storagePaths, chapter.novelId, chapter.chapterIndex);
@@ -452,11 +519,25 @@ export async function rebuildNovelPipeline(
     chapterJobs += 1;
   }
 
+  await prisma.syncRun.create({
+    data: {
+      novelId,
+      triggerType: "rebuild",
+      status: chapterJobs > 0 ? "running" : "completed",
+      startedAt: now,
+      endedAt: chapterJobs > 0 ? null : now,
+      totalFound: novel.chapters.length,
+      newChapters: 0
+    }
+  });
+
   await prisma.novel.update({
     where: { id: novelId },
     data: {
       syncStatus: chapterJobs > 0 ? "syncing" : novel.syncStatus,
-      lastError: chapterJobs > 0 ? null : novel.lastError
+      lastError: chapterJobs > 0 ? null : novel.lastError,
+      lastSyncStartedAt: now,
+      lastSyncEndedAt: chapterJobs > 0 ? null : now
     }
   });
 
@@ -820,6 +901,7 @@ export async function processChapterBuildJob(
       }
     });
     await updateNovelAggregateState(context.prisma, chapter.novelId);
+    await closeRunningRebuildRunIfSettled(context.prisma, chapter.novelId);
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Chapter build failed";
@@ -850,6 +932,7 @@ export async function processChapterBuildJob(
           throw updateError;
         }
       });
+    await closeRunningRebuildRunIfSettled(context.prisma, chapter.novelId);
     throw error;
   }
 }

@@ -724,6 +724,26 @@
     return "ready";
   }
 
+  function taskTriggerLabel(task) {
+    const value = String(task?.triggerType || "").toLowerCase();
+    if (value === "rebuild") {
+      return "Rebuild local";
+    }
+    if (value === "manual") {
+      return "Đồng bộ tay";
+    }
+    if (value === "retry") {
+      return "Chạy lại";
+    }
+    if (value === "cron") {
+      return "Đồng bộ lịch";
+    }
+    if (value === "add") {
+      return "Thêm vào thư viện";
+    }
+    return "Tác vụ";
+  }
+
   function formatChapterProgress(downloadedChapters, totalChapters) {
     const downloaded = Number(downloadedChapters) || 0;
     const total = Number(totalChapters) || 0;
@@ -737,7 +757,7 @@
   }
 
   function buildTaskSummary(task) {
-    const parts = [formatChapterProgress(task.downloadedChapters, task.totalChapters)];
+    const parts = [taskTriggerLabel(task), formatChapterProgress(task.downloadedChapters, task.totalChapters)];
     if (task.remainingChapters > 0) {
       parts.push(`còn ${formatCount(task.remainingChapters)}`);
     }
@@ -771,7 +791,7 @@
         parts.push(chapterLabel);
       }
     } else if (task?.lastErrorSource === "chapter_build") {
-      parts.push("Lỗi dựng EPUB");
+      parts.push(task?.triggerType === "rebuild" ? "Lỗi rebuild local" : "Lỗi dựng file local");
       if (chapterLabel) {
         parts.push(chapterLabel);
       }
