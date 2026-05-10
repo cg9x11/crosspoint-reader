@@ -29,12 +29,16 @@ void RecentBooksStore::addBook(const RecentBook& newBook) {
   // Remove existing entry if present
   auto it = std::find_if(recentBooks.begin(), recentBooks.end(),
                          [&](const RecentBook& book) { return book == newBook; });
+  RecentBook bookToInsert = newBook;
   if (it != recentBooks.end()) {
+    if (bookToInsert.coverBmpPath.empty() && !it->coverBmpPath.empty()) {
+      bookToInsert.coverBmpPath = it->coverBmpPath;
+    }
     recentBooks.erase(it);
   }
 
   // Add to front
-  recentBooks.insert(recentBooks.begin(), newBook);
+  recentBooks.insert(recentBooks.begin(), bookToInsert);
 
   // Trim to max size
   if (recentBooks.size() > MAX_RECENT_BOOKS) {
@@ -58,7 +62,9 @@ void RecentBooksStore::updateBook(const RecentBook& updatedBook) {
     book.path = updatedBook.path;
     book.title = updatedBook.title;
     book.author = updatedBook.author;
-    book.coverBmpPath = updatedBook.coverBmpPath;
+    if (!updatedBook.coverBmpPath.empty()) {
+      book.coverBmpPath = updatedBook.coverBmpPath;
+    }
     saveToFile();
   }
 }

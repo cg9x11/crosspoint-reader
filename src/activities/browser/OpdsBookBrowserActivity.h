@@ -2,7 +2,6 @@
 #include <OpdsParser.h>
 
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -35,11 +34,6 @@ class OpdsBookBrowserActivity final : public Activity {
     std::string coverBmpPath;
   };
 
-  struct SeriesStatusSnapshot {
-    std::string resolvedTitle;
-    std::string status;
-  };
-
   ButtonNavigator buttonNavigator;
   BrowserState state = BrowserState::LOADING;
   std::vector<OpdsEntry> entries;
@@ -52,12 +46,19 @@ class OpdsBookBrowserActivity final : public Activity {
   int selectorIndex = 0;
   int previewSelectorIndex = -1;
   unsigned long previewReadyAt = 0;
+  int previewSummaryScrollOffset = 0;
+  int previewSummaryTotalLines = 0;
+  int previewSummaryVisibleLines = 0;
+  int previewSummaryCacheWidth = 0;
+  std::string previewSummaryCacheKey;
+  std::vector<std::string> previewSummaryLines;
   std::string errorMessage;
   std::string statusMessage;
+  std::string downloadDetailMessage;
+  std::string pendingFetchPath;
   size_t downloadProgress = 0;
   size_t downloadTotal = 0;
   PreviewData currentPreview;
-  std::unordered_map<std::string, SeriesStatusSnapshot> seriesStatusCache;
 
   OpdsServer server;  // Copied at construction - safe even if the store changes during browsing
 
@@ -76,11 +77,14 @@ class OpdsBookBrowserActivity final : public Activity {
   void performSearch(const std::string& query);
   bool ensureSeriesArtifacts(const OpdsEntry& seriesEntry, const std::string& feedUrl,
                              const std::vector<OpdsEntry>& seriesEntries, const std::string& firstDownloadUrl,
-                             const std::string& localSeriesDir);
+                             const std::string& localSeriesDir, bool allowRemoteManifestFetch);
   bool synthesizeSeriesManifest(const std::string& feedUrl, const std::vector<OpdsEntry>& seriesEntries,
                                 const std::string& localSeriesDir, const OpdsEntry& seriesEntry) const;
   void updatePreviewForSelection();
   void schedulePreviewUpdate();
+  bool hydrateEntryMetadata(OpdsEntry& entry);
+  void resetPreviewSummaryCache();
+  void ensurePreviewSummaryCache(const PreviewData& preview, int textWidth);
   std::string getPreviewCoverPath(const OpdsEntry& entry, const std::string& baseUrl);
   void drawPreviewPanel(const Rect& rect, const PreviewData& preview);
   bool preventAutoSleep() override { return true; }

@@ -6,6 +6,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Txt.h>
 #include <Utf8.h>
 #include <Xtc.h>
 
@@ -118,6 +119,24 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             if (!success) {
               RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
               book.coverBmpPath = "";
+            }
+            coverRendered = false;
+            requestUpdate();
+          }
+        } else if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path)) {
+          Txt txt(book.path, "/.crosspoint");
+          if (txt.load()) {
+            if (!showingLoading) {
+              showingLoading = true;
+              popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+            }
+            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+            const bool success = txt.generateCoverBmp();
+            if (!success) {
+              RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
+              book.coverBmpPath = "";
+            } else {
+              book.coverBmpPath = txt.getCoverBmpPath();
             }
             coverRendered = false;
             requestUpdate();

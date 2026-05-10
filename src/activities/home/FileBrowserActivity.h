@@ -72,10 +72,18 @@ class FileBrowserActivity final : public Activity {
   std::string basepath = "/";
   std::vector<FileBrowserEntry> files;
   PreviewData currentPreview;
+  int previewSummaryScrollOffset = 0;
+  int previewSummaryTotalLines = 0;
+  int previewSummaryVisibleLines = 0;
+  int previewSummaryCacheWidth = 0;
+  std::string previewSummaryCacheKey;
+  std::vector<std::string> previewSummaryLines;
 
   // Data loading
   void loadFiles();
   size_t findEntry(const std::string& name) const;
+  void resetPreviewSummaryCache();
+  void ensurePreviewSummaryCache(const PreviewData& preview, int textWidth);
 
  public:
   explicit FileBrowserActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialPath = "/",

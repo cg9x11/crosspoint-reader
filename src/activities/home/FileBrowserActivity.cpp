@@ -261,6 +261,50 @@ bool hasPreviewCoverBitmap(const std::string& coverBmpPath, const int thumbHeigh
   return !resolvePreviewCoverPath(coverBmpPath, thumbHeight).empty();
 }
 
+bool hasUsableDownloadedSeriesChapterFile(const std::string& path) {
+  if (!Storage.exists(path.c_str())) {
+    return false;
+  }
+
+  FsFile file;
+  if (!Storage.openFileForRead("FBA", path.c_str(), file) || !file || file.isDirectory()) {
+    if (file) {
+      file.close();
+    }
+    return false;
+  }
+
+  const size_t fileSize = file.size();
+  std::string_view filename{path};
+  bool usable = false;
+  if (FsHelpers::hasEpubExtension(filename)) {
+    uint8_t header[2] = {0, 0};
+    usable = fileSize >= 256 && file.read(header, sizeof(header)) == static_cast<int>(sizeof(header)) && header[0] == 'P' &&
+             header[1] == 'K';
+  } else if (FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename)) {
+    usable = fileSize >= 8;
+  } else {
+    usable = fileSize > 0;
+  }
+
+  file.close();
+  return usable;
+}
+
+size_t countDownloadedSeriesChapters(const std::string& seriesDir) {
+  size_t count = 0;
+  SeriesManifestStore::forEachChapterInSeriesDir(
+      seriesDir,
+      [&seriesDir, &count](const SeriesChapter& chapter) {
+        if (hasUsableDownloadedSeriesChapterFile(SeriesManifestStore::buildChapterPath(seriesDir, chapter.file))) {
+          ++count;
+        }
+        return true;
+      },
+      nullptr);
+  return count;
+}
+
 void drawBitmapCoverFill(GfxRenderer& renderer, const Bitmap& bitmap, const int x, const int y, const int width,
                          const int height) {
   if (bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0 || width <= 0 || height <= 0) {
@@ -297,9 +341,18 @@ const RecentBook* FileBrowserActivity::findRecentBookForPath(const std::string& 
 }
 
 bool FileBrowserActivity::tryBuildSeriesEntry(const std::string& directoryName, FileBrowserEntry& entry) const {
-  SeriesManifest manifest;
   const std::string seriesDir = joinPath(basepath, directoryName);
-  if (!SeriesManifestStore::loadFromSeriesDir(seriesDir, manifest)) {
+  SeriesManifest manifest;
+  if (!SeriesManifestStore::loadMetadataFromSeriesDir(seriesDir, manifest)) {
+    return false;
+  }
+  if (manifest.seriesId.empty()) {
+    return false;
+  }
+
+  size_t totalChapters = 0;
+  SeriesChapter activeChapter;
+  if (!SeriesManifestStore::findFirstChapterInSeriesDir(seriesDir, activeChapter, &totalChapters)) {
     return false;
   }
 
@@ -317,12 +370,11 @@ bool FileBrowserActivity::tryBuildSeriesEntry(const std::string& directoryName, 
     }
   }
 
-  SeriesChapter activeChapter = manifest.chapters.front();
   std::string resumePath = SeriesManifestStore::buildChapterPath(manifest.seriesDir, activeChapter.file);
   if (recent && !recent->path.empty() && Storage.exists(recent->path.c_str())) {
-    const auto chapter = SeriesManifestStore::findByPath(manifest, recent->path);
-    if (chapter.has_value()) {
-      activeChapter = *chapter;
+    SeriesChapter recentChapter;
+    if (SeriesManifestStore::findChapterByPathInSeriesDir(seriesDir, recent->path, recentChapter, &totalChapters)) {
+      activeChapter = recentChapter;
       resumePath = recent->path;
     }
   }
@@ -334,7 +386,7 @@ bool FileBrowserActivity::tryBuildSeriesEntry(const std::string& directoryName, 
 
   entry.resumePath = resumePath;
   entry.subtitle = activeChapter.title.empty() ? getFileTitle(activeChapter.file) : activeChapter.title;
-  entry.value = std::to_string(activeChapter.chapterIndex) + "/" + std::to_string(manifest.chapters.size());
+  entry.value = std::to_string(countDownloadedSeriesChapters(seriesDir)) + "/" + std::to_string(totalChapters);
   entry.seriesContext.seriesId = manifest.seriesId;
   entry.seriesContext.seriesDir = manifest.seriesDir;
   entry.seriesContext.chapterPath = resumePath;
@@ -352,7 +404,7 @@ bool FileBrowserActivity::isPreviewable(const FileBrowserEntry& entry) const {
 
   if (isSeriesChapterFilename(entry.rawName)) {
     SeriesManifest manifest;
-    if (SeriesManifestStore::loadFromSeriesDir(basepath, manifest)) {
+    if (SeriesManifestStore::loadMetadataFromSeriesDir(basepath, manifest)) {
       return false;
     }
   }
@@ -366,9 +418,10 @@ std::string FileBrowserActivity::getEntryFullPath(const FileBrowserEntry& entry)
 
 void FileBrowserActivity::loadSeriesPreview(const FileBrowserEntry& entry, PreviewData& preview) const {
   SeriesManifest manifest;
-  if (!SeriesManifestStore::loadFromSeriesDir(entry.seriesContext.seriesDir, manifest)) {
+  if (!SeriesManifestStore::loadMetadataFromSeriesDir(entry.seriesContext.seriesDir, manifest)) {
     return;
   }
+  const size_t totalChapters = SeriesManifestStore::countChaptersFromSeriesDir(entry.seriesContext.seriesDir);
 
   preview.available = true;
   preview.title = entry.title;
@@ -396,7 +449,7 @@ void FileBrowserActivity::loadSeriesPreview(const FileBrowserEntry& entry, Previ
 
   if (entry.seriesContext.chapterIndex > 0) {
     preview.status = tr(STR_CONTINUE_READING) + std::string(": ") + std::to_string(entry.seriesContext.chapterIndex) +
-                     "/" + std::to_string(manifest.chapters.size());
+                     "/" + std::to_string(totalChapters);
   } else {
     preview.status = tr(STR_START_READING);
   }
@@ -481,6 +534,7 @@ void FileBrowserActivity::loadFilePreview(const FileBrowserEntry& entry, const s
 
 void FileBrowserActivity::loadPreviewForSelection() {
   currentPreview = {};
+  resetPreviewSummaryCache();
   if (files.empty() || selectorIndex >= files.size()) {
     return;
   }
@@ -508,15 +562,36 @@ void FileBrowserActivity::loadFiles() {
 
   root.rewindDirectory();
 
+  struct PendingEntry {
+    std::string name;
+    bool isDirectory = false;
+  };
+  std::vector<PendingEntry> pendingEntries;
   char name[500];
   for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
     file.getName(name, sizeof(name));
     if ((!SETTINGS.showHiddenFiles && name[0] == '.') || strcmp(name, "System Volume Information") == 0) {
+      file.close();
       continue;
     }
 
-    if (file.isDirectory()) {
-      const std::string normalizedDirectoryName = migrateUnicodeSeriesDirectoryName(basepath, name, file);
+    PendingEntry pending;
+    pending.name = name;
+    pending.isDirectory = file.isDirectory();
+    pendingEntries.push_back(std::move(pending));
+    file.close();
+  }
+  root.close();
+
+  for (const auto& pending : pendingEntries) {
+    if (pending.isDirectory) {
+      auto dir = Storage.open(joinPath(basepath, pending.name).c_str());
+      std::string normalizedDirectoryName = pending.name;
+      if (dir && dir.isDirectory()) {
+        normalizedDirectoryName = migrateUnicodeSeriesDirectoryName(basepath, pending.name, dir);
+        dir.close();
+      }
+
       FileBrowserEntry entry;
       if (tryBuildSeriesEntry(normalizedDirectoryName, entry)) {
         files.push_back(std::move(entry));
@@ -527,31 +602,32 @@ void FileBrowserActivity::loadFiles() {
       entry.title = getDirectoryTitle(entry.rawName);
       entry.kind = EntryKind::Directory;
       files.push_back(std::move(entry));
-    } else {
-      std::string_view filename{name};
-      if (mode == Mode::PickFirmware) {
-        if (getFileExtension(std::string(filename)) != ".bin") {
-          continue;
-        }
-        FileBrowserEntry entry;
-        entry.rawName = std::string(filename);
-        entry.title = getFileTitle(entry.rawName);
-        entry.value = getFileExtension(entry.rawName);
-        entry.kind = EntryKind::File;
-        files.push_back(std::move(entry));
+      continue;
+    }
+
+    std::string_view filename{pending.name};
+    if (mode == Mode::PickFirmware) {
+      if (getFileExtension(std::string(filename)) != ".bin") {
         continue;
       }
+      FileBrowserEntry entry;
+      entry.rawName = std::string(filename);
+      entry.title = getFileTitle(entry.rawName);
+      entry.value = getFileExtension(entry.rawName);
+      entry.kind = EntryKind::File;
+      files.push_back(std::move(entry));
+      continue;
+    }
 
-      if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
-          FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
-          FsHelpers::hasBmpExtension(filename)) {
-        FileBrowserEntry entry;
-        entry.rawName = std::string(filename);
-        entry.title = getFileTitle(entry.rawName);
-        entry.value = getFileExtension(entry.rawName);
-        entry.kind = EntryKind::File;
-        files.push_back(std::move(entry));
-      }
+    if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
+        FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
+        FsHelpers::hasBmpExtension(filename)) {
+      FileBrowserEntry entry;
+      entry.rawName = std::string(filename);
+      entry.title = getFileTitle(entry.rawName);
+      entry.value = getFileExtension(entry.rawName);
+      entry.kind = EntryKind::File;
+      files.push_back(std::move(entry));
     }
   }
   std::sort(files.begin(), files.end(),
@@ -564,6 +640,7 @@ void FileBrowserActivity::onEnter() {
   Activity::onEnter();
 
   selectorIndex = 0;
+  resetPreviewSummaryCache();
 
   auto root = Storage.open(basepath.c_str());
   if (!root) {
@@ -590,6 +667,7 @@ void FileBrowserActivity::onEnter() {
 void FileBrowserActivity::onExit() {
   Activity::onExit();
   files.clear();
+  resetPreviewSummaryCache();
 }
 
 void FileBrowserActivity::clearFileMetadata(const std::string& fullPath) {
@@ -649,6 +727,7 @@ void FileBrowserActivity::openDirectory(const std::string& rawName) {
   basepath = joinPath(basepath, rawName.substr(0, rawName.length() - 1));
   loadFiles();
   selectorIndex = 0;
+  resetPreviewSummaryCache();
   loadPreviewForSelection();
   requestUpdate();
 }
@@ -665,6 +744,34 @@ void FileBrowserActivity::resumeSeriesDirectory(const FileBrowserEntry& entry) {
     return;
   }
   openSeriesChapterList(entry);
+}
+
+void FileBrowserActivity::resetPreviewSummaryCache() {
+  previewSummaryScrollOffset = 0;
+  previewSummaryTotalLines = 0;
+  previewSummaryVisibleLines = 0;
+  previewSummaryCacheWidth = 0;
+  previewSummaryCacheKey.clear();
+  previewSummaryLines.clear();
+}
+
+void FileBrowserActivity::ensurePreviewSummaryCache(const PreviewData& preview, const int textWidth) {
+  if (textWidth <= 0) {
+    previewSummaryLines.clear();
+    previewSummaryCacheWidth = 0;
+    previewSummaryCacheKey.clear();
+    return;
+  }
+
+  const std::string cacheKey = preview.key + "|" + preview.summary;
+  if (previewSummaryCacheWidth == textWidth && previewSummaryCacheKey == cacheKey && !previewSummaryLines.empty()) {
+    return;
+  }
+
+  const std::string summaryText = normalizePreviewText(preview.summary);
+  previewSummaryLines = renderer.wrappedText(SMALL_FONT_ID, summaryText.c_str(), textWidth, 48);
+  previewSummaryCacheWidth = textWidth;
+  previewSummaryCacheKey = cacheKey;
 }
 
 void FileBrowserActivity::loop() {
@@ -798,6 +905,7 @@ void FileBrowserActivity::loop() {
         const std::string dirName = oldPath.substr(pos + 1) + "/";
         selectorIndex = findEntry(dirName);
 
+        resetPreviewSummaryCache();
         loadPreviewForSelection();
         requestUpdate();
       } else {
@@ -898,16 +1006,21 @@ void FileBrowserActivity::drawPreviewPanel(const Rect& rect, const PreviewData& 
 
   const int availableHeight = rect.y + rect.height - panelPadding - textY;
   const int maxSummaryLines = std::max(0, std::min(7, availableHeight / renderer.getLineHeight(SMALL_FONT_ID)));
+  previewSummaryVisibleLines = maxSummaryLines;
+  previewSummaryTotalLines = 0;
   if (maxSummaryLines <= 0) {
     return;
   }
 
-  const std::string summaryText = normalizePreviewText(preview.summary);
-  auto summaryLines = renderer.wrappedText(SMALL_FONT_ID, summaryText.c_str(), textWidth, maxSummaryLines);
-  for (const auto& line : summaryLines) {
-    renderer.drawText(SMALL_FONT_ID, textX, textY, line.c_str(), true);
+  ensurePreviewSummaryCache(preview, textWidth);
+  previewSummaryTotalLines = static_cast<int>(previewSummaryLines.size());
+  const size_t startIndex = std::min(static_cast<size_t>(previewSummaryScrollOffset), previewSummaryLines.size());
+  const size_t endIndex = std::min(startIndex + static_cast<size_t>(maxSummaryLines), previewSummaryLines.size());
+  for (size_t i = startIndex; i < endIndex; ++i) {
+    renderer.drawText(SMALL_FONT_ID, textX, textY, previewSummaryLines[i].c_str(), true);
     textY += renderer.getLineHeight(SMALL_FONT_ID);
   }
+
 }
 
 void FileBrowserActivity::render(RenderLock&&) {

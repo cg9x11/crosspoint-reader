@@ -6,7 +6,11 @@
 #include <cstring>
 
 namespace {
-constexpr size_t MAX_OPDS_TEXT_LEN = 1024;
+constexpr size_t MAX_OPDS_TITLE_LEN = 160;
+constexpr size_t MAX_OPDS_AUTHOR_LEN = 96;
+constexpr size_t MAX_OPDS_ID_LEN = 160;
+constexpr size_t MAX_OPDS_SUMMARY_LEN = 384;
+constexpr size_t MAX_OPDS_FEED_TITLE_LEN = 160;
 
 bool isBookAcquisitionType(const char* type) {
   if (!type) {
@@ -16,11 +20,28 @@ bool isBookAcquisitionType(const char* type) {
          strncmp(type, "text/markdown", 13) == 0;
 }
 
-void appendCapped(std::string& target, const XML_Char* s, const int len) {
-  if (len <= 0 || target.size() >= MAX_OPDS_TEXT_LEN) {
+size_t currentTextLimit(const bool inSummary, const bool inContent, const bool inAuthorName, const bool inId,
+                        const bool inFeedTitle) {
+  if (inSummary || inContent) {
+    return MAX_OPDS_SUMMARY_LEN;
+  }
+  if (inAuthorName) {
+    return MAX_OPDS_AUTHOR_LEN;
+  }
+  if (inId) {
+    return MAX_OPDS_ID_LEN;
+  }
+  if (inFeedTitle) {
+    return MAX_OPDS_FEED_TITLE_LEN;
+  }
+  return MAX_OPDS_TITLE_LEN;
+}
+
+void appendCapped(std::string& target, const XML_Char* s, const int len, const size_t maxLen) {
+  if (len <= 0 || target.size() >= maxLen) {
     return;
   }
-  const size_t remaining = MAX_OPDS_TEXT_LEN - target.size();
+  const size_t remaining = maxLen - target.size();
   const size_t appendLen = std::min(static_cast<size_t>(len), remaining);
   target.append(s, appendLen);
 }
@@ -75,6 +96,10 @@ size_t OpdsParser::write(const uint8_t* xmlData, const size_t length) {
 }
 
 void OpdsParser::flush() {
+  if (!parser) {
+    errorOccured = true;
+    return;
+  }
   if (XML_Parse(parser, nullptr, 0, XML_TRUE) != XML_STATUS_OK) {
     errorOccured = true;
     destroyXmlParser(parser);
@@ -195,7 +220,8 @@ void XMLCALL OpdsParser::endElement(void* userData, const XML_Char* name) {
 
   if (strcmp(name, "entry") == 0 || strstr(name, ":entry") != nullptr) {
     if (!self->currentEntry.title.empty() && !self->currentEntry.href.empty()) {
-      self->entries.push_back(self->currentEntry);
+      self->entries.push_back(std::move(self->currentEntry));
+      self->currentEntry = OpdsEntry{};
     }
     self->inEntry = false;
   } else if (!self->inEntry) {
@@ -228,6 +254,8 @@ void XMLCALL OpdsParser::endElement(void* userData, const XML_Char* name) {
 void XMLCALL OpdsParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<OpdsParser*>(userData);
   if (self->inTitle || self->inFeedTitle || self->inAuthorName || self->inId || self->inSummary || self->inContent) {
-    appendCapped(self->currentText, s, len);
+    appendCapped(self->currentText, s, len,
+                 currentTextLimit(self->inSummary, self->inContent, self->inAuthorName, self->inId,
+                                  self->inFeedTitle));
   }
 }

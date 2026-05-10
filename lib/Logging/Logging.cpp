@@ -1,9 +1,20 @@
 #include "Logging.h"
 
+#include <Arduino.h>
+#include <SDCardManager.h>
+
 #include <string>
 
-#define MAX_ENTRY_LEN 256
-#define MAX_LOG_LINES 16
+// Keep enough crash context for triage while avoiding overuse of scarce RTC slow memory.
+#define MAX_ENTRY_LEN 192
+#define MAX_LOG_LINES 12
+static constexpr const char* TRACE_LOG_DIR = "/.crosspoint/logs";
+static constexpr const char* TRACE_LOG_FILE = "/.crosspoint/logs/http_trace.log";
+static constexpr size_t TRACE_LOG_MAX_BYTES = 64 * 1024;
+static bool g_traceSessionOpened = false;
+static bool g_traceWriteInProgress = false;
+
+void appendTraceSessionHeaderIfNeeded(FsFile& file);
 
 // Simple ring buffer log, useful for error reporting when we encounter a crash
 RTC_NOINIT_ATTR char logMessages[MAX_LOG_LINES][MAX_ENTRY_LEN];
@@ -30,6 +41,73 @@ void addToLogRingBuffer(const char* message) {
   logHead = (logHead + 1) % MAX_LOG_LINES;
 }
 
+bool shouldPersistTraceLog(const char* origin) {
+  return strcmp(origin, "HTTP") == 0 || strcmp(origin, "OPDS") == 0 || strcmp(origin, "SER") == 0;
+}
+
+bool ensureTraceLogReadyInternal(FsFile* openedFile = nullptr) {
+  if (!SdMan.ready() || !SdMan.ensureDirectoryExists("/.crosspoint") || !SdMan.ensureDirectoryExists(TRACE_LOG_DIR)) {
+    return false;
+  }
+
+  if (SdMan.exists(TRACE_LOG_FILE)) {
+    auto existing = SdMan.open(TRACE_LOG_FILE);
+    if (existing && existing.size() >= TRACE_LOG_MAX_BYTES) {
+      existing.close();
+      SdMan.remove(TRACE_LOG_FILE);
+      g_traceSessionOpened = false;
+    } else if (existing) {
+      existing.close();
+    }
+  }
+
+  if (openedFile) {
+    return true;
+  }
+
+  auto file = SdMan.open(TRACE_LOG_FILE, O_WRITE | O_CREAT);
+  if (!file) {
+    return false;
+  }
+  file.seekSet(file.size());
+  appendTraceSessionHeaderIfNeeded(file);
+  file.close();
+  return true;
+}
+
+void appendTraceSessionHeaderIfNeeded(FsFile& file) {
+  if (g_traceSessionOpened) {
+    return;
+  }
+  char header[160];
+  snprintf(header, sizeof(header), "\n=== TRACE SESSION %lu %s ===\n", millis(), CROSSPOINT_VERSION);
+  file.write(reinterpret_cast<const uint8_t*>(header), strlen(header));
+  g_traceSessionOpened = true;
+}
+
+void appendTraceLog(const char* message) {
+  if (g_traceWriteInProgress || !message || message[0] == '\0') {
+    return;
+  }
+
+  g_traceWriteInProgress = true;
+  if (!ensureTraceLogReadyInternal()) {
+    g_traceWriteInProgress = false;
+    return;
+  }
+
+  auto file = SdMan.open(TRACE_LOG_FILE, O_WRITE | O_CREAT);
+  if (!file) {
+    g_traceWriteInProgress = false;
+    return;
+  }
+  file.seekSet(file.size());
+  appendTraceSessionHeaderIfNeeded(file);
+  file.write(reinterpret_cast<const uint8_t*>(message), strlen(message));
+  file.close();
+  g_traceWriteInProgress = false;
+}
+
 // Since logging can take a large amount of flash, we want to make the format string as short as possible.
 // This logPrintf prepend the timestamp, level and origin to the user-provided message, so that the user only needs to
 // provide the format string for the message itself.
@@ -37,22 +115,25 @@ void logPrintf(const char* level, const char* origin, const char* format, ...) {
   va_list args;
   va_start(args, format);
   char buf[MAX_ENTRY_LEN];
+  buf[0] = '\0';
   char* c = buf;
+  size_t remaining = sizeof(buf);
   // add timestamp, level and origin
   {
     unsigned long ms = millis();
-    int len = snprintf(c, sizeof(buf), "[%lu] [%s] [%s] ", ms, level, origin);
+    int len = snprintf(c, remaining, "[%lu] [%s] [%s] ", ms, level, origin);
     // error while writing => return
     if (len < 0) {
       va_end(args);
       return;
     }
-    // clamp c to be in buffer range
-    c += std::min(len, MAX_ENTRY_LEN);
+    const size_t written = strnlen(buf, sizeof(buf));
+    c = buf + written;
+    remaining = written < sizeof(buf) ? (sizeof(buf) - written) : 0;
   }
   // add the user message
-  {
-    int len = vsnprintf(c, sizeof(buf) - (c - buf), format, args);
+  if (remaining > 0) {
+    int len = vsnprintf(c, remaining, format, args);
     if (len < 0) {
       va_end(args);
       return;
@@ -63,6 +144,31 @@ void logPrintf(const char* level, const char* origin, const char* format, ...) {
     logSerial.print(buf);
   }
   addToLogRingBuffer(buf);
+  // Keep SD-backed trace logs focused on explicit TRC entries and errors.
+  // Persisting every DBG line on hot paths increases IO churn and can destabilize
+  // network/parse flows on low-memory devices.
+  if (strcmp(level, "ERR") == 0 && shouldPersistTraceLog(origin)) {
+    appendTraceLog(buf);
+  }
+}
+
+void traceLogPrintf(const char* origin, const char* format, ...) {
+  char buf[MAX_ENTRY_LEN];
+  buf[0] = '\0';
+  int prefixLen = snprintf(buf, sizeof(buf), "[%lu] [TRC] [%s] ", millis(), origin);
+  if (prefixLen < 0) {
+    return;
+  }
+
+  va_list args;
+  va_start(args, format);
+  const size_t written = strnlen(buf, sizeof(buf));
+  const size_t remaining = written < sizeof(buf) ? (sizeof(buf) - written) : 0;
+  if (remaining > 0) {
+    vsnprintf(buf + written, remaining, format, args);
+  }
+  va_end(args);
+  appendTraceLog(buf);
 }
 
 std::string getLastLogs() {
@@ -100,4 +206,18 @@ void clearLastLogs() {
   }
   logHead = 0;
   rtcLogMagic = LOG_RTC_MAGIC;
+}
+
+const char* getTraceLogFilePath() { return TRACE_LOG_FILE; }
+
+bool ensureTraceLogReady() { return ensureTraceLogReadyInternal(); }
+
+void clearTraceLog() {
+  g_traceSessionOpened = false;
+  if (!SdMan.ready() || !SdMan.ensureDirectoryExists("/.crosspoint") || !SdMan.ensureDirectoryExists(TRACE_LOG_DIR)) {
+    return;
+  }
+  if (SdMan.exists(TRACE_LOG_FILE)) {
+    SdMan.remove(TRACE_LOG_FILE);
+  }
 }

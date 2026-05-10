@@ -65,6 +65,12 @@ RecentBook buildRecentBookEntry(const Epub& epub, const std::optional<SeriesRead
   if (!manifest.author.empty()) {
     recent.author = manifest.author;
   }
+  if (!manifest.coverPath.empty()) {
+    const std::string coverPath = SeriesManifestStore::buildChapterPath(manifest.seriesDir, manifest.coverPath);
+    if (Storage.exists(coverPath.c_str())) {
+      recent.coverBmpPath = coverPath;
+    }
+  }
   return recent;
 }
 }  // namespace

@@ -6,6 +6,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -420,7 +421,13 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
         if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
           Bitmap bitmap(file);
           if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-            coverWidth = bitmap.getWidth();
+            const int bitmapWidth = bitmap.getWidth();
+            const int bitmapHeight = bitmap.getHeight();
+            if (bitmapWidth > 0 && bitmapHeight > 0) {
+              coverWidth = (LyraMetrics::values.homeCoverHeight * bitmapWidth) / bitmapHeight;
+            }
+            const int maxCoverWidth = std::max(LyraMetrics::values.homeCoverHeight / 2, tileWidth / 2);
+            coverWidth = std::clamp(coverWidth, LyraMetrics::values.homeCoverHeight / 2, maxCoverWidth);
             renderer.drawBitmap(bitmap, tileX + hPaddingInSelection, tileY + hPaddingInSelection, coverWidth,
                                 LyraMetrics::values.homeCoverHeight);
           } else {

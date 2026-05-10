@@ -81,7 +81,14 @@ std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path) {
     return nullptr;
   }
 
-  auto txt = std::unique_ptr<Txt>(new Txt(path, "/.crosspoint"));
+  std::string cacheKey;
+  if (seriesContext.has_value() && !seriesContext->seriesDir.empty()) {
+    cacheKey = "series:" + seriesContext->seriesDir;
+  } else if (const auto inferredContext = inferSeriesContextForBook(path); inferredContext.has_value()) {
+    cacheKey = "series:" + inferredContext->seriesDir;
+  }
+
+  auto txt = std::unique_ptr<Txt>(new Txt(path, "/.crosspoint", cacheKey));
   if (txt->load()) {
     return txt;
   }

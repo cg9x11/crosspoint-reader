@@ -4,10 +4,10 @@
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
 
-Txt::Txt(std::string path, std::string cacheBasePath)
-    : filepath(std::move(path)), cacheBasePath(std::move(cacheBasePath)) {
-  // Generate cache path from file path hash
-  const size_t hash = std::hash<std::string>{}(filepath);
+Txt::Txt(std::string path, std::string cacheBasePath, std::string cacheKey)
+    : filepath(std::move(path)), cacheBasePath(std::move(cacheBasePath)), cacheKey(std::move(cacheKey)) {
+  const std::string& effectiveCacheKey = this->cacheKey.empty() ? filepath : this->cacheKey;
+  const size_t hash = std::hash<std::string>{}(effectiveCacheKey);
   cachePath = this->cacheBasePath + "/txt_" + std::to_string(hash);
 }
 

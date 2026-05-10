@@ -21,6 +21,8 @@ class TxtReaderActivity final : public Activity {
   bool consumeRightRelease = false;
   bool consumePageBackRelease = false;
   bool consumePageForwardRelease = false;
+  bool consumeUpRelease = false;
+  bool consumeDownRelease = false;
 
   // Streaming text reader - stores file offsets for each page
   std::vector<size_t> pageOffsets;  // File offset for start of each page
@@ -52,6 +54,7 @@ class TxtReaderActivity final : public Activity {
   void openSeriesChapterSelection();
   void saveProgress() const;
   void loadProgress();
+  std::string buildPerChapterCachePath(const char* baseName) const;
 
  public:
   explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Txt> txt,

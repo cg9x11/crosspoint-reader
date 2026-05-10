@@ -26,22 +26,26 @@ constexpr unsigned long skipChapterMs = 700;
 
 bool isPrevHoldPressed(const MappedInputManager& mappedInput) {
   return mappedInput.isPressed(MappedInputManager::Button::Left) ||
-         mappedInput.isPressed(MappedInputManager::Button::PageBack);
+         mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+         mappedInput.isPressed(MappedInputManager::Button::Up);
 }
 
 bool isNextHoldPressed(const MappedInputManager& mappedInput) {
   return mappedInput.isPressed(MappedInputManager::Button::Right) ||
-         mappedInput.isPressed(MappedInputManager::Button::PageForward);
+         mappedInput.isPressed(MappedInputManager::Button::PageForward) ||
+         mappedInput.isPressed(MappedInputManager::Button::Down);
 }
 
 bool wasPrevHoldReleased(const MappedInputManager& mappedInput) {
   return mappedInput.wasReleased(MappedInputManager::Button::Left) ||
-         mappedInput.wasReleased(MappedInputManager::Button::PageBack);
+         mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
+         mappedInput.wasReleased(MappedInputManager::Button::Up);
 }
 
 bool wasNextHoldReleased(const MappedInputManager& mappedInput) {
   return mappedInput.wasReleased(MappedInputManager::Button::Right) ||
-         mappedInput.wasReleased(MappedInputManager::Button::PageForward);
+         mappedInput.wasReleased(MappedInputManager::Button::PageForward) ||
+         mappedInput.wasReleased(MappedInputManager::Button::Down);
 }
 
 RecentBook buildRecentBookEntry(const Txt& txt, const std::optional<SeriesReadingContext>& seriesContext) {
@@ -135,20 +139,22 @@ void TxtReaderActivity::loop() {
       SETTINGS.longPressButtonBehavior == CrossPointSettings::LONG_PRESS_BUTTON_BEHAVIOR::CHAPTER_SKIP;
 
   if (longPressChapterSkip && totalPages > 0) {
-    if (!consumeLeftRelease && !consumePageBackRelease && isPrevHoldPressed(mappedInput) &&
+    if (!consumeLeftRelease && !consumePageBackRelease && !consumeUpRelease && isPrevHoldPressed(mappedInput) &&
         mappedInput.getHeldTime() > skipChapterMs) {
       consumeLeftRelease = true;
       consumePageBackRelease = true;
+      consumeUpRelease = mappedInput.isPressed(MappedInputManager::Button::Up);
       if (currentPage != 0) {
         currentPage = 0;
         requestUpdate();
       }
       return;
     }
-    if (!consumeRightRelease && !consumePageForwardRelease && isNextHoldPressed(mappedInput) &&
+    if (!consumeRightRelease && !consumePageForwardRelease && !consumeDownRelease && isNextHoldPressed(mappedInput) &&
         mappedInput.getHeldTime() > skipChapterMs) {
       consumeRightRelease = true;
       consumePageForwardRelease = true;
+      consumeDownRelease = mappedInput.isPressed(MappedInputManager::Button::Down);
       const int lastPage = totalPages - 1;
       if (currentPage != lastPage) {
         currentPage = lastPage;
@@ -161,11 +167,13 @@ void TxtReaderActivity::loop() {
   if ((consumeLeftRelease || consumePageBackRelease) && wasPrevHoldReleased(mappedInput)) {
     consumeLeftRelease = false;
     consumePageBackRelease = false;
+    consumeUpRelease = false;
     return;
   }
   if ((consumeRightRelease || consumePageForwardRelease) && wasNextHoldReleased(mappedInput)) {
     consumeRightRelease = false;
     consumePageForwardRelease = false;
+    consumeDownRelease = false;
     return;
   }
 
@@ -592,8 +600,11 @@ void TxtReaderActivity::openSeriesChapterSelection() {
   }
 
   SeriesManifest manifest;
-  if (!SeriesManifestStore::loadFromSeriesDir(seriesContext->seriesDir, manifest)) {
-    return;
+  {
+    RenderLock lock(*this);
+    if (!SeriesManifestStore::loadFromSeriesDir(seriesContext->seriesDir, manifest)) {
+      return;
+    }
   }
 
   const int currentChapterIndex = getCurrentSeriesChapterIndex();
@@ -614,9 +625,30 @@ void TxtReaderActivity::openSeriesChapterSelection() {
       });
 }
 
+std::string TxtReaderActivity::buildPerChapterCachePath(const char* fileName) const {
+  if (!txt) {
+    return std::string{};
+  }
+
+  if (!seriesContext.has_value() || seriesContext->seriesDir.empty()) {
+    return txt->getCachePath() + "/" + fileName;
+  }
+
+  const size_t chapterHash = std::hash<std::string>{}(txt->getPath());
+  std::string stem(fileName);
+  std::string ext;
+  const size_t dotPos = stem.find_last_of('.');
+  if (dotPos != std::string::npos) {
+    ext = stem.substr(dotPos);
+    stem.resize(dotPos);
+  }
+  return txt->getCachePath() + "/" + stem + "_" + std::to_string(chapterHash) + ext;
+}
+
 void TxtReaderActivity::saveProgress() const {
   FsFile f;
-  if (Storage.openFileForWrite("TRS", txt->getCachePath() + "/progress.bin", f)) {
+  const std::string cachePath = buildPerChapterCachePath("progress.bin");
+  if (Storage.openFileForWrite("TRS", cachePath, f)) {
     uint8_t data[4];
     data[0] = currentPage & 0xFF;
     data[1] = (currentPage >> 8) & 0xFF;
@@ -628,7 +660,8 @@ void TxtReaderActivity::saveProgress() const {
 
 void TxtReaderActivity::loadProgress() {
   FsFile f;
-  if (Storage.openFileForRead("TRS", txt->getCachePath() + "/progress.bin", f)) {
+  const std::string cachePath = buildPerChapterCachePath("progress.bin");
+  if (Storage.openFileForRead("TRS", cachePath, f)) {
     uint8_t data[4];
     if (f.read(data, 4) == 4) {
       currentPage = data[0] + (data[1] << 8);
@@ -656,7 +689,7 @@ bool TxtReaderActivity::loadPageIndexCache() {
   // - uint32_t: total pages count
   // - N * uint32_t: page offsets
 
-  std::string cachePath = txt->getCachePath() + "/index.bin";
+  const std::string cachePath = buildPerChapterCachePath("index.bin");
   FsFile f;
   if (!Storage.openFileForRead("TRS", cachePath, f)) {
     LOG_DBG("TRS", "No page index cache found");
@@ -739,7 +772,7 @@ bool TxtReaderActivity::loadPageIndexCache() {
 }
 
 void TxtReaderActivity::savePageIndexCache() const {
-  std::string cachePath = txt->getCachePath() + "/index.bin";
+  const std::string cachePath = buildPerChapterCachePath("index.bin");
   FsFile f;
   if (!Storage.openFileForWrite("TRS", cachePath, f)) {
     LOG_ERR("TRS", "Failed to save page index cache");

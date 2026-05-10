@@ -47,21 +47,23 @@ export function getPublishedChapterCandidates(
 ) {
   const candidates: Array<{ path: string; relativePath: string; fileName: string }> = [];
 
-  if (storedRelativePath) {
-    const normalizedRelativePath = storedRelativePath.replace(/\\/g, "/").replace(/^\/+/, "");
-    candidates.push({
-      path: path.join(storagePaths.opdsDir, normalizedRelativePath),
-      relativePath: normalizedRelativePath,
-      fileName: path.posix.basename(normalizedRelativePath)
-    });
-  }
-
   const currentRelativePath = getPublishedChapterRelativePath(novelId, chapterIndex);
   candidates.push({
     path: path.join(storagePaths.opdsDir, currentRelativePath),
     relativePath: currentRelativePath,
     fileName: path.posix.basename(currentRelativePath)
   });
+
+  if (storedRelativePath) {
+    const normalizedRelativePath = storedRelativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+    if (!candidates.some((candidate) => candidate.relativePath === normalizedRelativePath)) {
+      candidates.push({
+        path: path.join(storagePaths.opdsDir, normalizedRelativePath),
+        relativePath: normalizedRelativePath,
+        fileName: path.posix.basename(normalizedRelativePath)
+      });
+    }
+  }
 
   const legacyRelativePath = getLegacyPublishedChapterRelativePath(novelId, chapterIndex);
   if (!candidates.some((candidate) => candidate.relativePath === legacyRelativePath)) {

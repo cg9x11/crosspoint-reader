@@ -9,15 +9,17 @@ class Txt {
   std::string filepath;
   std::string cacheBasePath;
   std::string cachePath;
+  std::string cacheKey;
   bool loaded = false;
   size_t fileSize = 0;
 
  public:
-  explicit Txt(std::string path, std::string cacheBasePath);
+  explicit Txt(std::string path, std::string cacheBasePath, std::string cacheKey = "");
 
   bool load();
   [[nodiscard]] const std::string& getPath() const { return filepath; }
   [[nodiscard]] const std::string& getCachePath() const { return cachePath; }
+  [[nodiscard]] const std::string& getCacheKey() const { return cacheKey; }
   [[nodiscard]] std::string getTitle() const;
   [[nodiscard]] size_t getFileSize() const { return fileSize; }
 

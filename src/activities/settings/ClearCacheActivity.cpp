@@ -94,8 +94,13 @@ void ClearCacheActivity::clearCache() {
     file.getName(name, sizeof(name));
     String itemName(name);
 
-    // Only delete directories starting with epub_ or xtc_
-    if (file.isDirectory() && (itemName.startsWith("epub_") || itemName.startsWith("xtc_"))) {
+    const bool isCacheDir =
+        file.isDirectory() &&
+        (itemName.startsWith("epub_") || itemName.startsWith("xtc_") || itemName.startsWith("txt_") ||
+         itemName == "opds");
+    const bool isCacheFile = !file.isDirectory() && itemName == "http_trace.log";
+
+    if (isCacheDir) {
       String fullPath = "/.crosspoint/" + itemName;
       LOG_DBG("CLEAR_CACHE", "Removing cache: %s", fullPath.c_str());
 
@@ -105,6 +110,24 @@ void ClearCacheActivity::clearCache() {
         clearedCount++;
       } else {
         LOG_ERR("CLEAR_CACHE", "Failed to remove: %s", fullPath.c_str());
+        failedCount++;
+      }
+    } else if (isCacheFile) {
+      String fullPath = "/.crosspoint/" + itemName;
+      LOG_DBG("CLEAR_CACHE", "Removing cache file: %s", fullPath.c_str());
+      file.close();
+      if (Storage.remove(fullPath.c_str())) {
+        clearedCount++;
+      } else {
+        LOG_ERR("CLEAR_CACHE", "Failed to remove file: %s", fullPath.c_str());
+        failedCount++;
+      }
+    } else if (file.isDirectory() && itemName == "logs") {
+      file.close();
+      String fullPath = "/.crosspoint/logs";
+      if (Storage.removeDir(fullPath.c_str())) {
+        clearedCount++;
+      } else {
         failedCount++;
       }
     } else {

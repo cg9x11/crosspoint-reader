@@ -15,6 +15,7 @@ class OpdsParserStream : public Stream {
 
   virtual size_t write(uint8_t c) override;
   virtual size_t write(const uint8_t* buffer, size_t size) override;
+  void finish();
 
   ~OpdsParserStream() override;
 
