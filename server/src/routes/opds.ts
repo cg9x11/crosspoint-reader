@@ -99,10 +99,8 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
 
   app.get("/opds/library", async (request, reply) => {
     const baseUrl = resolvePublicBaseUrl(request, app.appConfig.APP_BASE_URL);
-    const rawPage =
-      "page" in request.query && typeof (request.query as { page?: unknown }).page === "string"
-        ? Number((request.query as { page?: string }).page)
-        : 1;
+    const query = request.query as { page?: string } | undefined;
+    const rawPage = typeof query?.page === "string" ? Number(query.page) : 1;
     const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
 
     const where = {
