@@ -48,14 +48,18 @@ using OpdsBook = OpdsEntry;
  */
 class OpdsParser final : public Print {
  public:
-  explicit OpdsParser(bool captureExtendedMetadata = true);
+  explicit OpdsParser(bool captureExtendedMetadata = true, size_t maxEntriesOverride = 0);
   ~OpdsParser();
 
   // Disable copy
   const std::string& getSearchTemplate() const { return searchTemplate; }
+  std::string takeSearchTemplate() { return std::move(searchTemplate); }
   const std::string& getNextPageUrl() const { return nextPageUrl; }
+  std::string takeNextPageUrl() { return std::move(nextPageUrl); }
   const std::string& getPrevPageUrl() const { return prevPageUrl; }
+  std::string takePrevPageUrl() { return std::move(prevPageUrl); }
   const std::string& getFeedTitle() const { return feedTitle; }
+  std::string takeFeedTitle() { return std::move(feedTitle); }
   OpdsParser(const OpdsParser&) = delete;
   OpdsParser& operator=(const OpdsParser&) = delete;
 
@@ -103,6 +107,9 @@ class OpdsParser final : public Print {
   std::vector<OpdsEntry> entries;
   OpdsEntry currentEntry;
   std::string currentText;
+  size_t maxEntries = 0;
+  bool skippingEntry = false;
+  bool entryLimitLogged = false;
 
   // Parser state
   bool inEntry = false;

@@ -43,6 +43,9 @@ class SeriesManifestStore {
   static bool findChapterByPathInSeriesDir(const std::string& seriesDir, const std::string& chapterPath, SeriesChapter& chapterOut,
                                            size_t* outCount = nullptr);
   static bool tryLoadForChapterPath(const std::string& chapterPath, SeriesManifest& manifest);
+  static bool tryLoadMetadataForChapterPath(const std::string& chapterPath, SeriesManifest& manifest);
+  static bool tryGetChapterContext(const std::string& chapterPath, std::string& seriesIdOut, std::string& seriesDirOut,
+                                   int& chapterIndexOut);
   static std::optional<SeriesChapter> findByIndex(const SeriesManifest& manifest, int chapterIndex);
   static std::optional<SeriesChapter> findByPath(const SeriesManifest& manifest, const std::string& chapterPath);
   static bool resolveChapterPath(const SeriesManifest& manifest, int chapterIndex, std::string& chapterPath);

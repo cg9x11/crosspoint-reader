@@ -17,21 +17,18 @@
 
 namespace {
 std::optional<SeriesReadingContext> inferSeriesContextForBook(const std::string& bookPath) {
-  SeriesManifest manifest;
-  if (!SeriesManifestStore::tryLoadForChapterPath(bookPath, manifest)) {
-    return std::nullopt;
-  }
-
-  const auto chapter = SeriesManifestStore::findByPath(manifest, bookPath);
-  if (!chapter.has_value()) {
+  std::string seriesId;
+  std::string seriesDir;
+  int chapterIndex = 0;
+  if (!SeriesManifestStore::tryGetChapterContext(bookPath, seriesId, seriesDir, chapterIndex)) {
     return std::nullopt;
   }
 
   SeriesReadingContext context;
-  context.seriesId = manifest.seriesId;
-  context.seriesDir = manifest.seriesDir;
+  context.seriesId = std::move(seriesId);
+  context.seriesDir = std::move(seriesDir);
   context.chapterPath = bookPath;
-  context.chapterIndex = chapter->chapterIndex;
+  context.chapterIndex = chapterIndex;
   return context;
 }
 }  // namespace

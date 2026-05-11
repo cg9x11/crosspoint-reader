@@ -56,7 +56,7 @@ RecentBook buildRecentBookEntry(const Txt& txt, const std::optional<SeriesReadin
   }
 
   SeriesManifest manifest;
-  if (!SeriesManifestStore::tryLoadForChapterPath(txt.getPath(), manifest)) {
+  if (!SeriesManifestStore::tryLoadMetadataForChapterPath(txt.getPath(), manifest)) {
     return recent;
   }
 

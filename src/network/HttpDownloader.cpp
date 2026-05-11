@@ -67,6 +67,9 @@ std::string buildPartialDownloadPath(const std::string& destPath) { return destP
 
 void traceRequest(const uint32_t requestId, const bool isDownload, const char* phase, const std::string& url,
                   const char* detail = nullptr) {
+  if (!isDownload) {
+    return;
+  }
   const wl_status_t wifiStatus = WiFi.status();
   char ipBuf[20];
   const IPAddress ip = WiFi.localIP();
@@ -79,6 +82,9 @@ void traceRequest(const uint32_t requestId, const bool isDownload, const char* p
 }
 
 void traceRequestTarget(const uint32_t requestId, const bool isDownload, const ResolvedRequestTarget& target) {
+  if (!isDownload) {
+    return;
+  }
   char detail[220];
   snprintf(detail, sizeof(detail), "host=%s connect=%s port=%u path=%s https=%d", target.hostHeader.c_str(),
            target.connectHost.c_str(), target.port, target.path.c_str(), target.https ? 1 : 0);
@@ -329,14 +335,12 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
       return true;
     }
 
-    const String detail = HTTPClient::errorToString(httpCode);
-    setLastHttpError("GET", sanitizedUrl, httpCode, detail);
-    LOG_ERR("HTTP", "Fetch failed (attempt %d/%d): %d (%s) url=%s", attempt, HTTP_RETRY_COUNT, httpCode,
-            detail.c_str(), sanitizedUrl.c_str());
+    setLastHttpError("GET", sanitizedUrl, httpCode);
+    LOG_ERR("HTTP", "Fetch failed (attempt %d/%d): %d url=%s", attempt, HTTP_RETRY_COUNT, httpCode,
+            sanitizedUrl.c_str());
     {
-      char traceDetail[128];
-      snprintf(traceDetail, sizeof(traceDetail), "attempt=%d/%d code=%d detail=%s", attempt, HTTP_RETRY_COUNT,
-               httpCode, detail.c_str());
+      char traceDetail[64];
+      snprintf(traceDetail, sizeof(traceDetail), "attempt=%d/%d code=%d", attempt, HTTP_RETRY_COUNT, httpCode);
       traceRequest(requestId, false, "get_fail", sanitizedUrl, traceDetail);
     }
     finalizeRequestClient(http, client, target);
@@ -421,14 +425,12 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
 
     const int httpCode = http.GET();
     if (httpCode != HTTP_CODE_OK) {
-      const String detail = HTTPClient::errorToString(httpCode);
-      setLastHttpError("GET", sanitizedUrl, httpCode, detail);
-      LOG_ERR("HTTP", "Download failed (attempt %d/%d): %d (%s) url=%s", attempt, HTTP_RETRY_COUNT, httpCode,
-              detail.c_str(), sanitizedUrl.c_str());
+      setLastHttpError("GET", sanitizedUrl, httpCode);
+      LOG_ERR("HTTP", "Download failed (attempt %d/%d): %d url=%s", attempt, HTTP_RETRY_COUNT, httpCode,
+              sanitizedUrl.c_str());
       {
-        char traceDetail[128];
-        snprintf(traceDetail, sizeof(traceDetail), "attempt=%d/%d code=%d detail=%s", attempt, HTTP_RETRY_COUNT,
-                 httpCode, detail.c_str());
+        char traceDetail[64];
+        snprintf(traceDetail, sizeof(traceDetail), "attempt=%d/%d code=%d", attempt, HTTP_RETRY_COUNT, httpCode);
         traceRequest(requestId, true, "get_fail", sanitizedUrl, traceDetail);
       }
       finalizeRequestClient(http, client, target);

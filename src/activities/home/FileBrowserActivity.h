@@ -7,6 +7,7 @@
 #include <Bitmap.h>
 
 #include "../Activity.h"
+#include "SeriesManifest.h"
 #include "RecentBooksStore.h"
 #include "SeriesReadingContext.h"
 #include "util/ButtonNavigator.h"
@@ -41,11 +42,27 @@ class FileBrowserActivity final : public Activity {
     std::string coverBmpPath;
   };
 
+  struct SeriesBrowseCache {
+    std::string seriesDir;
+    std::string matchedRecentPath;
+    bool ready = false;
+    bool isSeries = false;
+    size_t totalChapters = 0;
+    size_t downloadedChapters = 0;
+    bool hasFirstChapter = false;
+    bool hasRecentChapter = false;
+    SeriesChapter firstChapter;
+    SeriesChapter recentChapter;
+    SeriesManifest manifest;
+  };
+
   // Deletion
   void clearFileMetadata(const std::string& fullPath);
   void clearSeriesMetadata(const FileBrowserEntry& entry);
   bool deletePathRecursive(const std::string& fullPath);
   bool tryBuildSeriesEntry(const std::string& directoryName, FileBrowserEntry& entry) const;
+  const SeriesBrowseCache* getSeriesBrowseCache(const std::string& seriesDir,
+                                                const std::string& recentPath = "") const;
   bool isPreviewable(const FileBrowserEntry& entry) const;
   std::string getEntryFullPath(const FileBrowserEntry& entry) const;
   void loadPreviewForSelection();
@@ -71,6 +88,7 @@ class FileBrowserActivity final : public Activity {
   // Files state
   std::string basepath = "/";
   std::vector<FileBrowserEntry> files;
+  mutable std::vector<SeriesBrowseCache> seriesBrowseCache;
   PreviewData currentPreview;
   int previewSummaryScrollOffset = 0;
   int previewSummaryTotalLines = 0;

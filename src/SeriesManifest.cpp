@@ -532,6 +532,36 @@ bool SeriesManifestStore::tryLoadForChapterPath(const std::string& chapterPath, 
   return loadFromSeriesDir(seriesDir, manifest);
 }
 
+bool SeriesManifestStore::tryLoadMetadataForChapterPath(const std::string& chapterPath, SeriesManifest& manifest) {
+  const std::string seriesDir = extractSeriesDir(chapterPath);
+  if (seriesDir.empty()) {
+    return false;
+  }
+  return loadMetadataFromSeriesDir(seriesDir, manifest);
+}
+
+bool SeriesManifestStore::tryGetChapterContext(const std::string& chapterPath, std::string& seriesIdOut,
+                                               std::string& seriesDirOut, int& chapterIndexOut) {
+  seriesIdOut.clear();
+  seriesDirOut.clear();
+  chapterIndexOut = 0;
+
+  SeriesManifest manifest;
+  if (!tryLoadMetadataForChapterPath(chapterPath, manifest) || manifest.seriesId.empty()) {
+    return false;
+  }
+
+  SeriesChapter chapter;
+  if (!findChapterByPathInSeriesDir(manifest.seriesDir, chapterPath, chapter, nullptr)) {
+    return false;
+  }
+
+  seriesIdOut = std::move(manifest.seriesId);
+  seriesDirOut = std::move(manifest.seriesDir);
+  chapterIndexOut = chapter.chapterIndex;
+  return chapterIndexOut > 0 && !seriesIdOut.empty() && !seriesDirOut.empty();
+}
+
 std::optional<SeriesChapter> SeriesManifestStore::findByIndex(const SeriesManifest& manifest, const int chapterIndex) {
   auto it = std::find_if(manifest.chapters.begin(), manifest.chapters.end(),
                          [chapterIndex](const SeriesChapter& chapter) { return chapter.chapterIndex == chapterIndex; });

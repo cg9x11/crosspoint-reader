@@ -54,10 +54,12 @@ class OpdsBookBrowserActivity final : public Activity {
   std::vector<std::string> previewSummaryLines;
   std::string errorMessage;
   std::string statusMessage;
-  std::string downloadDetailMessage;
   std::string pendingFetchPath;
+  bool hasPendingFetch = false;
   size_t downloadProgress = 0;
   size_t downloadTotal = 0;
+  size_t currentFileDownloaded = 0;
+  size_t currentFileTotal = 0;
   PreviewData currentPreview;
 
   OpdsServer server;  // Copied at construction - safe even if the store changes during browsing
@@ -66,9 +68,11 @@ class OpdsBookBrowserActivity final : public Activity {
   void launchWifiSelection();
   void onWifiSelectionComplete(bool connected);
   void fetchFeed(const std::string& path);
+  void queueFetch(const std::string& path);
   bool fetchFeedData(const std::string& url, std::vector<OpdsEntry>& outEntries, std::string* outFeedTitle = nullptr,
                      std::string* outSearchTemplate = nullptr, std::string* outNextUrl = nullptr,
-                     std::string* outPrevUrl = nullptr, bool lightweightEntries = false) const;
+                     std::string* outPrevUrl = nullptr, bool lightweightEntries = false,
+                     size_t maxEntries = 0) const;
   void navigateToEntry(const OpdsEntry& entry);
   void navigateBack();
   void downloadBook(const OpdsEntry& book);
@@ -82,7 +86,7 @@ class OpdsBookBrowserActivity final : public Activity {
                                 const std::string& localSeriesDir, const OpdsEntry& seriesEntry) const;
   void updatePreviewForSelection();
   void schedulePreviewUpdate();
-  bool hydrateEntryMetadata(OpdsEntry& entry);
+  bool hydrateEntryMetadata(OpdsEntry& entry, bool allowRemoteFetch = true);
   void resetPreviewSummaryCache();
   void ensurePreviewSummaryCache(const PreviewData& preview, int textWidth);
   std::string getPreviewCoverPath(const OpdsEntry& entry, const std::string& baseUrl);

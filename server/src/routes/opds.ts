@@ -17,6 +17,8 @@ function absoluteUrl(baseUrl: string, routePath: string) {
   return new URL(routePath, `${baseUrl}/`).toString();
 }
 
+const OPDS_LIBRARY_PAGE_SIZE = 12;
+
 function parseChapterIndex(input: string) {
   if (/^\d+$/.test(input)) {
     return Number(input);
@@ -97,39 +99,69 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
 
   app.get("/opds/library", async (request, reply) => {
     const baseUrl = resolvePublicBaseUrl(request, app.appConfig.APP_BASE_URL);
-    const novels = await app.prisma.novel.findMany({
-      where: {
-        chapters: {
-          some: {
-            status: "published"
-          }
+    const rawPage =
+      "page" in request.query && typeof (request.query as { page?: unknown }).page === "string"
+        ? Number((request.query as { page?: string }).page)
+        : 1;
+    const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
+
+    const where = {
+      chapters: {
+        some: {
+          status: "published"
         }
+      }
+    } as const;
+
+    const [totalNovels, novels] = await Promise.all([
+      app.prisma.novel.count({ where }),
+      app.prisma.novel.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        skip: (page - 1) * OPDS_LIBRARY_PAGE_SIZE,
+        take: OPDS_LIBRARY_PAGE_SIZE
+      })
+    ]);
+
+    const libraryPath = `/opds/library?page=${page}`;
+    const links = [
+      {
+        href: absoluteUrl(baseUrl, libraryPath),
+        rel: "self",
+        type: "application/atom+xml;profile=opds-catalog;kind=navigation"
       },
-      orderBy: { updatedAt: "desc" }
-    });
+      {
+        href: absoluteUrl(baseUrl, "/opds"),
+        rel: "start",
+        type: "application/atom+xml;profile=opds-catalog;kind=navigation"
+      }
+    ];
+
+    if (page > 1) {
+      links.push({
+        href: absoluteUrl(baseUrl, `/opds/library?page=${page - 1}`),
+        rel: "previous",
+        type: "application/atom+xml;profile=opds-catalog;kind=navigation"
+      });
+    }
+
+    if (page * OPDS_LIBRARY_PAGE_SIZE < totalNovels) {
+      links.push({
+        href: absoluteUrl(baseUrl, `/opds/library?page=${page + 1}`),
+        rel: "next",
+        type: "application/atom+xml;profile=opds-catalog;kind=navigation"
+      });
+    }
 
     const feed = buildOpdsFeed({
-      id: absoluteUrl(baseUrl, "/opds/library"),
+      id: absoluteUrl(baseUrl, libraryPath),
       title: "Thu vien OPDS",
       updatedAt: new Date().toISOString(),
-      links: [
-        {
-          href: absoluteUrl(baseUrl, "/opds/library"),
-          rel: "self",
-          type: "application/atom+xml;profile=opds-catalog;kind=navigation"
-        },
-        {
-          href: absoluteUrl(baseUrl, "/opds"),
-          rel: "start",
-          type: "application/atom+xml;profile=opds-catalog;kind=navigation"
-        }
-      ],
+      links,
       entries: novels.map((novel) => ({
         id: `urn:novel:${novel.id}`,
         title: novel.title,
         updatedAt: novel.updatedAt.toISOString(),
-        summary: novel.description ?? undefined,
-        author: novel.author ?? undefined,
         links: [
           {
             href: absoluteUrl(baseUrl, `/opds/series/${novel.id}`),

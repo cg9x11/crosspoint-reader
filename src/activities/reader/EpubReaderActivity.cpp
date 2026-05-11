@@ -54,7 +54,7 @@ RecentBook buildRecentBookEntry(const Epub& epub, const std::optional<SeriesRead
   }
 
   SeriesManifest manifest;
-  if (!SeriesManifestStore::tryLoadForChapterPath(epub.getPath(), manifest)) {
+  if (!SeriesManifestStore::tryLoadMetadataForChapterPath(epub.getPath(), manifest)) {
     return recent;
   }
 

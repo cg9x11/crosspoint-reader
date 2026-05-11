@@ -340,43 +340,83 @@ const RecentBook* FileBrowserActivity::findRecentBookForPath(const std::string& 
   return nullptr;
 }
 
+const FileBrowserActivity::SeriesBrowseCache* FileBrowserActivity::getSeriesBrowseCache(const std::string& seriesDir,
+                                                                                        const std::string& recentPath) const {
+  auto buildCache = [this, &seriesDir, &recentPath](SeriesBrowseCache& cache) {
+    cache = {};
+    cache.seriesDir = seriesDir;
+    cache.matchedRecentPath = recentPath;
+
+    if (!SeriesManifestStore::loadMetadataFromSeriesDir(seriesDir, cache.manifest) || cache.manifest.seriesId.empty()) {
+      return;
+    }
+
+    cache.ready = true;
+    cache.isSeries = true;
+    SeriesManifestStore::forEachChapterInSeriesDir(
+        seriesDir,
+        [this, &cache, &seriesDir, &recentPath](const SeriesChapter& chapter) {
+          ++cache.totalChapters;
+          if (!cache.hasFirstChapter) {
+            cache.firstChapter = chapter;
+            cache.hasFirstChapter = true;
+          }
+
+          const std::string chapterPath = SeriesManifestStore::buildChapterPath(seriesDir, chapter.file);
+          if (!recentPath.empty() && !cache.hasRecentChapter && chapterPath == recentPath) {
+            cache.recentChapter = chapter;
+            cache.hasRecentChapter = true;
+          }
+          if (hasUsableDownloadedSeriesChapterFile(chapterPath)) {
+            ++cache.downloadedChapters;
+          }
+          return true;
+        },
+        nullptr);
+  };
+
+  for (auto& cache : seriesBrowseCache) {
+    if (cache.seriesDir != seriesDir) {
+      continue;
+    }
+    if (!cache.ready || (!recentPath.empty() && recentPath != cache.matchedRecentPath && !cache.hasRecentChapter)) {
+      buildCache(cache);
+    }
+    return cache.isSeries && cache.hasFirstChapter ? &cache : nullptr;
+  }
+
+  seriesBrowseCache.emplace_back();
+  buildCache(seriesBrowseCache.back());
+  const SeriesBrowseCache& cache = seriesBrowseCache.back();
+  return cache.isSeries && cache.hasFirstChapter ? &cache : nullptr;
+}
+
 bool FileBrowserActivity::tryBuildSeriesEntry(const std::string& directoryName, FileBrowserEntry& entry) const {
   const std::string seriesDir = joinPath(basepath, directoryName);
-  SeriesManifest manifest;
-  if (!SeriesManifestStore::loadMetadataFromSeriesDir(seriesDir, manifest)) {
+  const SeriesBrowseCache* cache = getSeriesBrowseCache(seriesDir);
+  if (!cache) {
     return false;
   }
-  if (manifest.seriesId.empty()) {
-    return false;
-  }
-
-  size_t totalChapters = 0;
-  SeriesChapter activeChapter;
-  if (!SeriesManifestStore::findFirstChapterInSeriesDir(seriesDir, activeChapter, &totalChapters)) {
-    return false;
-  }
-
-  entry = {};
-  entry.kind = EntryKind::SeriesDirectory;
-  entry.rawName = directoryName + "/";
-  entry.title = manifest.title.empty() ? getDirectoryTitle(entry.rawName) : manifest.title;
-  entry.value = SERIES_VALUE;
 
   const RecentBook* recent = nullptr;
   for (const auto& book : RECENT_BOOKS.getBooks()) {
-    if (book.seriesId == manifest.seriesId) {
+    if (book.seriesId == cache->manifest.seriesId) {
       recent = &book;
       break;
     }
   }
-
-  std::string resumePath = SeriesManifestStore::buildChapterPath(manifest.seriesDir, activeChapter.file);
-  if (recent && !recent->path.empty() && Storage.exists(recent->path.c_str())) {
-    SeriesChapter recentChapter;
-    if (SeriesManifestStore::findChapterByPathInSeriesDir(seriesDir, recent->path, recentChapter, &totalChapters)) {
-      activeChapter = recentChapter;
-      resumePath = recent->path;
+  if (recent && !recent->path.empty() && !cache->hasRecentChapter) {
+    cache = getSeriesBrowseCache(seriesDir, recent->path);
+    if (!cache) {
+      return false;
     }
+  }
+
+  SeriesChapter activeChapter = cache->firstChapter;
+  std::string resumePath = SeriesManifestStore::buildChapterPath(cache->manifest.seriesDir, activeChapter.file);
+  if (recent && !recent->path.empty() && cache->hasRecentChapter && Storage.exists(recent->path.c_str())) {
+    activeChapter = cache->recentChapter;
+    resumePath = recent->path;
   }
 
   if (!Storage.exists(resumePath.c_str())) {
@@ -384,11 +424,15 @@ bool FileBrowserActivity::tryBuildSeriesEntry(const std::string& directoryName, 
     return false;
   }
 
+  entry = {};
+  entry.kind = EntryKind::SeriesDirectory;
+  entry.rawName = directoryName + "/";
+  entry.title = cache->manifest.title.empty() ? getDirectoryTitle(entry.rawName) : cache->manifest.title;
   entry.resumePath = resumePath;
   entry.subtitle = activeChapter.title.empty() ? getFileTitle(activeChapter.file) : activeChapter.title;
-  entry.value = std::to_string(countDownloadedSeriesChapters(seriesDir)) + "/" + std::to_string(totalChapters);
-  entry.seriesContext.seriesId = manifest.seriesId;
-  entry.seriesContext.seriesDir = manifest.seriesDir;
+  entry.value = std::to_string(cache->downloadedChapters) + "/" + std::to_string(cache->totalChapters);
+  entry.seriesContext.seriesId = cache->manifest.seriesId;
+  entry.seriesContext.seriesDir = cache->manifest.seriesDir;
   entry.seriesContext.chapterPath = resumePath;
   entry.seriesContext.chapterIndex = activeChapter.chapterIndex;
   return true;
@@ -417,11 +461,11 @@ bool FileBrowserActivity::isPreviewable(const FileBrowserEntry& entry) const {
 std::string FileBrowserActivity::getEntryFullPath(const FileBrowserEntry& entry) const { return joinPath(basepath, entry.rawName); }
 
 void FileBrowserActivity::loadSeriesPreview(const FileBrowserEntry& entry, PreviewData& preview) const {
-  SeriesManifest manifest;
-  if (!SeriesManifestStore::loadMetadataFromSeriesDir(entry.seriesContext.seriesDir, manifest)) {
+  const SeriesBrowseCache* cache = getSeriesBrowseCache(entry.seriesContext.seriesDir, entry.resumePath);
+  if (!cache) {
     return;
   }
-  const size_t totalChapters = SeriesManifestStore::countChaptersFromSeriesDir(entry.seriesContext.seriesDir);
+  const SeriesManifest& manifest = cache->manifest;
 
   preview.available = true;
   preview.title = entry.title;
@@ -449,7 +493,7 @@ void FileBrowserActivity::loadSeriesPreview(const FileBrowserEntry& entry, Previ
 
   if (entry.seriesContext.chapterIndex > 0) {
     preview.status = tr(STR_CONTINUE_READING) + std::string(": ") + std::to_string(entry.seriesContext.chapterIndex) +
-                     "/" + std::to_string(totalChapters);
+                     "/" + std::to_string(cache->totalChapters);
   } else {
     preview.status = tr(STR_START_READING);
   }
@@ -554,6 +598,7 @@ void FileBrowserActivity::loadPreviewForSelection() {
 
 void FileBrowserActivity::loadFiles() {
   files.clear();
+  seriesBrowseCache.clear();
 
   auto root = Storage.open(basepath.c_str());
   if (!root || !root.isDirectory()) {
@@ -667,6 +712,7 @@ void FileBrowserActivity::onEnter() {
 void FileBrowserActivity::onExit() {
   Activity::onExit();
   files.clear();
+  seriesBrowseCache.clear();
   resetPreviewSummaryCache();
 }
 
