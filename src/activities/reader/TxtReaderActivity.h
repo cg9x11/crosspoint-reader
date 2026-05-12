@@ -30,6 +30,9 @@ class TxtReaderActivity final : public Activity {
   int linesPerPage = 0;
   int viewportWidth = 0;
   bool initialized = false;
+  bool pageIndexComplete = false;
+  bool pageIndexCacheSaved = false;
+  unsigned long lastBackgroundIndexTick = 0;
 
   // Cached settings for cache validation (different fonts/margins require re-indexing)
   int cachedFontId = 0;
@@ -39,6 +42,7 @@ class TxtReaderActivity final : public Activity {
   int cachedOrientedMarginRight = 0;
   int cachedOrientedMarginBottom = 0;
   int cachedOrientedMarginLeft = 0;
+  std::string seriesDisplayTitle;
 
   void renderPage();
   void renderStatusBar() const;
@@ -46,8 +50,10 @@ class TxtReaderActivity final : public Activity {
   void initializeReader();
   bool loadPageAtOffset(size_t offset, std::vector<std::string>& outLines, size_t& nextOffset);
   void buildPageIndex();
+  bool ensurePageIndexed(int pageIndex);
   bool loadPageIndexCache();
   void savePageIndexCache() const;
+  void continueBackgroundIndexing();
   void persistSeriesReadingState() const;
   int getCurrentSeriesChapterIndex() const;
   bool tryNavigateAdjacentSeriesChapter(int chapterDelta, bool openChapterAtLastPage);

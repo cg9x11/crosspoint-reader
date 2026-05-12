@@ -36,6 +36,7 @@ constexpr unsigned long PREVIEW_DWELL_MS = 900;
 constexpr const char* NO_DESCRIPTION_TEXT = "No description";
 constexpr size_t SERIES_DOWNLOAD_BATCH_LIMIT = 8;
 constexpr const char* OPDS_CACHE_DIR = "/.crosspoint/opds";
+constexpr const char* ONLINE_LIBRARY_ROOT_DIR = "/.online-library";
 
 MappedInputManager* g_seriesDownloadInput = nullptr;
 size_t* g_seriesCurrentFileDownloaded = nullptr;
@@ -268,9 +269,10 @@ std::string chooseLegacySeriesDirectoryName(const std::string& feedTitle, const 
 
 std::string chooseSeriesDirectoryName(const std::string& stableKey, const std::string& feedTitle, const OpdsEntry& entry) {
   if (!stableKey.empty()) {
-    return "/series_" + std::to_string(std::hash<std::string>{}(stableKey));
+    return std::string(ONLINE_LIBRARY_ROOT_DIR) + "/series_" + std::to_string(std::hash<std::string>{}(stableKey));
   }
-  return chooseLegacySeriesDirectoryName(feedTitle, entry);
+  const std::string legacyName = chooseLegacySeriesDirectoryName(feedTitle, entry);
+  return std::string(ONLINE_LIBRARY_ROOT_DIR) + legacyName;
 }
 
 std::string buildPreviewCachePath(const OpdsEntry& entry) {
@@ -1654,19 +1656,9 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
           return;
         }
 
-        g_seriesDownloadInput = &mappedInput;
-        g_seriesCurrentFileDownloaded = &currentFileDownloaded;
-        g_seriesCurrentFileTotal = &currentFileTotal;
-        g_seriesDownloadActivity = this;
-        g_seriesCancelRequested = &cancelRequested;
-        const auto result = HttpDownloader::downloadToFile(pending.chapterUrl, pending.localChapterPath,
-                                                           seriesDownloadProgressCallback, server.username,
-                                                           server.password);
-        g_seriesDownloadInput = nullptr;
-        g_seriesCurrentFileDownloaded = nullptr;
-        g_seriesCurrentFileTotal = nullptr;
-        g_seriesDownloadActivity = nullptr;
-        g_seriesCancelRequested = nullptr;
+        const auto result =
+            HttpDownloader::downloadToFile(pending.chapterUrl, pending.localChapterPath, nullptr, server.username,
+                                           server.password);
         if (result == HttpDownloader::ABORTED) {
           currentFileDownloaded = 0;
           currentFileTotal = 0;
@@ -1799,19 +1791,9 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
         return;
       }
 
-      g_seriesDownloadInput = &mappedInput;
-      g_seriesCurrentFileDownloaded = &currentFileDownloaded;
-      g_seriesCurrentFileTotal = &currentFileTotal;
-      g_seriesDownloadActivity = this;
-      g_seriesCancelRequested = &cancelRequested;
-      const auto result = HttpDownloader::downloadToFile(pending.chapterUrl, pending.localChapterPath,
-                                                         seriesDownloadProgressCallback, server.username,
-                                                         server.password);
-      g_seriesDownloadInput = nullptr;
-      g_seriesCurrentFileDownloaded = nullptr;
-      g_seriesCurrentFileTotal = nullptr;
-      g_seriesDownloadActivity = nullptr;
-      g_seriesCancelRequested = nullptr;
+      const auto result =
+          HttpDownloader::downloadToFile(pending.chapterUrl, pending.localChapterPath, nullptr, server.username,
+                                         server.password);
       if (result == HttpDownloader::ABORTED) {
         currentFileDownloaded = 0;
         currentFileTotal = 0;

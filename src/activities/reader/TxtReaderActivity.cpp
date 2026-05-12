@@ -125,6 +125,8 @@ void TxtReaderActivity::onExit() {
 }
 
 void TxtReaderActivity::loop() {
+  continueBackgroundIndexing();
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     openSeriesChapterSelection();
     return;
@@ -209,7 +211,10 @@ void TxtReaderActivity::loop() {
     } else if (tryNavigateAdjacentSeriesChapter(1, false)) {
       return;
     } else if (pageIndexComplete) {
-      savePageIndexCache();
+      if (!pageIndexCacheSaved) {
+        savePageIndexCache();
+        pageIndexCacheSaved = true;
+      }
       onGoHome();
     }
   }
@@ -249,6 +254,9 @@ void TxtReaderActivity::initializeReader() {
     pageOffsets.push_back(0);
     totalPages = 1;
     pageIndexComplete = false;
+    pageIndexCacheSaved = false;
+  } else {
+    pageIndexCacheSaved = true;
   }
 
   // Load saved progress
@@ -302,6 +310,31 @@ bool TxtReaderActivity::ensurePageIndexed(int pageIndex) {
 
   totalPages = static_cast<int>(pageOffsets.size());
   return pageIndexComplete || pageIndex < totalPages;
+}
+
+void TxtReaderActivity::continueBackgroundIndexing() {
+  if (!initialized || !txt || pageIndexComplete) {
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (now - lastBackgroundIndexTick < 16) {
+    return;
+  }
+  lastBackgroundIndexTick = now;
+
+  const int startPages = totalPages;
+  const int targetPage = totalPages + 7;
+  ensurePageIndexed(targetPage);
+
+  if (pageIndexComplete && !pageIndexCacheSaved) {
+    savePageIndexCache();
+    pageIndexCacheSaved = true;
+  }
+
+  if (pageIndexComplete || totalPages != startPages) {
+    requestUpdate();
+  }
 }
 
 bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>& outLines, size_t& nextOffset) {
@@ -530,7 +563,7 @@ void TxtReaderActivity::renderPage() {
 
 void TxtReaderActivity::renderStatusBar() const {
   const int displayTotalPages = pageIndexComplete ? totalPages : std::max(totalPages + 1, currentPage + 2);
-  const float progress = displayTotalPages > 0 ? (currentPage + 1) * 100.0f / displayTotalPages : 0;
+  const float progress = (pageIndexComplete && displayTotalPages > 0) ? (currentPage + 1) * 100.0f / displayTotalPages : 0;
   std::string title;
   if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
     title = seriesDisplayTitle.empty() ? txt->getTitle() : seriesDisplayTitle;
@@ -757,6 +790,7 @@ bool TxtReaderActivity::loadPageIndexCache() {
   pageOffsets.clear();
   pageOffsets.reserve(numPages);
   pageIndexComplete = true;
+  pageIndexCacheSaved = true;
 
   for (uint32_t i = 0; i < numPages; i++) {
     uint32_t offset;
@@ -806,7 +840,7 @@ ScreenshotInfo TxtReaderActivity::getScreenshotInfo() const {
   const int displayTotalPages = pageIndexComplete ? totalPages : std::max(totalPages + 1, currentPage + 2);
   info.currentPage = currentPage + 1;
   info.totalPages = displayTotalPages;
-  info.progressPercent = displayTotalPages > 0
+  info.progressPercent = (pageIndexComplete && displayTotalPages > 0)
                              ? static_cast<int>((currentPage + 1) * 100.0f / displayTotalPages + 0.5f)
                              : 0;
   if (info.progressPercent > 100) info.progressPercent = 100;

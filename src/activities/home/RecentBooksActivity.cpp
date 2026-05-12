@@ -8,11 +8,24 @@
 
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "SeriesManifest.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
+constexpr const char* ONLINE_LIBRARY_ROOT_DIR = "/.online-library";
+
+std::string normalizeOnlineLibraryPath(const std::string& path) {
+  if (path.rfind("/series_", 0) != 0) {
+    return path;
+  }
+  const std::string migrated = std::string(ONLINE_LIBRARY_ROOT_DIR) + path;
+  if (Storage.exists(migrated.c_str())) {
+    return migrated;
+  }
+  return path;
+}
 }  // namespace
 
 void RecentBooksActivity::loadRecentBooks() {
@@ -21,11 +34,27 @@ void RecentBooksActivity::loadRecentBooks() {
   recentBooks.reserve(books.size());
 
   for (const auto& book : books) {
+    RecentBook normalized = book;
+    normalized.path = normalizeOnlineLibraryPath(book.path);
+
     // Skip if file no longer exists
-    if (!Storage.exists(book.path.c_str())) {
+    if (!Storage.exists(normalized.path.c_str())) {
       continue;
     }
-    recentBooks.push_back(book);
+
+    if (!normalized.seriesId.empty()) {
+      SeriesManifest manifest;
+      if (SeriesManifestStore::tryLoadMetadataForChapterPath(normalized.path, manifest)) {
+        if (!manifest.title.empty()) {
+          normalized.title = manifest.title;
+        }
+        if (!manifest.author.empty()) {
+          normalized.author = manifest.author;
+        }
+      }
+    }
+
+    recentBooks.push_back(std::move(normalized));
   }
 }
 
@@ -101,7 +130,9 @@ void RecentBooksActivity::render(RenderLock&&) {
     GUI.drawList(
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, recentBooks.size(), selectorIndex,
         [this](int index) { return recentBooks[index].title; }, [this](int index) { return recentBooks[index].author; },
-        [this](int index) { return UITheme::getFileIcon(recentBooks[index].path); });
+        [this](int index) {
+          return recentBooks[index].seriesId.empty() ? UITheme::getFileIcon(recentBooks[index].path) : UIIcon::Book;
+        });
   }
 
   // Help text

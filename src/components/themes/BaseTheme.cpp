@@ -117,7 +117,6 @@ void BaseTheme::drawProgressBar(const GfxRenderer& renderer, Rect rect, const si
   // Use 64-bit arithmetic to avoid overflow for large files
   const int percent = static_cast<int>((static_cast<uint64_t>(current) * 100) / total);
 
-  LOG_DBG("UI", "Drawing progress bar: current=%u, total=%u, percent=%d", current, total, percent);
   // Draw outline
   renderer.drawRect(rect.x, rect.y, rect.width, rect.height);
 
@@ -406,8 +405,10 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 
   if (hasContinueReading && !recentBooks[0].coverBmpPath.empty()) {
     // Try to get actual image dimensions from BMP header
-    const std::string coverBmpPath =
-        UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, BaseMetrics::values.homeCoverHeight);
+    std::string coverBmpPath = UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, BaseMetrics::values.homeCoverHeight);
+    if (!Storage.exists(coverBmpPath.c_str()) && Storage.exists(recentBooks[0].coverBmpPath.c_str())) {
+      coverBmpPath = recentBooks[0].coverBmpPath;
+    }
 
     FsFile file;
     if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
@@ -455,8 +456,10 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     // Only load from SD on first render, then use stored buffer
 
     if (hasContinueReading && !recentBooks[0].coverBmpPath.empty() && !coverRendered) {
-      const std::string coverBmpPath =
-          UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, BaseMetrics::values.homeCoverHeight);
+      std::string coverBmpPath = UITheme::getCoverThumbPath(recentBooks[0].coverBmpPath, BaseMetrics::values.homeCoverHeight);
+      if (!Storage.exists(coverBmpPath.c_str()) && Storage.exists(recentBooks[0].coverBmpPath.c_str())) {
+        coverBmpPath = recentBooks[0].coverBmpPath;
+      }
 
       // First time: load cover from SD and render
       FsFile file;

@@ -18,8 +18,24 @@
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#include "SeriesManifest.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+
+namespace {
+constexpr const char* ONLINE_LIBRARY_ROOT_DIR = "/.online-library";
+
+std::string normalizeOnlineLibraryPath(const std::string& path) {
+  if (path.rfind("/series_", 0) != 0) {
+    return path;
+  }
+  const std::string migrated = std::string(ONLINE_LIBRARY_ROOT_DIR) + path;
+  if (Storage.exists(migrated.c_str())) {
+    return migrated;
+  }
+  return path;
+}
+}  // namespace
 
 bool HomeActivity::hasStandaloneContinueReadingTile() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -67,12 +83,33 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
       break;
     }
 
+    RecentBook normalized = book;
+    normalized.path = normalizeOnlineLibraryPath(book.path);
+
     // Skip if file no longer exists
-    if (!Storage.exists(book.path.c_str())) {
+    if (!Storage.exists(normalized.path.c_str())) {
       continue;
     }
 
-    recentBooks.push_back(book);
+    if (!book.seriesId.empty()) {
+      SeriesManifest manifest;
+      if (SeriesManifestStore::tryLoadMetadataForChapterPath(normalized.path, manifest)) {
+        if (!manifest.title.empty()) {
+          normalized.title = manifest.title;
+        }
+        if (!manifest.author.empty()) {
+          normalized.author = manifest.author;
+        }
+        if (!manifest.coverPath.empty()) {
+          const std::string coverPath = SeriesManifestStore::buildChapterPath(manifest.seriesDir, manifest.coverPath);
+          if (Storage.exists(coverPath.c_str())) {
+            normalized.coverBmpPath = coverPath;
+          }
+        }
+      }
+    }
+
+    recentBooks.push_back(std::move(normalized));
   }
 }
 
@@ -85,7 +122,14 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   for (RecentBook& book : recentBooks) {
     if (!book.coverBmpPath.empty()) {
       std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
+      if (!Storage.exists(coverPath.c_str()) && Storage.exists(book.coverBmpPath.c_str())) {
+        coverPath = book.coverBmpPath;
+      }
       if (!Storage.exists(coverPath.c_str())) {
+        if (!book.seriesId.empty()) {
+          ++progress;
+          continue;
+        }
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
           Epub epub(book.path, "/.crosspoint");

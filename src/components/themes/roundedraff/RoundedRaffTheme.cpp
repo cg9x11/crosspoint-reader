@@ -151,8 +151,10 @@ void RoundedRaffTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
       if (coverPath.empty()) {
         hasCover = false;
       } else {
-        const std::string coverBmpPath =
-            UITheme::getCoverThumbPath(coverPath, RoundedRaffMetrics::values.homeCoverHeight);
+        std::string coverBmpPath = UITheme::getCoverThumbPath(coverPath, RoundedRaffMetrics::values.homeCoverHeight);
+        if (!Storage.exists(coverBmpPath.c_str()) && Storage.exists(coverPath.c_str())) {
+          coverBmpPath = coverPath;
+        }
 
         // First time: load cover from SD and render
         FsFile file;
