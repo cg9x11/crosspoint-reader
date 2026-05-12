@@ -1467,12 +1467,10 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
 void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   OpdsEntry resolvedEntry = entry;
   struct PendingManifestDownload {
-    SeriesChapter chapter;
     std::string localChapterPath;
     std::string chapterUrl;
   };
   struct PendingFeedDownload {
-    OpdsEntry chapter;
     std::string localChapterPath;
     std::string chapterUrl;
   };
@@ -1534,11 +1532,10 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   const std::string remoteSeriesBaseUrl = buildSeriesDownloadBaseUrl(seriesFeedUrl);
   SeriesManifest manifestMetadata;
   bool manifestStored = false;
-  LOG_DBG("OPDS", "Skip remote _series.json fetch for memory safety");
 
   std::string remoteCoverUrl;
   bool skipCoverDownloadForSession = false;
-  const bool skipRemoteManifestFetchForSession = true;
+  const bool skipRemoteManifestFetchForSession = false;
   if (manifestStored && !manifestMetadata.coverPath.empty() && !remoteSeriesBaseUrl.empty()) {
     remoteCoverUrl = remoteSeriesBaseUrl + "/" + manifestMetadata.coverPath;
   } else if (!resolvedEntry.imageHref.empty()) {
@@ -1567,6 +1564,22 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   const std::string localManifestPath = localSeriesDir + "/_series.json";
 
   bool useStoredManifest = SeriesManifestStore::loadMetadataFromSeriesDir(localSeriesDir, manifestMetadata);
+  if (!useStoredManifest && !skipRemoteManifestFetchForSession && !remoteSeriesBaseUrl.empty()) {
+    const std::string remoteManifestUrl = remoteSeriesBaseUrl + "/_series.json";
+    const auto manifestResult = HttpDownloader::downloadToFile(remoteManifestUrl, localManifestPath, nullptr,
+                                                               server.username, server.password);
+    if (manifestResult == HttpDownloader::OK) {
+      useStoredManifest = SeriesManifestStore::loadMetadataFromSeriesDir(localSeriesDir, manifestMetadata);
+      manifestStored = useStoredManifest;
+      if (useStoredManifest && !manifestMetadata.coverPath.empty()) {
+        remoteCoverUrl = remoteSeriesBaseUrl + "/" + manifestMetadata.coverPath;
+      }
+      LOG_DBG("OPDS", "Loaded remote series manifest: %s", useStoredManifest ? "yes" : "parse-failed");
+    } else {
+      LOG_ERR("OPDS", "Remote manifest download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
+      Storage.remove(localManifestPath.c_str());
+    }
+  }
   if (useStoredManifest) {
     finalServerChapterCount = SeriesManifestStore::countChaptersFromSeriesDir(localSeriesDir);
   }
@@ -1603,7 +1616,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
           }
           ++pendingChapterCount;
           if (pendingBatch.size() < SERIES_DOWNLOAD_BATCH_LIMIT) {
-            pendingBatch.push_back(PendingManifestDownload{chapter, localChapterPath, remoteSeriesBaseUrl + "/" + chapter.file});
+            pendingBatch.push_back(PendingManifestDownload{localChapterPath, remoteSeriesBaseUrl + "/" + chapter.file});
           }
         }
       }
@@ -1743,7 +1756,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
 
       ++pendingChapterCount;
       if (pendingBatch.size() < SERIES_DOWNLOAD_BATCH_LIMIT) {
-        pendingBatch.push_back(PendingFeedDownload{chapter, localChapterPath, chapterUrl});
+        pendingBatch.push_back(PendingFeedDownload{localChapterPath, chapterUrl});
       }
     }
 
@@ -1759,6 +1772,11 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
     if (pendingChapterCount == 0) {
       break;
     }
+
+    (void)ensureSeriesArtifacts(resolvedEntry, seriesFeedUrl, seriesEntries, firstDownloadUrl, localSeriesDir,
+                                false);
+    seriesEntries.clear();
+    seriesEntries.shrink_to_fit();
 
     downloadProgress = finalLocalChapterCount;
     downloadTotal = finalServerChapterCount;
@@ -1819,9 +1837,6 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
       }
       vTaskDelay(1);
     }
-
-    (void)ensureSeriesArtifacts(resolvedEntry, seriesFeedUrl, seriesEntries, firstDownloadUrl, localSeriesDir,
-                                false);
     if (pendingChapterCount > downloadedThisBatch) {
       tryDownloadSeriesCover();
       releaseDownloadMemory();
