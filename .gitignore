@@ -1,4 +1,6 @@
 .pio
+.pio_custom_cache/
+.platformio/
 .idea
 .DS_Store
 .vscode
