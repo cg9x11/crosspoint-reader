@@ -25,7 +25,7 @@ std::string g_lastHttpRequestHost;
 constexpr int HTTP_CONNECT_TIMEOUT_MS = 12000;
 constexpr int HTTP_READ_TIMEOUT_MS = 20000;
 constexpr int HTTP_RETRY_COUNT = 3;
-constexpr uint32_t HTTPS_SAME_HOST_COOLDOWN_MS = 1200;
+constexpr uint32_t HTTPS_SAME_HOST_COOLDOWN_MS = 250;
 
 struct ParsedUrl {
   bool valid = false;
@@ -243,6 +243,9 @@ class FileWriteStream final : public Stream {
   size_t write(uint8_t byte) override { return write(&byte, 1); }
 
   size_t write(const uint8_t* buffer, size_t size) override {
+    if (aborted_) {
+      return 0;
+    }
     // Write-through stream for HTTPClient::writeToStream with progress tracking.
     const size_t written = file_.write(buffer, size);
     if (written != size) {
@@ -250,7 +253,10 @@ class FileWriteStream final : public Stream {
     }
     downloaded_ += written;
     if (progress_ && total_ > 0) {
-      progress_(downloaded_, total_);
+      if (!progress_(downloaded_, total_)) {
+        aborted_ = true;
+        return 0;
+      }
     }
     return written;
   }
@@ -262,12 +268,14 @@ class FileWriteStream final : public Stream {
 
   size_t downloaded() const { return downloaded_; }
   bool ok() const { return writeOk_; }
+  bool aborted() const { return aborted_; }
 
  private:
   FsFile& file_;
   size_t total_;
   size_t downloaded_ = 0;
   bool writeOk_ = true;
+  bool aborted_ = false;
   HttpDownloader::ProgressCallback progress_;
 };
 }  // namespace
@@ -374,8 +382,9 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
             sanitizedUrl.c_str());
   }
   LOG_DBG("HTTP", "Downloading: %s", sanitizedUrl.c_str());
-  LOG_DBG("HTTP", "Destination: %s", destPath.c_str());
-  const std::string partialPath = buildPartialDownloadPath(destPath);
+  if (progress != nullptr) {
+    LOG_DBG("HTTP", "Destination: %s", destPath.c_str());
+  }
   {
     char detail[180];
     snprintf(detail, sizeof(detail), "dest=%s", destPath.c_str());
@@ -443,24 +452,22 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
 
     const int64_t reportedLength = http.getSize();
     const size_t contentLength = reportedLength > 0 ? static_cast<size_t>(reportedLength) : 0;
-    if (contentLength > 0) {
-      LOG_DBG("HTTP", "Content-Length: %zu", contentLength);
-    } else {
-      LOG_DBG("HTTP", "Content-Length: unknown");
-    }
-    {
+    if (progress != nullptr) {
+      if (contentLength > 0) {
+        LOG_DBG("HTTP", "Content-Length: %zu", contentLength);
+      } else {
+        LOG_DBG("HTTP", "Content-Length: unknown");
+      }
       char detail[64];
       snprintf(detail, sizeof(detail), "content_length=%zu", contentLength);
       traceRequest(requestId, true, "headers", sanitizedUrl, detail);
     }
 
-    Storage.remove(partialPath.c_str());
-
     FsFile file;
-    if (!Storage.openFileForWrite("HTTP", partialPath.c_str(), file)) {
+    if (!Storage.openFileForWrite("HTTP", destPath.c_str(), file)) {
       LOG_ERR("HTTP", "Failed to open file for writing");
       finalizeRequestClient(http, client, target);
-      traceRequest(requestId, true, "file_open_fail", sanitizedUrl, partialPath.c_str());
+      traceRequest(requestId, true, "file_open_fail", sanitizedUrl, destPath.c_str());
       return FILE_ERROR;
     }
 
@@ -470,6 +477,11 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
     file.close();
     finalizeRequestClient(http, client, target);
 
+    if (fileStream.aborted()) {
+      Storage.remove(destPath.c_str());
+      return ABORTED;
+    }
+
     if (writeResult < 0) {
       setLastHttpError("write", sanitizedUrl, writeResult);
       LOG_ERR("HTTP", "writeToStream error (attempt %d/%d): %d", attempt, HTTP_RETRY_COUNT, writeResult);
@@ -477,7 +489,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
       snprintf(detail, sizeof(detail), "attempt=%d/%d write_result=%d downloaded=%zu", attempt, HTTP_RETRY_COUNT,
                writeResult, fileStream.downloaded());
       traceRequest(requestId, true, "write_fail", sanitizedUrl, detail);
-      Storage.remove(partialPath.c_str());
+      Storage.remove(destPath.c_str());
       if (!shouldRetryHttpCode(writeResult) || attempt >= HTTP_RETRY_COUNT) {
         return HTTP_ERROR;
       }
@@ -486,8 +498,8 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
     }
 
     const size_t downloaded = fileStream.downloaded();
-    LOG_DBG("HTTP", "Downloaded %zu bytes", downloaded);
-    {
+    if (progress != nullptr) {
+      LOG_DBG("HTTP", "Downloaded %zu bytes", downloaded);
       char detail[96];
       snprintf(detail, sizeof(detail), "attempt=%d/%d downloaded=%zu", attempt, HTTP_RETRY_COUNT, downloaded);
       traceRequest(requestId, true, "write_done", sanitizedUrl, detail);
@@ -495,8 +507,8 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
 
     if (!fileStream.ok()) {
       LOG_ERR("HTTP", "Write failed during download");
-      traceRequest(requestId, true, "file_write_fail", sanitizedUrl, partialPath.c_str());
-      Storage.remove(partialPath.c_str());
+      traceRequest(requestId, true, "file_write_fail", sanitizedUrl, destPath.c_str());
+      Storage.remove(destPath.c_str());
       return FILE_ERROR;
     }
 
@@ -504,7 +516,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
       setLastHttpError("empty", sanitizedUrl, -1001);
       LOG_ERR("HTTP", "Download failed: no data received");
       traceRequest(requestId, true, "empty_fail", sanitizedUrl);
-      Storage.remove(partialPath.c_str());
+      Storage.remove(destPath.c_str());
       if (attempt < HTTP_RETRY_COUNT) {
         delay(250);
         continue;
@@ -518,29 +530,17 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
       char detail[96];
       snprintf(detail, sizeof(detail), "downloaded=%zu expected=%zu", downloaded, contentLength);
       traceRequest(requestId, true, "size_fail", sanitizedUrl, detail);
-      Storage.remove(partialPath.c_str());
+      Storage.remove(destPath.c_str());
       if (attempt < HTTP_RETRY_COUNT) {
         delay(250);
         continue;
       }
       return HTTP_ERROR;
     }
-
-    bool renameOk = Storage.rename(partialPath.c_str(), destPath.c_str());
-    if (!renameOk) {
-      Storage.remove(destPath.c_str());
-      renameOk = Storage.rename(partialPath.c_str(), destPath.c_str());
-    }
-    if (!renameOk) {
-      setLastHttpError("rename", sanitizedUrl, -1004);
-      LOG_ERR("HTTP", "Failed to commit downloaded file: %s", destPath.c_str());
-      traceRequest(requestId, true, "rename_fail", sanitizedUrl, destPath.c_str());
-      Storage.remove(partialPath.c_str());
-      return FILE_ERROR;
-    }
-
     clearLastHttpError();
-    traceRequest(requestId, true, "success", sanitizedUrl);
+    if (progress != nullptr) {
+      traceRequest(requestId, true, "success", sanitizedUrl);
+    }
     return OK;
   }
   return HTTP_ERROR;
