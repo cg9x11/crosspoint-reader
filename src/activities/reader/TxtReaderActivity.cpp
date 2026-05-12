@@ -88,6 +88,14 @@ void TxtReaderActivity::onEnter() {
 
   txt->setupCacheDir();
 
+  seriesDisplayTitle.clear();
+  if (seriesContext.has_value()) {
+    SeriesManifest manifest;
+    if (SeriesManifestStore::tryLoadMetadataForChapterPath(txt->getPath(), manifest) && !manifest.title.empty()) {
+      seriesDisplayTitle = manifest.title;
+    }
+  }
+
   // Save current txt as last opened file and add to recent books
   auto filePath = txt->getPath();
   if (seriesContext.has_value()) {
@@ -195,12 +203,13 @@ void TxtReaderActivity::loop() {
       return;
     }
   } else if (nextTriggered) {
-    if (currentPage < totalPages - 1) {
+    if (ensurePageIndexed(currentPage + 1) && currentPage < totalPages - 1) {
       currentPage++;
       requestUpdate();
     } else if (tryNavigateAdjacentSeriesChapter(1, false)) {
       return;
-    } else {
+    } else if (pageIndexComplete) {
+      savePageIndexCache();
       onGoHome();
     }
   }
@@ -234,12 +243,12 @@ void TxtReaderActivity::initializeReader() {
 
   LOG_DBG("TRS", "Viewport: %dx%d, lines per page: %d", viewportWidth, viewportHeight, linesPerPage);
 
-  // Try to load cached page index first
+  // Try to load cached page index first. If not available, start with lazy indexing.
   if (!loadPageIndexCache()) {
-    // Cache not found, build page index
-    buildPageIndex();
-    // Save to cache for next time
-    savePageIndexCache();
+    pageOffsets.clear();
+    pageOffsets.push_back(0);
+    totalPages = 1;
+    pageIndexComplete = false;
   }
 
   // Load saved progress
@@ -254,41 +263,45 @@ void TxtReaderActivity::initializeReader() {
 
 void TxtReaderActivity::buildPageIndex() {
   pageOffsets.clear();
-  pageOffsets.push_back(0);  // First page starts at offset 0
+  pageOffsets.push_back(0);
+  pageIndexComplete = false;
+  ensurePageIndexed(INT_MAX);
+  LOG_DBG("TRS", "Built page index: %d pages", totalPages);
+}
 
-  size_t offset = 0;
+bool TxtReaderActivity::ensurePageIndexed(int pageIndex) {
+  if (!txt || pageOffsets.empty()) {
+    return false;
+  }
+
   const size_t fileSize = txt->getFileSize();
+  while (!pageIndexComplete && static_cast<int>(pageOffsets.size()) <= pageIndex) {
+    const size_t offset = pageOffsets.back();
+    if (offset >= fileSize) {
+      pageIndexComplete = true;
+      break;
+    }
 
-  LOG_DBG("TRS", "Building page index for %zu bytes...", fileSize);
-
-  GUI.drawPopup(renderer, tr(STR_INDEXING));
-
-  while (offset < fileSize) {
     std::vector<std::string> tempLines;
     size_t nextOffset = offset;
-
-    if (!loadPageAtOffset(offset, tempLines, nextOffset)) {
+    if (!loadPageAtOffset(offset, tempLines, nextOffset) || nextOffset <= offset) {
+      pageIndexComplete = true;
       break;
     }
 
-    if (nextOffset <= offset) {
-      // No progress made, avoid infinite loop
-      break;
+    if (nextOffset < fileSize) {
+      pageOffsets.push_back(nextOffset);
+    } else {
+      pageIndexComplete = true;
     }
 
-    offset = nextOffset;
-    if (offset < fileSize) {
-      pageOffsets.push_back(offset);
-    }
-
-    // Yield to other tasks periodically
     if (pageOffsets.size() % 20 == 0) {
       vTaskDelay(1);
     }
   }
 
-  totalPages = pageOffsets.size();
-  LOG_DBG("TRS", "Built page index: %d pages", totalPages);
+  totalPages = static_cast<int>(pageOffsets.size());
+  return pageIndexComplete || pageIndex < totalPages;
 }
 
 bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>& outLines, size_t& nextOffset) {
@@ -442,6 +455,7 @@ void TxtReaderActivity::render(RenderLock&&) {
 
   // Bounds check
   if (currentPage < 0) currentPage = 0;
+  ensurePageIndexed(currentPage);
   if (currentPage >= totalPages) currentPage = totalPages - 1;
 
   // Load current page content
@@ -515,15 +529,16 @@ void TxtReaderActivity::renderPage() {
 }
 
 void TxtReaderActivity::renderStatusBar() const {
-  const float progress = totalPages > 0 ? (currentPage + 1) * 100.0f / totalPages : 0;
+  const int displayTotalPages = pageIndexComplete ? totalPages : std::max(totalPages + 1, currentPage + 2);
+  const float progress = displayTotalPages > 0 ? (currentPage + 1) * 100.0f / displayTotalPages : 0;
   std::string title;
   if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
-    title = txt->getTitle();
-    if (seriesContext.has_value() && seriesContext->chapterIndex > 0) {
+    title = seriesDisplayTitle.empty() ? txt->getTitle() : seriesDisplayTitle;
+    if (seriesContext.has_value() && seriesContext->chapterIndex > 0 && !seriesDisplayTitle.empty()) {
       title = std::to_string(seriesContext->chapterIndex) + ". " + title;
     }
   }
-  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title);
+  GUI.drawStatusBar(renderer, progress, currentPage + 1, displayTotalPages, title);
 }
 
 void TxtReaderActivity::persistSeriesReadingState() const {
@@ -547,12 +562,8 @@ int TxtReaderActivity::getCurrentSeriesChapterIndex() const {
     return seriesContext->chapterIndex;
   }
 
-  SeriesManifest manifest;
-  if (!SeriesManifestStore::tryLoadForChapterPath(txt->getPath(), manifest)) {
-    return 0;
-  }
-  const auto chapter = SeriesManifestStore::findByPath(manifest, txt->getPath());
-  return chapter.has_value() ? chapter->chapterIndex : 0;
+  int chapterIndex = 0;
+  return SeriesManifestStore::tryGetChapterIndexByPath(txt->getPath(), chapterIndex) ? chapterIndex : 0;
 }
 
 bool TxtReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta, const bool openChapterAtLastPage) {
@@ -560,15 +571,9 @@ bool TxtReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta,
     return false;
   }
 
-  SeriesManifest manifest;
-  if (!SeriesManifestStore::tryLoadForChapterPath(txt->getPath(), manifest)) {
-    return false;
-  }
-
   int currentChapterIndex = seriesContext->chapterIndex;
-  if (currentChapterIndex <= 0) {
-    const auto chapter = SeriesManifestStore::findByPath(manifest, txt->getPath());
-    currentChapterIndex = chapter.has_value() ? chapter->chapterIndex : 0;
+  if (currentChapterIndex <= 0 && !SeriesManifestStore::tryGetChapterIndexByPath(txt->getPath(), currentChapterIndex)) {
+    currentChapterIndex = 0;
   }
   if (currentChapterIndex <= 0) {
     return false;
@@ -576,7 +581,7 @@ bool TxtReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta,
 
   std::string targetChapterPath;
   const int targetChapterIndex = currentChapterIndex + chapterDelta;
-  if (!SeriesManifestStore::resolveChapterPath(manifest, targetChapterIndex, targetChapterPath)) {
+  if (!SeriesManifestStore::tryResolveChapterPath(seriesContext->seriesDir, targetChapterIndex, targetChapterPath)) {
     return false;
   }
   if (!Storage.exists(targetChapterPath.c_str())) {
@@ -584,8 +589,8 @@ bool TxtReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta,
   }
 
   SeriesReadingContext nextContext;
-  nextContext.seriesId = manifest.seriesId;
-  nextContext.seriesDir = manifest.seriesDir;
+  nextContext.seriesId = seriesContext->seriesId;
+  nextContext.seriesDir = seriesContext->seriesDir;
   nextContext.chapterPath = targetChapterPath;
   nextContext.chapterIndex = targetChapterIndex;
   APP_STATE.setOpenReadingState(nextContext);
@@ -599,17 +604,9 @@ void TxtReaderActivity::openSeriesChapterSelection() {
     return;
   }
 
-  SeriesManifest manifest;
-  {
-    RenderLock lock(*this);
-    if (!SeriesManifestStore::loadFromSeriesDir(seriesContext->seriesDir, manifest)) {
-      return;
-    }
-  }
-
   const int currentChapterIndex = getCurrentSeriesChapterIndex();
   startActivityForResult(
-      std::make_unique<SeriesChapterSelectionActivity>(renderer, mappedInput, std::move(manifest), currentChapterIndex),
+      std::make_unique<SeriesChapterSelectionActivity>(renderer, mappedInput, seriesContext->seriesDir, currentChapterIndex),
       [this](const ActivityResult& result) {
         if (result.isCancelled || !seriesContext.has_value() || !txt) {
           return;
@@ -759,6 +756,7 @@ bool TxtReaderActivity::loadPageIndexCache() {
   // Read page offsets
   pageOffsets.clear();
   pageOffsets.reserve(numPages);
+  pageIndexComplete = true;
 
   for (uint32_t i = 0; i < numPages; i++) {
     uint32_t offset;
@@ -805,9 +803,12 @@ ScreenshotInfo TxtReaderActivity::getScreenshotInfo() const {
     const std::string t = txt->getTitle();
     snprintf(info.title, sizeof(info.title), "%s", t.c_str());
   }
+  const int displayTotalPages = pageIndexComplete ? totalPages : std::max(totalPages + 1, currentPage + 2);
   info.currentPage = currentPage + 1;
-  info.totalPages = totalPages;
-  info.progressPercent = totalPages > 0 ? static_cast<int>((currentPage + 1) * 100.0f / totalPages + 0.5f) : 0;
+  info.totalPages = displayTotalPages;
+  info.progressPercent = displayTotalPages > 0
+                             ? static_cast<int>((currentPage + 1) * 100.0f / displayTotalPages + 0.5f)
+                             : 0;
   if (info.progressPercent > 100) info.progressPercent = 100;
   return info;
 }

@@ -67,3 +67,20 @@ export function stripHtmlToReadableText(html: string) {
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 }
+
+export function stripLeadingSourceFilename(text: string) {
+  const lines = String(text || "").split(/\r?\n/);
+  while (lines.length && !lines[0]?.trim()) {
+    lines.shift();
+  }
+
+  const firstLine = lines[0]?.trim() || "";
+  if (/^[^\s\\/:*?"<>|]+\.html$/i.test(firstLine)) {
+    lines.shift();
+    while (lines.length && !lines[0]?.trim()) {
+      lines.shift();
+    }
+  }
+
+  return lines.join("\n");
+}

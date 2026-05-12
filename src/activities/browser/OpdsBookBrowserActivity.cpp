@@ -7,6 +7,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <JpegToBmpConverter.h>
 #include <Logging.h>
 #include <OpdsStream.h>
 #include <WiFi.h>
@@ -31,10 +32,16 @@ constexpr int FULL_LIST_PAGE_ITEMS = 23;
 constexpr int PREVIEW_LIST_PAGE_ITEMS = 9;
 constexpr int LIST_TOP = 60;
 constexpr int LIST_ITEM_HEIGHT = 30;
-constexpr unsigned long PREVIEW_DWELL_MS = 450;
+constexpr unsigned long PREVIEW_DWELL_MS = 900;
 constexpr const char* NO_DESCRIPTION_TEXT = "No description";
-constexpr size_t SERIES_DOWNLOAD_BATCH_LIMIT = 25;
+constexpr size_t SERIES_DOWNLOAD_BATCH_LIMIT = 8;
 constexpr const char* OPDS_CACHE_DIR = "/.crosspoint/opds";
+
+MappedInputManager* g_seriesDownloadInput = nullptr;
+size_t* g_seriesCurrentFileDownloaded = nullptr;
+size_t* g_seriesCurrentFileTotal = nullptr;
+OpdsBookBrowserActivity* g_seriesDownloadActivity = nullptr;
+bool* g_seriesCancelRequested = nullptr;
 
 std::string summarizeFetchUrl(const std::string& url) {
   std::string summary = url;
@@ -74,6 +81,40 @@ std::string truncateLine(std::string text, const size_t maxLen = 36) {
     return text.substr(0, maxLen);
   }
   return text.substr(0, maxLen - 3) + "...";
+}
+
+bool extractFirstRootNavigationHref(const std::string& xml, std::string& hrefOut) {
+  const size_t entryStart = xml.find("<entry");
+  if (entryStart == std::string::npos) {
+    return false;
+  }
+  const size_t hrefPos = xml.find("href=\"", entryStart);
+  if (hrefPos == std::string::npos) {
+    return false;
+  }
+  const size_t valueStart = hrefPos + 6;
+  const size_t valueEnd = xml.find('"', valueStart);
+  if (valueEnd == std::string::npos || valueEnd <= valueStart) {
+    return false;
+  }
+  hrefOut = xml.substr(valueStart, valueEnd - valueStart);
+  return !hrefOut.empty();
+}
+
+bool seriesDownloadProgressCallback(const size_t downloaded, const size_t total) {
+  if (g_seriesCurrentFileDownloaded != nullptr) {
+    *g_seriesCurrentFileDownloaded = downloaded;
+  }
+  if (g_seriesCurrentFileTotal != nullptr) {
+    *g_seriesCurrentFileTotal = total;
+  }
+  if (g_seriesDownloadInput != nullptr && g_seriesCancelRequested != nullptr) {
+    g_seriesDownloadInput->update();
+    if (g_seriesDownloadInput->wasReleased(MappedInputManager::Button::Back)) {
+      *g_seriesCancelRequested = true;
+    }
+  }
+  return g_seriesCancelRequested == nullptr || !*g_seriesCancelRequested;
 }
 
 std::string buildVerboseHttpErrorText(const std::string& url, const std::string& fallbackPhase) {
@@ -242,6 +283,52 @@ std::string buildMetadataCachePath(const std::string& currentPath, const OpdsEnt
   const std::string cacheKey = currentPath + "|" + (!entry.id.empty() ? entry.id : entry.href);
   const size_t hash = std::hash<std::string>{}(cacheKey);
   return std::string(OPDS_CACHE_DIR) + "/meta_" + std::to_string(hash) + ".json";
+}
+
+bool downloadRemoteCoverToBmp(const std::string& remoteUrl, const std::string& localBmpPath, const std::string& username,
+                              const std::string& password) {
+  const std::string tempPath = localBmpPath + ".tmp";
+  Storage.remove(tempPath.c_str());
+  Storage.remove(localBmpPath.c_str());
+
+  const auto result = HttpDownloader::downloadToFile(remoteUrl, tempPath, nullptr, username, password);
+  if (result != HttpDownloader::OK) {
+    Storage.remove(tempPath.c_str());
+    return false;
+  }
+
+  if (FsHelpers::hasBmpExtension(remoteUrl)) {
+    if (Storage.rename(tempPath.c_str(), localBmpPath.c_str())) {
+      return true;
+    }
+    Storage.remove(localBmpPath.c_str());
+    const bool renamed = Storage.rename(tempPath.c_str(), localBmpPath.c_str());
+    if (!renamed) {
+      Storage.remove(tempPath.c_str());
+    }
+    return renamed;
+  }
+
+  if (FsHelpers::hasJpgExtension(remoteUrl)) {
+    FsFile jpgFile;
+    FsFile bmpFile;
+    const bool opened = Storage.openFileForRead("OPDS", tempPath.c_str(), jpgFile) &&
+                        Storage.openFileForWrite("OPDS", localBmpPath.c_str(), bmpFile);
+    bool converted = false;
+    if (opened) {
+      converted = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(jpgFile, bmpFile, 220, 330);
+    }
+    jpgFile.close();
+    bmpFile.close();
+    Storage.remove(tempPath.c_str());
+    if (!converted) {
+      Storage.remove(localBmpPath.c_str());
+    }
+    return converted;
+  }
+
+  Storage.remove(tempPath.c_str());
+  return false;
 }
 
 void drawBitmapCoverFill(GfxRenderer& renderer, const Bitmap& bitmap, const int x, const int y, const int width,
@@ -509,8 +596,6 @@ std::string buildSeriesPreviewStatus(const size_t localChapterCount, const size_
   std::string status = std::to_string(localChapterCount) + "/" + std::to_string(serverChapterCount) + " chapters";
   if (localChapterCount < serverChapterCount) {
     status += " | " + std::to_string(serverChapterCount - localChapterCount) + " new";
-  } else {
-    status += " | Up to date";
   }
   return status;
 }
@@ -525,17 +610,19 @@ bool formatSeriesDownloadDetail(const size_t overallCurrent, const size_t overal
   if (overallTotal == 0 && fileTotal == 0) {
     return false;
   }
-  if (overallTotal > 0 && fileTotal > 0) {
-    const unsigned filePercent = static_cast<unsigned>((fileCurrent * 100) / fileTotal);
-    snprintf(out, outSize, "Chapters %u/%u | File %u%%", static_cast<unsigned>(overallCurrent),
-             static_cast<unsigned>(overallTotal), filePercent);
-  } else if (overallTotal > 0) {
+  if (overallTotal > 0) {
     snprintf(out, outSize, "Chapters %u/%u", static_cast<unsigned>(overallCurrent), static_cast<unsigned>(overallTotal));
-  } else {
-    const unsigned filePercent = static_cast<unsigned>((fileCurrent * 100) / fileTotal);
-    snprintf(out, outSize, "File %u%%", filePercent);
   }
 
+  return out[0] != '\0';
+}
+
+bool formatDownloadProgressLabel(const size_t current, const size_t total, char* out, const size_t outSize) {
+  if (out == nullptr || outSize == 0 || total == 0) {
+    return false;
+  }
+
+  snprintf(out, outSize, "%u/%u", static_cast<unsigned>(current), static_cast<unsigned>(total));
   return out[0] != '\0';
 }
 
@@ -564,6 +651,9 @@ void OpdsBookBrowserActivity::onEnter() {
   currentPreview = {};
   pendingFetchPath.clear();
   hasPendingFetch = false;
+  autoResumeSeriesDownload = false;
+  autoResumeSeriesHref.clear();
+  autoResumeSeriesTitle.clear();
   errorMessage.clear();
   statusMessage = tr(STR_CHECKING_WIFI);
   downloadProgress = 0;
@@ -580,6 +670,9 @@ void OpdsBookBrowserActivity::onExit() {
   WiFi.mode(WIFI_OFF);
   entries.clear();
   navigationHistory.clear();
+  autoResumeSeriesDownload = false;
+  autoResumeSeriesHref.clear();
+  autoResumeSeriesTitle.clear();
   resetPreviewSummaryCache();
 }
 
@@ -673,8 +766,23 @@ void OpdsBookBrowserActivity::loop() {
     return;
   }
 
+  if (autoResumeSeriesDownload) {
+    autoResumeSeriesDownload = false;
+    for (const auto& entry : entries) {
+      if (entry.type == OpdsEntryType::SERIES && entry.href == autoResumeSeriesHref) {
+        downloadSeries(entry);
+        return;
+      }
+    }
+    autoResumeSeriesHref.clear();
+    autoResumeSeriesTitle.clear();
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (!entries.empty()) {
+      autoResumeSeriesDownload = false;
+      autoResumeSeriesHref.clear();
+      autoResumeSeriesTitle.clear();
       const auto& entry = entries[selectorIndex];
       if (entry.type == OpdsEntryType::BOOK) {
         downloadBook(entry);
@@ -688,6 +796,9 @@ void OpdsBookBrowserActivity::loop() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    autoResumeSeriesDownload = false;
+    autoResumeSeriesHref.clear();
+    autoResumeSeriesTitle.clear();
     navigateBack();
     return;
   }
@@ -854,20 +965,26 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
 
   if (state == BrowserState::DOWNLOADING) {
     char downloadDetail[96];
-    const bool hasDownloadDetail =
-        formatSeriesDownloadDetail(downloadProgress, downloadTotal, currentFileDownloaded, currentFileTotal, downloadDetail,
-                                   sizeof(downloadDetail));
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 40, tr(STR_DOWNLOADING));
-    const auto title = renderer.truncatedText(UI_10_FONT_ID, statusMessage.c_str(), pageWidth - 40);
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 10, title.c_str());
+    const bool hasDownloadDetail = formatDownloadProgressLabel(downloadProgress, downloadTotal, downloadDetail,
+                                                               sizeof(downloadDetail));
+    const int topY = pageHeight / 2 - 22;
+    const int leftX = 20;
+    const int rightPadding = 20;
+    if (!statusMessage.empty()) {
+      const int detailWidth = hasDownloadDetail ? renderer.getTextWidth(UI_10_FONT_ID, downloadDetail) : 0;
+      const int titleWidth = std::max(0, pageWidth - 40 - detailWidth - 8);
+      const std::string title = renderer.truncatedText(UI_10_FONT_ID, statusMessage.c_str(), titleWidth);
+      renderer.drawText(UI_10_FONT_ID, leftX, topY, title.c_str());
+    }
     if (hasDownloadDetail) {
-      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 8, downloadDetail);
+      const int detailWidth = renderer.getTextWidth(UI_10_FONT_ID, downloadDetail);
+      renderer.drawText(UI_10_FONT_ID, pageWidth - rightPadding - detailWidth, topY, downloadDetail);
     }
     if (downloadTotal > 0) {
-      GUI.drawProgressBar(renderer, Rect{50, pageHeight / 2 + 32, pageWidth - 100, 20}, downloadProgress,
+      GUI.drawProgressBar(renderer, Rect{20, pageHeight / 2 + 8, pageWidth - 40, 20}, downloadProgress,
                           downloadTotal);
     }
-    ScreenDebugRecorder::setBody(tr(STR_DOWNLOADING), statusMessage.c_str(), hasDownloadDetail ? downloadDetail : nullptr);
+    ScreenDebugRecorder::setBody(statusMessage.c_str(), hasDownloadDetail ? downloadDetail : nullptr);
     renderer.displayBuffer();
     return;
   }
@@ -1110,7 +1227,17 @@ std::string OpdsBookBrowserActivity::getPreviewCoverPath(const OpdsEntry& entry,
   if (Storage.exists(localPath.c_str())) {
     return localPath;
   }
-  (void)baseUrl;
+
+  // Root-feed first entry preview is too expensive on ESP32-C3 after cache/data cleanup.
+  // Avoid synchronous network image fetch there; only use cached previews.
+  if (currentPath.empty()) {
+    return "";
+  }
+
+  const std::string remoteUrl = UrlUtils::buildUrl(baseUrl, entry.imageHref);
+  if (downloadRemoteCoverToBmp(remoteUrl, localPath, server.username, server.password)) {
+    return localPath;
+  }
   return "";
 }
 
@@ -1125,16 +1252,26 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   const std::string url = (path.find("http") == 0) ? path : UrlUtils::buildUrl(server.url, path);
   std::vector<OpdsEntry> parsedEntries;
   if (path.empty()) {
-    LOG_DBG("OPDS", "Root feed parse begin");
+    if (server.url.find("online-library.noe.asia/opds") != std::string::npos) {
+      currentPath = UrlUtils::buildUrl(server.url, "library");
+      queueFetch(currentPath);
+      return;
+    }
+    std::string rootFeedXml;
+    std::string firstNavHref;
+    if (HttpDownloader::fetchUrl(url, rootFeedXml, server.username, server.password) &&
+        extractFirstRootNavigationHref(rootFeedXml, firstNavHref)) {
+      currentPath = UrlUtils::buildUrl(url, firstNavHref);
+      queueFetch(currentPath);
+      return;
+    }
     if (!fetchFeedData(url, parsedEntries, nullptr, nullptr, nullptr, nullptr, true, 12)) {
       state = BrowserState::ERROR;
       errorMessage = buildFetchErrorText(url);
       requestUpdate();
       return;
     }
-    LOG_DBG("OPDS", "Root feed parse done: entries=%u", static_cast<unsigned>(parsedEntries.size()));
     if (parsedEntries.size() == 1 && parsedEntries[0].type == OpdsEntryType::NAVIGATION) {
-      LOG_DBG("OPDS", "Auto-opening root navigation feed: %s", parsedEntries[0].href.c_str());
       currentPath = UrlUtils::buildUrl(url, parsedEntries[0].href);
       queueFetch(currentPath);
       return;
@@ -1142,7 +1279,6 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
 
     searchTemplate.clear();
     currentFeedTitle.clear();
-    LOG_DBG("OPDS", "Root feed swap");
     entries.swap(parsedEntries);
     selectorIndex = 0;
     state = entries.empty() ? BrowserState::ERROR : BrowserState::BROWSING;
@@ -1153,7 +1289,6 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
       previewSelectorIndex = -1;
       previewReadyAt = 0;
     }
-    LOG_DBG("OPDS", "Root feed ready");
     requestUpdate();
     return;
   }
@@ -1182,8 +1317,14 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   selectorIndex = 0;
   state = entries.empty() ? BrowserState::ERROR : BrowserState::BROWSING;
   if (entries.empty()) {
+    autoResumeSeriesDownload = false;
+    autoResumeSeriesHref.clear();
+    autoResumeSeriesTitle.clear();
     errorMessage = tr(STR_NO_ENTRIES);
   } else {
+    if (!autoResumeSeriesTitle.empty()) {
+      statusMessage = autoResumeSeriesTitle;
+    }
     schedulePreviewUpdate();
   }
   requestUpdate();
@@ -1201,6 +1342,9 @@ void OpdsBookBrowserActivity::queueFetch(const std::string& path) {
 }
 
 void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
+  autoResumeSeriesDownload = false;
+  autoResumeSeriesHref.clear();
+  autoResumeSeriesTitle.clear();
   navigationHistory.push_back(currentPath);
   const std::string feedUrl = UrlUtils::buildUrl(server.url, currentPath);
   currentPath = UrlUtils::buildUrl(feedUrl, entry.href);
@@ -1216,6 +1360,9 @@ void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
 }
 
 void OpdsBookBrowserActivity::navigateBack() {
+  autoResumeSeriesDownload = false;
+  autoResumeSeriesHref.clear();
+  autoResumeSeriesTitle.clear();
   if (navigationHistory.empty()) {
     onGoHome();
   } else {
@@ -1243,9 +1390,16 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   downloadProgress = downloadTotal = 0;
   currentFileDownloaded = 0;
   currentFileTotal = 0;
-  requestUpdate(true);
   unsigned long lastUiUpdateAt = millis();
   int lastProgressPercent = -1;
+  bool cancelRequested = false;
+  auto pollCancel = [this, &cancelRequested]() {
+    mappedInput.update();
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      cancelRequested = true;
+    }
+    return !cancelRequested;
+  };
 
   const std::string feedUrl = UrlUtils::buildUrl(server.url, currentPath);
   const std::string downloadUrl = UrlUtils::buildUrl(feedUrl, resolvedBook.href);
@@ -1275,7 +1429,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
 
   const auto result = HttpDownloader::downloadToFile(
       downloadUrl, filename,
-      [this, &lastUiUpdateAt, &lastProgressPercent](const size_t downloaded, const size_t total) {
+      [this, &lastUiUpdateAt, &lastProgressPercent, &pollCancel](const size_t downloaded, const size_t total) {
         currentFileDownloaded = downloaded;
         currentFileTotal = total;
         downloadProgress = downloaded;
@@ -1284,6 +1438,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
                                             downloaded == total)) {
           requestUpdate(true);
         }
+        return pollCancel();
       },
       server.username, server.password);
 
@@ -1296,6 +1451,10 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
     if (looksLikeSeriesChapter) {
       ensureSeriesArtifacts(resolvedBook, feedUrl, entries, downloadUrl, localSeriesDir, true);
     }
+    state = BrowserState::BROWSING;
+  } else if (result == HttpDownloader::ABORTED) {
+    currentFileDownloaded = 0;
+    currentFileTotal = 0;
     state = BrowserState::BROWSING;
   } else {
     state = BrowserState::ERROR;
@@ -1325,16 +1484,23 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   currentFileDownloaded = 0;
   currentFileTotal = 0;
   requestUpdate(true);
+  vTaskDelay(1);
   unsigned long lastUiUpdateAt = millis();
   int lastProgressPercent = -1;
+  bool cancelRequested = false;
+  auto pollCancel = [this, &cancelRequested]() {
+    mappedInput.update();
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      cancelRequested = true;
+    }
+    return !cancelRequested;
+  };
 
   const std::string returnPath = currentPath;
   const std::string browseFeedUrl = UrlUtils::buildUrl(server.url, currentPath);
   const std::string seriesFeedUrl = UrlUtils::buildUrl(browseFeedUrl, resolvedEntry.href);
   const std::string localSeriesDir = resolveExistingSeriesDirectoryName(seriesFeedUrl, "", resolvedEntry);
   auto releaseDownloadMemory = [this]() {
-    LOG_DBG("OPDS", "Releasing browse memory before series download: heap=%u min=%u", ESP.getFreeHeap(),
-            ESP.getMinFreeHeap());
     entries.clear();
     navigationHistory.clear();
     searchTemplate.clear();
@@ -1342,14 +1508,20 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
     currentPreview = {};
     previewSelectorIndex = -1;
     previewReadyAt = 0;
-    LOG_DBG("OPDS", "After release browse memory: heap=%u min=%u", ESP.getFreeHeap(), ESP.getMinFreeHeap());
   };
-  auto reloadBrowseFeed = [this, &returnPath]() {
+  auto reloadBrowseFeed = [this, &returnPath, &resolvedEntry](const bool resumeSeriesDownload) {
     currentPath = returnPath;
-    state = BrowserState::LOADING;
-    statusMessage = tr(STR_LOADING);
-    requestUpdate(true);
-    fetchFeed(returnPath);
+    if (resumeSeriesDownload) {
+      autoResumeSeriesDownload = true;
+      autoResumeSeriesHref = resolvedEntry.href;
+      autoResumeSeriesTitle = resolvedEntry.title;
+      statusMessage = resolvedEntry.title;
+    } else {
+      autoResumeSeriesDownload = false;
+      autoResumeSeriesHref.clear();
+      autoResumeSeriesTitle.clear();
+    }
+    queueFetch(returnPath);
   };
   if (!Storage.ensureDirectoryExists(localSeriesDir.c_str())) {
     LOG_ERR("OPDS", "Failed to create series dir: %s", localSeriesDir.c_str());
@@ -1386,13 +1558,13 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
       return;
     }
 
-    const auto coverResult =
-        HttpDownloader::downloadToFile(remoteCoverUrl, localCoverPath, nullptr, server.username, server.password);
-    if (coverResult != HttpDownloader::OK) {
+    if (!downloadRemoteCoverToBmp(remoteCoverUrl, localCoverPath, server.username, server.password)) {
       skipCoverDownloadForSession = true;
       LOG_ERR("OPDS", "Series cover download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
     }
   };
+
+  const std::string localManifestPath = localSeriesDir + "/_series.json";
 
   bool useStoredManifest = SeriesManifestStore::loadMetadataFromSeriesDir(localSeriesDir, manifestMetadata);
   if (useStoredManifest) {
@@ -1459,28 +1631,40 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
           break;
         }
 
-        statusMessage = pending.chapter.title.empty() ? pending.chapter.file : pending.chapter.title;
         currentFileDownloaded = 0;
         currentFileTotal = 0;
-        if (shouldRefreshDownloadUi(lastUiUpdateAt)) {
-          requestUpdate(true);
+
+        if (!pollCancel()) {
+          currentFileDownloaded = 0;
+          currentFileTotal = 0;
+          reloadBrowseFeed(false);
+          return;
         }
 
-        const auto result = HttpDownloader::downloadToFile(
-            pending.chapterUrl, pending.localChapterPath,
-            [this, &lastUiUpdateAt](const size_t downloaded, const size_t total) {
-              currentFileDownloaded = downloaded;
-              currentFileTotal = total;
-              if (shouldRefreshDownloadUi(lastUiUpdateAt)) {
-                requestUpdate(true);
-              }
-            },
-                                                           server.username, server.password);
+        g_seriesDownloadInput = &mappedInput;
+        g_seriesCurrentFileDownloaded = &currentFileDownloaded;
+        g_seriesCurrentFileTotal = &currentFileTotal;
+        g_seriesDownloadActivity = this;
+        g_seriesCancelRequested = &cancelRequested;
+        const auto result = HttpDownloader::downloadToFile(pending.chapterUrl, pending.localChapterPath,
+                                                           seriesDownloadProgressCallback, server.username,
+                                                           server.password);
+        g_seriesDownloadInput = nullptr;
+        g_seriesCurrentFileDownloaded = nullptr;
+        g_seriesCurrentFileTotal = nullptr;
+        g_seriesDownloadActivity = nullptr;
+        g_seriesCancelRequested = nullptr;
+        if (result == HttpDownloader::ABORTED) {
+          currentFileDownloaded = 0;
+          currentFileTotal = 0;
+          reloadBrowseFeed(false);
+          return;
+        }
         if (result != HttpDownloader::OK) {
-          state = BrowserState::ERROR;
-          errorMessage = buildDownloadErrorText(pending.chapterUrl, result);
           LOG_ERR("OPDS", "Series chapter download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
-          requestUpdate();
+          currentFileDownloaded = 0;
+          currentFileTotal = 0;
+          reloadBrowseFeed(false);
           return;
         }
 
@@ -1490,15 +1674,20 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
         currentFileDownloaded = 0;
         currentFileTotal = 0;
         if (shouldRefreshDownloadProgressUi(downloadProgress, downloadTotal, lastUiUpdateAt, lastProgressPercent,
-                                            true)) {
+                                            false)) {
           requestUpdate(true);
         }
+        vTaskDelay(1);
       }
 
       if (pendingChapterCount > downloadedThisBatch) {
         LOG_DBG("OPDS", "Series manifest batch complete: downloaded=%d remaining=%d limit=%d",
                 static_cast<int>(downloadedThisBatch), static_cast<int>(pendingChapterCount - downloadedThisBatch),
                 static_cast<int>(SERIES_DOWNLOAD_BATCH_LIMIT));
+        tryDownloadSeriesCover();
+        releaseDownloadMemory();
+        vTaskDelay(4);
+        continue;
       } else {
         downloadProgress = downloadTotal;
         LOG_DBG("OPDS", "Series fully downloaded from manifest in current session");
@@ -1508,7 +1697,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
 
     if (useStoredManifest) {
       tryDownloadSeriesCover();
-      reloadBrowseFeed();
+      reloadBrowseFeed(false);
       return;
     }
   }
@@ -1582,28 +1771,40 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
         break;
       }
 
-      statusMessage = pending.chapter.title.empty() ? getUrlBasename(pending.chapterUrl) : pending.chapter.title;
       currentFileDownloaded = 0;
       currentFileTotal = 0;
-      if (shouldRefreshDownloadUi(lastUiUpdateAt)) {
-        requestUpdate(true);
+
+      if (!pollCancel()) {
+        currentFileDownloaded = 0;
+        currentFileTotal = 0;
+        reloadBrowseFeed(false);
+        return;
       }
 
-      const auto result = HttpDownloader::downloadToFile(
-          pending.chapterUrl, pending.localChapterPath,
-          [this, &lastUiUpdateAt](const size_t downloaded, const size_t total) {
-            currentFileDownloaded = downloaded;
-            currentFileTotal = total;
-            if (shouldRefreshDownloadUi(lastUiUpdateAt)) {
-              requestUpdate(true);
-            }
-          },
-          server.username, server.password);
+      g_seriesDownloadInput = &mappedInput;
+      g_seriesCurrentFileDownloaded = &currentFileDownloaded;
+      g_seriesCurrentFileTotal = &currentFileTotal;
+      g_seriesDownloadActivity = this;
+      g_seriesCancelRequested = &cancelRequested;
+      const auto result = HttpDownloader::downloadToFile(pending.chapterUrl, pending.localChapterPath,
+                                                         seriesDownloadProgressCallback, server.username,
+                                                         server.password);
+      g_seriesDownloadInput = nullptr;
+      g_seriesCurrentFileDownloaded = nullptr;
+      g_seriesCurrentFileTotal = nullptr;
+      g_seriesDownloadActivity = nullptr;
+      g_seriesCancelRequested = nullptr;
+      if (result == HttpDownloader::ABORTED) {
+        currentFileDownloaded = 0;
+        currentFileTotal = 0;
+        reloadBrowseFeed(false);
+        return;
+      }
       if (result != HttpDownloader::OK) {
-        state = BrowserState::ERROR;
-        errorMessage = buildDownloadErrorText(pending.chapterUrl, result);
         LOG_ERR("OPDS", "Series chapter download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
-        requestUpdate();
+        currentFileDownloaded = 0;
+        currentFileTotal = 0;
+        reloadBrowseFeed(false);
         return;
       }
 
@@ -1613,22 +1814,21 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
       currentFileDownloaded = 0;
       currentFileTotal = 0;
       if (shouldRefreshDownloadProgressUi(downloadProgress, downloadTotal, lastUiUpdateAt, lastProgressPercent,
-                                          true)) {
+                                          false)) {
         requestUpdate(true);
       }
+      vTaskDelay(1);
     }
 
-    if (!ensureSeriesArtifacts(resolvedEntry, seriesFeedUrl, seriesEntries, firstDownloadUrl, localSeriesDir,
-                               !skipRemoteManifestFetchForSession)) {
-      LOG_DBG("OPDS", "Series manifest repair fallback failed for %s", localSeriesDir.c_str());
-    }
+    (void)ensureSeriesArtifacts(resolvedEntry, seriesFeedUrl, seriesEntries, firstDownloadUrl, localSeriesDir,
+                                false);
     if (pendingChapterCount > downloadedThisBatch) {
-      LOG_DBG("OPDS", "Series batch complete: downloaded=%d remaining=%d limit=%d",
-              static_cast<int>(downloadedThisBatch), static_cast<int>(pendingChapterCount - downloadedThisBatch),
-              static_cast<int>(SERIES_DOWNLOAD_BATCH_LIMIT));
+      tryDownloadSeriesCover();
+      releaseDownloadMemory();
+      vTaskDelay(4);
+      continue;
     } else {
       downloadProgress = downloadTotal;
-      LOG_DBG("OPDS", "Series fully downloaded in current session");
       break;
     }
   }
@@ -1636,7 +1836,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   tryDownloadSeriesCover();
   currentFileDownloaded = 0;
   currentFileTotal = 0;
-  reloadBrowseFeed();
+  reloadBrowseFeed(false);
 }
 
 bool OpdsBookBrowserActivity::ensureSeriesArtifacts(const OpdsEntry& seriesEntry, const std::string& feedUrl,
@@ -1649,22 +1849,10 @@ bool OpdsBookBrowserActivity::ensureSeriesArtifacts(const OpdsEntry& seriesEntry
   }
 
   const std::string localManifestPath = localSeriesDir + "/_series.json";
-  if (allowRemoteManifestFetch) {
-    const std::string remoteManifestUrl = getUrlParent(firstDownloadUrl) + "/_series.json";
-    const auto manifestResult =
-        HttpDownloader::downloadToFile(remoteManifestUrl, localManifestPath, nullptr, server.username, server.password);
-    if (manifestResult == HttpDownloader::OK) {
-      LOG_DBG("OPDS", "Downloaded series manifest: %s", remoteManifestUrl.c_str());
-      requestUpdate(true);
-      return true;
-    }
-  }
+  (void)localManifestPath;
+  (void)allowRemoteManifestFetch;
 
-  LOG_DBG("OPDS", "Remote series manifest unavailable, synthesizing from feed: %s", feedUrl.c_str());
   const bool synthesized = synthesizeSeriesManifest(feedUrl, seriesEntries, localSeriesDir, seriesEntry);
-  if (synthesized) {
-    requestUpdate(true);
-  }
   return synthesized;
 }
 
@@ -1711,10 +1899,14 @@ bool OpdsBookBrowserActivity::synthesizeSeriesManifest(const std::string& feedUr
     doc["coverPath"] = "cover.bmp";
   }
 
-  String manifestJson;
-  serializeJson(doc, manifestJson);
   const std::string localManifestPath = localSeriesDir + "/_series.json";
-  return Storage.writeFile(localManifestPath.c_str(), manifestJson);
+  FsFile file;
+  if (!Storage.openFileForWrite("OPDS", localManifestPath.c_str(), file)) {
+    return false;
+  }
+  const size_t written = serializeJson(doc, file);
+  file.close();
+  return written > 0;
 }
 
 void OpdsBookBrowserActivity::launchSearch() {

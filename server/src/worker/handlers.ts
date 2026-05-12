@@ -21,7 +21,7 @@ import {
   updateNovelAggregateState
 } from "../library/service.js";
 import { ensureDir, fileExists, readJsonFile, sha256Hex, writeFileAtomic, writeJsonFileAtomic } from "../lib/filesystem.js";
-import { sanitizeHtmlFragment, stripHtmlToReadableText } from "../lib/sanitize.js";
+import { sanitizeHtmlFragment, stripHtmlToReadableText, stripLeadingSourceFilename } from "../lib/sanitize.js";
 import { getSourceHandler, listSources } from "../plugins/service.js";
 import type { ChapterBuildJobData, ChapterFetchJobData, NovelSyncJobData } from "../queues/jobs.js";
 import type { AppQueues } from "../queues/index.js";
@@ -921,7 +921,7 @@ export async function processChapterBuildJob(
     const targetPath = getPublishedChapterPath(context.storagePaths, chapter.novelId, chapter.chapterIndex);
 
     await ensureDir(path.dirname(tempPath));
-    const chapterText = stripHtmlToReadableText(`<h1>${chapter.title}</h1>\n${html}`);
+    const chapterText = stripLeadingSourceFilename(stripHtmlToReadableText(`<h1>${chapter.title}</h1>\n${html}`));
     const chapterBuffer = Buffer.from(`${chapterText}\n`, "utf8");
     await writeFileAtomic(tempPath, chapterBuffer);
 

@@ -56,6 +56,9 @@ class OpdsBookBrowserActivity final : public Activity {
   std::string statusMessage;
   std::string pendingFetchPath;
   bool hasPendingFetch = false;
+  bool autoResumeSeriesDownload = false;
+  std::string autoResumeSeriesHref;
+  std::string autoResumeSeriesTitle;
   size_t downloadProgress = 0;
   size_t downloadTotal = 0;
   size_t currentFileDownloaded = 0;

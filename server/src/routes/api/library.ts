@@ -74,6 +74,23 @@ function stripLeadingChapterTitle(text: string, chapterTitle: string) {
   return lines.join("\n");
 }
 
+function stripLeadingSourceFilename(text: string) {
+  const lines = String(text || "").split(/\r?\n/);
+  while (lines.length && !lines[0]?.trim()) {
+    lines.shift();
+  }
+
+  const firstLine = lines[0]?.trim() || "";
+  if (/^[^\s\\/:*?"<>|]+\.html$/i.test(firstLine)) {
+    lines.shift();
+    while (lines.length && !lines[0]?.trim()) {
+      lines.shift();
+    }
+  }
+
+  return lines.join("\n");
+}
+
 async function resolvePublishedChapterAsset(
   storagePaths: FastifyInstance["storagePaths"],
   novelId: string,
@@ -131,7 +148,7 @@ async function loadChapterContentHtml(
   if (chapterAsset.path.toLowerCase().endsWith(".txt")) {
     const rawText = await fs.readFile(chapterAsset.path, "utf8");
     return {
-      html: plainTextToHtml(stripLeadingChapterTitle(rawText, chapter.title)),
+      html: plainTextToHtml(stripLeadingChapterTitle(stripLeadingSourceFilename(rawText), chapter.title)),
       htmlExists,
       chapterFileExists,
       chapterAsset,

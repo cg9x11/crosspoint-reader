@@ -1,5 +1,7 @@
 #include "FileBrowserActivity.h"
 
+#include <cstdio>
+
 #include <Bitmap.h>
 #include <Epub.h>
 #include <FsHelpers.h>
@@ -171,6 +173,10 @@ std::string getFileExtension(const std::string& filename) {
   return pos == std::string::npos ? "" : filename.substr(pos);
 }
 
+constexpr size_t MAX_IMMEDIATE_PREVIEW_ITEMS = 40;
+
+bool shouldLoadImmediatePreview(const size_t itemCount) { return itemCount <= MAX_IMMEDIATE_PREVIEW_ITEMS; }
+
 bool compareFileBrowserNames(const std::string& str1, const std::string& str2) {
   if (str1.empty() || str2.empty()) {
     return str1 < str2;
@@ -305,6 +311,45 @@ size_t countDownloadedSeriesChapters(const std::string& seriesDir) {
   return count;
 }
 
+bool scanDownloadedSeriesFiles(const std::string& seriesDir, size_t& downloadedCount, std::string& firstDownloadedFile) {
+  downloadedCount = 0;
+  firstDownloadedFile.clear();
+
+  auto dir = Storage.open(seriesDir.c_str());
+  if (!dir || !dir.isDirectory()) {
+    return false;
+  }
+
+  dir.rewindDirectory();
+  char childName[256];
+  for (auto child = dir.openNextFile(); child; child = dir.openNextFile()) {
+    child.getName(childName, sizeof(childName));
+    const bool isDir = child.isDirectory();
+    child.close();
+    if (isDir) {
+      continue;
+    }
+
+    std::string_view filename{childName};
+    if (!isSeriesChapterFilename(filename)) {
+      continue;
+    }
+
+    const std::string chapterPath = SeriesManifestStore::buildChapterPath(seriesDir, std::string(filename));
+    if (!hasUsableDownloadedSeriesChapterFile(chapterPath)) {
+      continue;
+    }
+
+    ++downloadedCount;
+    if (firstDownloadedFile.empty() || std::string(filename) < firstDownloadedFile) {
+      firstDownloadedFile = std::string(filename);
+    }
+  }
+
+  dir.close();
+  return true;
+}
+
 void drawBitmapCoverFill(GfxRenderer& renderer, const Bitmap& bitmap, const int x, const int y, const int width,
                          const int height) {
   if (bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0 || width <= 0 || height <= 0) {
@@ -343,36 +388,38 @@ const RecentBook* FileBrowserActivity::findRecentBookForPath(const std::string& 
 const FileBrowserActivity::SeriesBrowseCache* FileBrowserActivity::getSeriesBrowseCache(const std::string& seriesDir,
                                                                                         const std::string& recentPath) const {
   auto buildCache = [this, &seriesDir, &recentPath](SeriesBrowseCache& cache) {
+    LOG_DBG("FBA", "buildCache begin dir=%s recent=%s", seriesDir.c_str(), recentPath.c_str());
     cache = {};
     cache.seriesDir = seriesDir;
     cache.matchedRecentPath = recentPath;
 
     if (!SeriesManifestStore::loadMetadataFromSeriesDir(seriesDir, cache.manifest) || cache.manifest.seriesId.empty()) {
+      LOG_DBG("FBA", "buildCache no metadata dir=%s", seriesDir.c_str());
       return;
     }
 
     cache.ready = true;
     cache.isSeries = true;
-    SeriesManifestStore::forEachChapterInSeriesDir(
-        seriesDir,
-        [this, &cache, &seriesDir, &recentPath](const SeriesChapter& chapter) {
-          ++cache.totalChapters;
-          if (!cache.hasFirstChapter) {
-            cache.firstChapter = chapter;
-            cache.hasFirstChapter = true;
-          }
 
-          const std::string chapterPath = SeriesManifestStore::buildChapterPath(seriesDir, chapter.file);
-          if (!recentPath.empty() && !cache.hasRecentChapter && chapterPath == recentPath) {
-            cache.recentChapter = chapter;
-            cache.hasRecentChapter = true;
-          }
-          if (hasUsableDownloadedSeriesChapterFile(chapterPath)) {
-            ++cache.downloadedChapters;
-          }
-          return true;
-        },
-        nullptr);
+    cache.totalChapters = SeriesManifestStore::countChaptersFromSeriesDir(seriesDir);
+    cache.hasFirstChapter = SeriesManifestStore::findFirstChapterInSeriesDir(seriesDir, cache.firstChapter, nullptr);
+
+    if (!recentPath.empty() && Storage.exists(recentPath.c_str())) {
+      cache.hasRecentChapter =
+          SeriesManifestStore::findChapterByPathInSeriesDir(seriesDir, recentPath, cache.recentChapter, nullptr);
+    }
+
+    std::string firstDownloadedFile;
+    scanDownloadedSeriesFiles(seriesDir, cache.downloadedChapters, firstDownloadedFile);
+    if (!firstDownloadedFile.empty()) {
+      const std::string firstDownloadedPath = SeriesManifestStore::buildChapterPath(seriesDir, firstDownloadedFile);
+      cache.hasFirstDownloadedChapter =
+          SeriesManifestStore::findChapterByPathInSeriesDir(seriesDir, firstDownloadedPath, cache.firstDownloadedChapter,
+                                                            nullptr);
+    }
+    LOG_DBG("FBA", "buildCache done dir=%s total=%u downloaded=%u first=%d recent=%d firstDl=%d",
+            seriesDir.c_str(), static_cast<unsigned>(cache.totalChapters), static_cast<unsigned>(cache.downloadedChapters),
+            cache.hasFirstChapter ? 1 : 0, cache.hasRecentChapter ? 1 : 0, cache.hasFirstDownloadedChapter ? 1 : 0);
   };
 
   for (auto& cache : seriesBrowseCache) {
@@ -417,6 +464,9 @@ bool FileBrowserActivity::tryBuildSeriesEntry(const std::string& directoryName, 
   if (recent && !recent->path.empty() && cache->hasRecentChapter && Storage.exists(recent->path.c_str())) {
     activeChapter = cache->recentChapter;
     resumePath = recent->path;
+  } else if (!Storage.exists(resumePath.c_str()) && cache->hasFirstDownloadedChapter) {
+    activeChapter = cache->firstDownloadedChapter;
+    resumePath = SeriesManifestStore::buildChapterPath(cache->manifest.seriesDir, activeChapter.file);
   }
 
   if (!Storage.exists(resumePath.c_str())) {
@@ -446,11 +496,8 @@ bool FileBrowserActivity::isPreviewable(const FileBrowserEntry& entry) const {
     return false;
   }
 
-  if (isSeriesChapterFilename(entry.rawName)) {
-    SeriesManifest manifest;
-    if (SeriesManifestStore::loadMetadataFromSeriesDir(basepath, manifest)) {
-      return false;
-    }
+  if (currentDirectoryIsSeries && isSeriesChapterFilename(entry.rawName)) {
+    return false;
   }
 
   std::string_view filename{entry.rawName};
@@ -597,11 +644,19 @@ void FileBrowserActivity::loadPreviewForSelection() {
 }
 
 void FileBrowserActivity::loadFiles() {
+  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles begin base=%s\n", basepath.c_str());
+  LOG_DBG("FBA", "loadFiles begin base=%s", basepath.c_str());
   files.clear();
   seriesBrowseCache.clear();
+  currentDirectoryIsSeries = Storage.exists(SeriesManifestStore::buildChapterPath(basepath, SeriesManifestStore::MANIFEST_FILE).c_str());
+  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles exists currentDirectoryIsSeries=%d\n",
+               currentDirectoryIsSeries ? 1 : 0);
 
   auto root = Storage.open(basepath.c_str());
+  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles after open root ok=%d isDir=%d\n", root ? 1 : 0,
+               (root && root.isDirectory()) ? 1 : 0);
   if (!root || !root.isDirectory()) {
+    LOG_DBG("FBA", "loadFiles root invalid base=%s", basepath.c_str());
     return;
   }
 
@@ -627,8 +682,12 @@ void FileBrowserActivity::loadFiles() {
     file.close();
   }
   root.close();
+  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles pending count=%u\n",
+               static_cast<unsigned>(pendingEntries.size()));
 
   for (const auto& pending : pendingEntries) {
+    std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles item name=%s dir=%d\n", pending.name.c_str(),
+                 pending.isDirectory ? 1 : 0);
     if (pending.isDirectory) {
       auto dir = Storage.open(joinPath(basepath, pending.name).c_str());
       std::string normalizedDirectoryName = pending.name;
@@ -679,19 +738,27 @@ void FileBrowserActivity::loadFiles() {
             [](const FileBrowserEntry& left, const FileBrowserEntry& right) {
               return compareFileBrowserNames(left.rawName, right.rawName);
             });
+  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles done count=%u\n", static_cast<unsigned>(files.size()));
+  LOG_DBG("FBA", "loadFiles done base=%s count=%u", basepath.c_str(), static_cast<unsigned>(files.size()));
 }
 
 void FileBrowserActivity::onEnter() {
   Activity::onEnter();
+  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter base=%s\n", basepath.c_str());
+  LOG_DBG("FBA", "onEnter base=%s", basepath.c_str());
 
   selectorIndex = 0;
   resetPreviewSummaryCache();
 
   auto root = Storage.open(basepath.c_str());
+  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter after open root ok=%d isDir=%d\n", root ? 1 : 0,
+               (root && root.isDirectory()) ? 1 : 0);
   if (!root) {
+    std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter branch root missing\n");
     basepath = "/";
     loadFiles();
   } else if (!root.isDirectory()) {
+    std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter branch root file\n");
     lockLongPressBack = mappedInput.isPressed(MappedInputManager::Button::Back);
 
     const std::string oldPath = basepath;
@@ -702,10 +769,18 @@ void FileBrowserActivity::onEnter() {
     const std::string fileName = oldPath.substr(pos + 1);
     selectorIndex = findEntry(fileName);
   } else {
+    std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter branch root dir\n");
     loadFiles();
   }
 
-  loadPreviewForSelection();
+  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter before preview\n");
+  if (shouldLoadImmediatePreview(files.size())) {
+    loadPreviewForSelection();
+  } else {
+    currentPreview = {};
+  }
+  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter after preview files=%u\n", static_cast<unsigned>(files.size()));
+  LOG_DBG("FBA", "onEnter ready base=%s files=%u", basepath.c_str(), static_cast<unsigned>(files.size()));
   requestUpdate();
 }
 
@@ -774,22 +849,25 @@ void FileBrowserActivity::openDirectory(const std::string& rawName) {
   loadFiles();
   selectorIndex = 0;
   resetPreviewSummaryCache();
-  loadPreviewForSelection();
+  if (shouldLoadImmediatePreview(files.size())) {
+    loadPreviewForSelection();
+  } else {
+    currentPreview = {};
+  }
   requestUpdate();
 }
 
 void FileBrowserActivity::openSeriesChapterList(const FileBrowserEntry& entry) { openDirectory(entry.rawName); }
 
 void FileBrowserActivity::resumeSeriesDirectory(const FileBrowserEntry& entry) {
-  if (entry.seriesContext.isValid()) {
-    activityManager.goToReader(entry.seriesContext);
+  SeriesReadingContext context = entry.seriesContext;
+  if (context.chapterPath.empty()) {
+    context.chapterPath = entry.resumePath;
+  }
+  if (context.chapterPath.empty()) {
     return;
   }
-  if (!entry.resumePath.empty()) {
-    onSelectBook(entry.resumePath);
-    return;
-  }
-  openSeriesChapterList(entry);
+  activityManager.goToReader(std::move(context));
 }
 
 void FileBrowserActivity::resetPreviewSummaryCache() {
@@ -876,7 +954,11 @@ void FileBrowserActivity::loop() {
           } else if (selectorIndex >= files.size()) {
             selectorIndex = files.size() - 1;
           }
-          loadPreviewForSelection();
+          if (shouldLoadImmediatePreview(files.size())) {
+            loadPreviewForSelection();
+          } else {
+            currentPreview = {};
+          }
           requestUpdate(true);
         } else {
           LOG_ERR("FileBrowser", "Failed to delete series directory: %s", fullPath.c_str());
@@ -906,7 +988,11 @@ void FileBrowserActivity::loop() {
               selectorIndex = files.size() - 1;
             }
 
-            loadPreviewForSelection();
+            if (shouldLoadImmediatePreview(files.size())) {
+              loadPreviewForSelection();
+            } else {
+              currentPreview = {};
+            }
             requestUpdate(true);
           } else {
             LOG_ERR("FileBrowser", "Failed to delete: %s", fullPath.c_str());
