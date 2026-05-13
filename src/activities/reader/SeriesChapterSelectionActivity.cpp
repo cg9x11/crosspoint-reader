@@ -29,7 +29,10 @@ bool SeriesChapterSelectionActivity::loadMetadata() {
     return false;
   }
   seriesTitle = manifest.title;
-  totalItems = static_cast<int>(SeriesManifestStore::countAvailableChaptersFromSeriesDir(seriesDir));
+  if (!SeriesManifestStore::buildChapterIndexOrder(seriesDir, chapterOrder)) {
+    return false;
+  }
+  totalItems = static_cast<int>(chapterOrder.size());
   return totalItems > 0;
 }
 
@@ -40,19 +43,11 @@ bool SeriesChapterSelectionActivity::locateCurrentSelection() {
     return true;
   }
 
-  constexpr int kScanSliceSize = 64;
-  for (int sliceStart = 0; sliceStart < totalItems; sliceStart += kScanSliceSize) {
-    std::vector<SeriesChapter> slice;
-    if (!SeriesManifestStore::loadAvailableChapterSliceFromSeriesDir(seriesDir, static_cast<size_t>(sliceStart),
-                                                                     kScanSliceSize, slice)) {
-      return false;
-    }
-    for (size_t i = 0; i < slice.size(); ++i) {
-      if (slice[i].chapterIndex == currentChapterIndex) {
-        selectorIndex = sliceStart + static_cast<int>(i);
-        pageStartIndex = (selectorIndex / getPageItems()) * getPageItems();
-        return true;
-      }
+  for (int i = 0; i < totalItems; ++i) {
+    if (chapterOrder[static_cast<size_t>(i)] == currentChapterIndex) {
+      selectorIndex = i;
+      pageStartIndex = (selectorIndex / getPageItems()) * getPageItems();
+      return true;
     }
   }
 
@@ -63,12 +58,16 @@ bool SeriesChapterSelectionActivity::locateCurrentSelection() {
 bool SeriesChapterSelectionActivity::loadVisiblePage() {
   visibleChapters.clear();
   visibleAvailability.clear();
-  if (!SeriesManifestStore::loadAvailableChapterSliceFromSeriesDir(seriesDir, static_cast<size_t>(pageStartIndex),
-                                                                   static_cast<size_t>(getPageItems()), visibleChapters)) {
+  if (!SeriesManifestStore::loadChapterSliceFromSeriesDir(seriesDir, static_cast<size_t>(pageStartIndex),
+                                                           static_cast<size_t>(getPageItems()), visibleChapters)) {
     return false;
   }
 
-  visibleAvailability.assign(visibleChapters.size(), true);
+  visibleAvailability.assign(visibleChapters.size(), false);
+  for (size_t i = 0; i < visibleChapters.size(); ++i) {
+    const std::string chapterPath = SeriesManifestStore::buildChapterPath(seriesDir, visibleChapters[i].file);
+    visibleAvailability[i] = Storage.exists(chapterPath.c_str());
+  }
   return true;
 }
 

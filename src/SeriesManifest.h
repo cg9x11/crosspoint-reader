@@ -50,6 +50,7 @@ class SeriesManifestStore {
   static bool tryGetChapterContext(const std::string& chapterPath, std::string& seriesIdOut, std::string& seriesDirOut,
                                    int& chapterIndexOut);
   static bool tryGetChapterIndexByPath(const std::string& chapterPath, int& chapterIndexOut);
+  static bool buildChapterIndexOrder(const std::string& seriesDir, std::vector<int>& chapterIndicesOut);
   static bool tryResolveChapterPath(const std::string& seriesDir, int chapterIndex, std::string& chapterPath);
   static bool tryResolveAvailableChapterPath(const std::string& seriesDir, int chapterIndex, std::string& chapterPath,
                                              int* resolvedChapterIndexOut = nullptr);

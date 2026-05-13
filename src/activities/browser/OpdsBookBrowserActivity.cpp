@@ -11,6 +11,7 @@
 #include <Logging.h>
 #include <OpdsStream.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 
 #include <algorithm>
 #include <functional>
@@ -35,6 +36,8 @@ constexpr int LIST_ITEM_HEIGHT = 30;
 constexpr unsigned long PREVIEW_DWELL_MS = 900;
 constexpr const char* NO_DESCRIPTION_TEXT = "No description";
 constexpr size_t SERIES_DOWNLOAD_BATCH_LIMIT = 8;
+constexpr size_t SERIES_DOWNLOAD_REFILL_LIMIT = 24;
+constexpr size_t SERIES_DOWNLOAD_REFILL_LIMIT_MEDIUM = 16;
 constexpr const char* OPDS_CACHE_DIR = "/.crosspoint/opds";
 constexpr const char* ONLINE_LIBRARY_ROOT_DIR = "/.online-library";
 
@@ -413,40 +416,6 @@ std::string normalizePreviewText(const std::string& input) {
 
 bool hasUsableLocalChapterFile(const std::string& path);
 
-size_t countLocalSeriesChapterFiles(const std::string& seriesDir) {
-  if (seriesDir.empty()) {
-    return 0;
-  }
-
-  auto dir = Storage.open(seriesDir.c_str());
-  if (!dir || !dir.isDirectory()) {
-    return 0;
-  }
-
-  dir.rewindDirectory();
-  char name[256];
-  std::vector<std::string> chapterPaths;
-  size_t count = 0;
-  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
-    if (file.isDirectory()) {
-      file.close();
-      continue;
-    }
-    file.getName(name, sizeof(name));
-    file.close();
-    if (isSeriesChapterFilename(name)) {
-      chapterPaths.emplace_back(seriesDir + "/" + std::string(name));
-    }
-  }
-  dir.close();
-
-  for (const auto& chapterPath : chapterPaths) {
-    if (hasUsableLocalChapterFile(chapterPath)) {
-      ++count;
-    }
-  }
-  return count;
-}
 
 bool hasUsableLocalFile(const std::string& path, const size_t minSize = 1) {
   if (!Storage.exists(path.c_str())) {
@@ -502,12 +471,38 @@ bool hasUsableLocalChapterFile(const std::string& path) {
   return hasUsableLocalFile(path, 8);
 }
 
+size_t getSeriesDownloadRefillLimit() {
+  constexpr uint32_t kHealthyFreeHeap = 96 * 1024;
+  constexpr uint32_t kHealthyLargestBlock = 48 * 1024;
+  constexpr uint32_t kMediumFreeHeap = 72 * 1024;
+  constexpr uint32_t kMediumLargestBlock = 32 * 1024;
+
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  const uint32_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+
+  if (freeHeap >= kHealthyFreeHeap && largestBlock >= kHealthyLargestBlock) {
+    return SERIES_DOWNLOAD_REFILL_LIMIT;
+  }
+  if (freeHeap >= kMediumFreeHeap && largestBlock >= kMediumLargestBlock) {
+    return SERIES_DOWNLOAD_REFILL_LIMIT_MEDIUM;
+  }
+  return SERIES_DOWNLOAD_BATCH_LIMIT;
+}
+
+bool shouldForceSeriesDownloadMemoryRelease() {
+  constexpr uint32_t kMinFreeHeap = 64 * 1024;
+  constexpr uint32_t kMinLargestBlock = 24 * 1024;
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  const uint32_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  return freeHeap < kMinFreeHeap || largestBlock < kMinLargestBlock;
+}
+
 bool shouldSkipOptionalSeriesCoverDownload() {
   constexpr uint32_t kMinFreeHeap = 72 * 1024;
   constexpr uint32_t kMinLargestBlock = 32 * 1024;
   constexpr uint32_t kMinObservedFloor = 8 * 1024;
   const uint32_t freeHeap = ESP.getFreeHeap();
-  const uint32_t largestBlock = ESP.getMaxAllocHeap();
+  const uint32_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   const uint32_t minHeap = ESP.getMinFreeHeap();
   const bool skip = freeHeap < kMinFreeHeap || largestBlock < kMinLargestBlock || minHeap < kMinObservedFloor;
   if (skip) {
@@ -543,52 +538,34 @@ bool shouldRefreshDownloadProgressUi(const size_t current, const size_t total, u
   return shouldRefreshDownloadUi(lastUiUpdateAt, force || percentChanged);
 }
 
-std::string buildLocalSeriesPreviewStatus(const std::string& seriesDir) {
-  const std::string manifestPath = SeriesManifestStore::buildChapterPath(seriesDir, SeriesManifestStore::MANIFEST_FILE);
-  if (Storage.exists(manifestPath.c_str())) {
-    FsFile file;
-    if (Storage.openFileForRead("OPDS", manifestPath.c_str(), file) && file) {
-      size_t totalChapters = 0;
-      constexpr size_t chunkSize = 512;
-      constexpr const char* token = "\"chapterIndex\"";
-      constexpr size_t tokenLen = 14;
-      char chunk[chunkSize + tokenLen];
-      size_t carryLen = 0;
+size_t countSeriesChapterFilesFast(const std::string& seriesDir) {
+  if (seriesDir.empty()) {
+    return 0;
+  }
 
-      while (file.available() > 0) {
-        const int bytesRead = file.read(chunk + carryLen, chunkSize);
-        if (bytesRead <= 0) {
-          break;
-        }
+  auto dir = Storage.open(seriesDir.c_str());
+  if (!dir || !dir.isDirectory()) {
+    return 0;
+  }
 
-        const size_t totalLen = carryLen + static_cast<size_t>(bytesRead);
-        for (size_t i = 0; i + tokenLen <= totalLen; i++) {
-          if (memcmp(chunk + i, token, tokenLen) == 0) {
-            ++totalChapters;
-          }
-        }
-
-        carryLen = std::min(tokenLen - 1, totalLen);
-        if (carryLen > 0) {
-          memmove(chunk, chunk + totalLen - carryLen, carryLen);
-        }
-      }
+  dir.rewindDirectory();
+  char name[256];
+  size_t count = 0;
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    if (file.isDirectory()) {
       file.close();
-
-      if (totalChapters > 0) {
-        return std::to_string(countLocalSeriesChapterFiles(seriesDir)) + "/" + std::to_string(totalChapters) +
-               " chapters";
-      }
+      continue;
+    }
+    file.getName(name, sizeof(name));
+    file.close();
+    if (isSeriesChapterFilename(name)) {
+      ++count;
     }
   }
-
-  const size_t localChapterCount = countLocalSeriesChapterFiles(seriesDir);
-  if (localChapterCount == 0) {
-    return "";
-  }
-
-  return std::to_string(localChapterCount) + " downloaded";
+  dir.close();
+  return count;
 }
+
 
 std::string buildSeriesPreviewStatus(const size_t localChapterCount, const size_t serverChapterCount) {
   if (serverChapterCount == 0) {
@@ -651,6 +628,7 @@ void OpdsBookBrowserActivity::onEnter() {
   previewReadyAt = 0;
   resetPreviewSummaryCache();
   currentPreview = {};
+  localSeriesPreviewCache.clear();
   pendingFetchPath.clear();
   hasPendingFetch = false;
   autoResumeSeriesDownload = false;
@@ -676,6 +654,7 @@ void OpdsBookBrowserActivity::onExit() {
   autoResumeSeriesHref.clear();
   autoResumeSeriesTitle.clear();
   resetPreviewSummaryCache();
+  localSeriesPreviewCache.clear();
 }
 
 bool OpdsBookBrowserActivity::fetchFeedData(const std::string& url, std::vector<OpdsEntry>& outEntries,
@@ -986,7 +965,10 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
       GUI.drawProgressBar(renderer, Rect{20, pageHeight / 2 + 8, pageWidth - 40, 20}, downloadProgress,
                           downloadTotal);
     }
+    const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     ScreenDebugRecorder::setBody(statusMessage.c_str(), hasDownloadDetail ? downloadDetail : nullptr);
+    ScreenDebugRecorder::setButtonHints(labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;
   }
@@ -1087,19 +1069,18 @@ void OpdsBookBrowserActivity::updatePreviewForSelection() {
   currentPreview.title = entry.title;
   currentPreview.author = entry.author;
   currentPreview.summary = entry.summary.empty() ? NO_DESCRIPTION_TEXT : entry.summary;
-  currentPreview.coverBmpPath = getPreviewCoverPath(entry, UrlUtils::buildUrl(server.url, currentPath));
 
-  if (entry.type != OpdsEntryType::SERIES) {
-    return;
+  if (entry.type == OpdsEntryType::SERIES && !currentPath.empty()) {
+    const std::string seriesFeedUrl = UrlUtils::buildUrl(UrlUtils::buildUrl(server.url, currentPath), entry.href);
+    const std::string seriesDir = resolveExistingSeriesDirectoryName(seriesFeedUrl, currentFeedTitle, entry);
+    const LocalSeriesPreviewCache& localPreview = getLocalSeriesPreviewCache(seriesDir);
+    currentPreview.status = localPreview.status;
+    currentPreview.coverBmpPath = localPreview.coverBmpPath;
   }
 
-  if (currentPath.empty()) {
-    return;
+  if (currentPreview.coverBmpPath.empty()) {
+    currentPreview.coverBmpPath = getPreviewCoverPath(entry, UrlUtils::buildUrl(server.url, currentPath));
   }
-
-  const std::string seriesFeedUrl = UrlUtils::buildUrl(UrlUtils::buildUrl(server.url, currentPath), entry.href);
-  const std::string seriesDir = resolveExistingSeriesDirectoryName(seriesFeedUrl, currentFeedTitle, entry);
-  currentPreview.status = buildLocalSeriesPreviewStatus(seriesDir);
 }
 
 bool OpdsBookBrowserActivity::hydrateEntryMetadata(OpdsEntry& entry, const bool allowRemoteFetch) {
@@ -1201,6 +1182,46 @@ void OpdsBookBrowserActivity::resetPreviewSummaryCache() {
   previewSummaryLines.clear();
 }
 
+const OpdsBookBrowserActivity::LocalSeriesPreviewCache& OpdsBookBrowserActivity::getLocalSeriesPreviewCache(
+    const std::string& seriesDir) {
+  auto& cache = localSeriesPreviewCache[seriesDir];
+  if (cache.ready) {
+    return cache;
+  }
+
+  cache = {};
+  cache.ready = true;
+  if (seriesDir.empty()) {
+    return cache;
+  }
+
+  cache.totalChapters = SeriesManifestStore::countChaptersFromSeriesDir(seriesDir);
+  cache.downloadedChapters = countSeriesChapterFilesFast(seriesDir);
+
+  SeriesManifest manifest;
+  if (SeriesManifestStore::loadMetadataFromSeriesDir(seriesDir, manifest) && !manifest.coverPath.empty()) {
+    const std::string manifestCoverPath = SeriesManifestStore::buildChapterPath(manifest.seriesDir, manifest.coverPath);
+    if (Storage.exists(manifestCoverPath.c_str()) && FsHelpers::hasBmpExtension(manifestCoverPath)) {
+      cache.coverBmpPath = manifestCoverPath;
+    }
+  }
+
+  if (cache.coverBmpPath.empty()) {
+    const std::string seriesCoverPath = SeriesManifestStore::buildChapterPath(seriesDir, "cover.bmp");
+    if (Storage.exists(seriesCoverPath.c_str())) {
+      cache.coverBmpPath = seriesCoverPath;
+    }
+  }
+
+  if (cache.totalChapters > 0) {
+    cache.status = std::to_string(cache.downloadedChapters) + "/" + std::to_string(cache.totalChapters) + " chapters";
+  } else if (cache.downloadedChapters > 0) {
+    cache.status = std::to_string(cache.downloadedChapters) + " downloaded";
+  }
+
+  return cache;
+}
+
 void OpdsBookBrowserActivity::ensurePreviewSummaryCache(const PreviewData& preview, const int textWidth) {
   if (textWidth <= 0) {
     previewSummaryLines.clear();
@@ -1221,6 +1242,15 @@ void OpdsBookBrowserActivity::ensurePreviewSummaryCache(const PreviewData& previ
 }
 
 std::string OpdsBookBrowserActivity::getPreviewCoverPath(const OpdsEntry& entry, const std::string& baseUrl) {
+  if (entry.type == OpdsEntryType::SERIES && !currentPath.empty()) {
+    const std::string seriesFeedUrl = UrlUtils::buildUrl(baseUrl, entry.href);
+    const std::string seriesDir = resolveExistingSeriesDirectoryName(seriesFeedUrl, currentFeedTitle, entry);
+    const LocalSeriesPreviewCache& localPreview = getLocalSeriesPreviewCache(seriesDir);
+    if (!localPreview.coverBmpPath.empty()) {
+      return localPreview.coverBmpPath;
+    }
+  }
+
   if (entry.imageHref.empty()) {
     return "";
   }
@@ -1288,6 +1318,7 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
       errorMessage = tr(STR_NO_ENTRIES);
     } else {
       currentPreview = {};
+      localSeriesPreviewCache.clear();
       previewSelectorIndex = -1;
       previewReadyAt = 0;
     }
@@ -1355,6 +1386,7 @@ void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
   statusMessage = tr(STR_LOADING);
   entries.clear();
   currentPreview = {};
+  localSeriesPreviewCache.clear();
   resetPreviewSummaryCache();
   selectorIndex = 0;
   requestUpdate(true);
@@ -1374,6 +1406,7 @@ void OpdsBookBrowserActivity::navigateBack() {
     statusMessage = tr(STR_LOADING);
     entries.clear();
     currentPreview = {};
+    localSeriesPreviewCache.clear();
     resetPreviewSummaryCache();
     selectorIndex = 0;
     requestUpdate(true);
@@ -1505,6 +1538,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
     searchTemplate.clear();
     currentFeedTitle.clear();
     currentPreview = {};
+    localSeriesPreviewCache.clear();
     previewSelectorIndex = -1;
     previewReadyAt = 0;
   };
@@ -1591,120 +1625,144 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
 
   if (useStoredManifest && !remoteSeriesBaseUrl.empty()) {
     constexpr size_t kManifestSliceSize = 64;
-    while (true) {
-      size_t pendingChapterCount = 0;
-      finalServerChapterCount = SeriesManifestStore::countChaptersFromSeriesDir(localSeriesDir);
-      if (finalServerChapterCount == 0) {
-        LOG_DBG("OPDS", "Stored manifest unusable, falling back to feed: %s", localSeriesDir.c_str());
-        Storage.remove((localSeriesDir + "/_series.json").c_str());
-        useStoredManifest = false;
-        break;
-      }
+    finalServerChapterCount = SeriesManifestStore::countChaptersFromSeriesDir(localSeriesDir);
+    if (finalServerChapterCount == 0) {
+      LOG_DBG("OPDS", "Stored manifest unusable, falling back to feed: %s", localSeriesDir.c_str());
+      Storage.remove((localSeriesDir + "/_series.json").c_str());
+      useStoredManifest = false;
+    } else {
+      size_t manifestCursor = 0;
+      finalLocalChapterCount = std::min(countSeriesChapterFilesFast(localSeriesDir), finalServerChapterCount);
 
-      std::vector<PendingManifestDownload> pendingBatch;
-      pendingBatch.reserve(SERIES_DOWNLOAD_BATCH_LIMIT);
-      bool manifestScanned = true;
-      for (size_t sliceStart = 0; sliceStart < finalServerChapterCount; sliceStart += kManifestSliceSize) {
-        std::vector<SeriesChapter> slice;
-        if (!SeriesManifestStore::loadChapterSliceFromSeriesDir(localSeriesDir, sliceStart, kManifestSliceSize, slice)) {
-          manifestScanned = false;
-          break;
-        }
-        if (slice.empty()) {
-          break;
-        }
+      while (true) {
+        const uint32_t refillFreeHeap = ESP.getFreeHeap();
+        const uint32_t refillLargestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        const size_t refillLimit = getSeriesDownloadRefillLimit();
+        LOG_DBG("OPDS", "Manifest refill plan: local=%u/%u cursor=%u free=%u largest=%u limit=%u",
+                static_cast<unsigned>(finalLocalChapterCount), static_cast<unsigned>(finalServerChapterCount),
+                static_cast<unsigned>(manifestCursor), static_cast<unsigned>(refillFreeHeap),
+                static_cast<unsigned>(refillLargestBlock), static_cast<unsigned>(refillLimit));
+        std::vector<PendingManifestDownload> pendingBatch;
+        pendingBatch.reserve(refillLimit);
+        bool manifestScanned = true;
 
-        for (const auto& chapter : slice) {
-          const std::string localChapterPath = localSeriesDir + "/" + chapter.file;
-          if (hasUsableLocalChapterFile(localChapterPath)) {
-            continue;
+        while (manifestCursor < finalServerChapterCount && pendingBatch.size() < refillLimit) {
+          if (!pollCancel()) {
+            currentFileDownloaded = 0;
+            currentFileTotal = 0;
+            reloadBrowseFeed(false);
+            return;
           }
-          ++pendingChapterCount;
-          if (pendingBatch.size() < SERIES_DOWNLOAD_BATCH_LIMIT) {
+
+          std::vector<SeriesChapter> slice;
+          if (!SeriesManifestStore::loadChapterSliceFromSeriesDir(localSeriesDir, manifestCursor, kManifestSliceSize, slice)) {
+            manifestScanned = false;
+            break;
+          }
+          if (slice.empty()) {
+            manifestCursor = finalServerChapterCount;
+            break;
+          }
+
+          manifestCursor += slice.size();
+          for (const auto& chapter : slice) {
+            if (!pollCancel()) {
+              currentFileDownloaded = 0;
+              currentFileTotal = 0;
+              reloadBrowseFeed(false);
+              return;
+            }
+
+            const std::string localChapterPath = localSeriesDir + "/" + chapter.file;
+            if (hasUsableLocalChapterFile(localChapterPath)) {
+              continue;
+            }
+
             pendingBatch.push_back(PendingManifestDownload{localChapterPath, remoteSeriesBaseUrl + "/" + chapter.file});
+            if (pendingBatch.size() >= refillLimit) {
+              break;
+            }
           }
         }
-      }
 
-      if (!manifestScanned) {
-        LOG_DBG("OPDS", "Stored manifest unusable, falling back to feed: %s", localSeriesDir.c_str());
-        Storage.remove((localSeriesDir + "/_series.json").c_str());
-        useStoredManifest = false;
-        break;
-      }
-
-      finalLocalChapterCount = finalServerChapterCount - pendingChapterCount;
-      if (pendingChapterCount == 0) {
-        break;
-      }
-
-      downloadProgress = finalLocalChapterCount;
-      downloadTotal = finalServerChapterCount;
-      releaseDownloadMemory();
-      requestUpdateAndWait();
-
-      size_t downloadedThisBatch = 0;
-      for (const auto& pending : pendingBatch) {
-        if (downloadedThisBatch >= SERIES_DOWNLOAD_BATCH_LIMIT) {
+        if (!manifestScanned) {
+          LOG_DBG("OPDS", "Stored manifest unusable, falling back to feed: %s", localSeriesDir.c_str());
+          Storage.remove((localSeriesDir + "/_series.json").c_str());
+          useStoredManifest = false;
           break;
         }
 
-        currentFileDownloaded = 0;
-        currentFileTotal = 0;
-
-        if (!pollCancel()) {
-          currentFileDownloaded = 0;
-          currentFileTotal = 0;
-          reloadBrowseFeed(false);
-          return;
+        if (pendingBatch.empty()) {
+          downloadProgress = downloadTotal = finalServerChapterCount;
+          break;
         }
 
-        const auto result = downloadWithRenderPaused(pending.chapterUrl, pending.localChapterPath);
-        if (result == HttpDownloader::ABORTED) {
-          currentFileDownloaded = 0;
-          currentFileTotal = 0;
-          reloadBrowseFeed(false);
-          return;
-        }
-        if (result != HttpDownloader::OK) {
-          LOG_ERR("OPDS", "Series chapter download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
-          currentFileDownloaded = 0;
-          currentFileTotal = 0;
-          reloadBrowseFeed(false);
-          return;
-        }
-
-        ++downloadedThisBatch;
-        ++finalLocalChapterCount;
         downloadProgress = finalLocalChapterCount;
-        currentFileDownloaded = 0;
-        currentFileTotal = 0;
-        if (shouldRefreshDownloadProgressUi(downloadProgress, downloadTotal, lastUiUpdateAt, lastProgressPercent,
-                                            true)) {
+        downloadTotal = finalServerChapterCount;
+        releaseDownloadMemory();
+        requestUpdateAndWait();
+
+        size_t downloadedThisBatch = 0;
+        for (const auto& pending : pendingBatch) {
+          currentFileDownloaded = 0;
+          currentFileTotal = 0;
+
+          if (!pollCancel()) {
+            currentFileDownloaded = 0;
+            currentFileTotal = 0;
+            reloadBrowseFeed(false);
+            return;
+          }
+
+          const auto result = downloadWithRenderPaused(pending.chapterUrl, pending.localChapterPath);
+          if (result == HttpDownloader::ABORTED) {
+            currentFileDownloaded = 0;
+            currentFileTotal = 0;
+            reloadBrowseFeed(false);
+            return;
+          }
+          if (result != HttpDownloader::OK) {
+            LOG_ERR("OPDS", "Series chapter download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
+            currentFileDownloaded = 0;
+            currentFileTotal = 0;
+            reloadBrowseFeed(false);
+            return;
+          }
+
+          ++downloadedThisBatch;
+          if (finalLocalChapterCount < finalServerChapterCount) {
+            ++finalLocalChapterCount;
+          }
+          downloadProgress = finalLocalChapterCount;
+          currentFileDownloaded = 0;
+          currentFileTotal = 0;
+          if ((downloadedThisBatch % 4) == 0 &&
+              shouldRefreshDownloadProgressUi(downloadProgress, downloadTotal, lastUiUpdateAt, lastProgressPercent,
+                                              true)) {
+            requestUpdateAndWait();
+          }
+          vTaskDelay(1);
+        }
+
+        LOG_DBG("OPDS", "Series manifest refill complete: downloaded=%d scanned=%u/%u refill=%u",
+                static_cast<int>(downloadedThisBatch), static_cast<unsigned>(manifestCursor),
+                static_cast<unsigned>(finalServerChapterCount), static_cast<unsigned>(refillLimit));
+
+        if (shouldRefreshDownloadProgressUi(downloadProgress, downloadTotal, lastUiUpdateAt, lastProgressPercent, true)) {
           requestUpdateAndWait();
+        }
+
+        if (manifestCursor >= finalServerChapterCount && pendingBatch.size() < refillLimit) {
+          continue;
         }
         vTaskDelay(1);
       }
 
-      if (pendingChapterCount > downloadedThisBatch) {
-        LOG_DBG("OPDS", "Series manifest batch complete: downloaded=%d remaining=%d limit=%d",
-                static_cast<int>(downloadedThisBatch), static_cast<int>(pendingChapterCount - downloadedThisBatch),
-                static_cast<int>(SERIES_DOWNLOAD_BATCH_LIMIT));
+      if (useStoredManifest) {
         tryDownloadSeriesCover();
-        releaseDownloadMemory();
-        vTaskDelay(4);
-        continue;
-      } else {
-        downloadProgress = downloadTotal;
-        LOG_DBG("OPDS", "Series fully downloaded from manifest in current session");
-        break;
+        reloadBrowseFeed(false);
+        return;
       }
-    }
-
-    if (useStoredManifest) {
-      tryDownloadSeriesCover();
-      reloadBrowseFeed(false);
-      return;
     }
   }
 
@@ -1723,8 +1781,15 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
     size_t serverChapterCount = 0;
     size_t pendingChapterCount = 0;
     std::string firstDownloadUrl;
+    const uint32_t refillFreeHeap = ESP.getFreeHeap();
+    const uint32_t refillLargestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    const size_t refillLimit = getSeriesDownloadRefillLimit();
+    LOG_DBG("OPDS", "Feed refill plan: local=%u/%u free=%u largest=%u limit=%u",
+            static_cast<unsigned>(finalLocalChapterCount), static_cast<unsigned>(finalServerChapterCount),
+            static_cast<unsigned>(refillFreeHeap), static_cast<unsigned>(refillLargestBlock),
+            static_cast<unsigned>(refillLimit));
     std::vector<PendingFeedDownload> pendingBatch;
-    pendingBatch.reserve(SERIES_DOWNLOAD_BATCH_LIMIT);
+    pendingBatch.reserve(refillLimit);
 
     for (const auto& chapter : seriesEntries) {
       if (chapter.type != OpdsEntryType::BOOK) {
@@ -1748,7 +1813,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
       }
 
       ++pendingChapterCount;
-      if (pendingBatch.size() < SERIES_DOWNLOAD_BATCH_LIMIT) {
+      if (pendingBatch.size() < refillLimit) {
         pendingBatch.push_back(PendingFeedDownload{localChapterPath, chapterUrl});
       }
     }
@@ -1778,7 +1843,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
 
     size_t downloadedThisBatch = 0;
     for (const auto& pending : pendingBatch) {
-      if (downloadedThisBatch >= SERIES_DOWNLOAD_BATCH_LIMIT) {
+      if (downloadedThisBatch >= refillLimit) {
         break;
       }
 
@@ -1812,14 +1877,14 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
       downloadProgress = finalLocalChapterCount;
       currentFileDownloaded = 0;
       currentFileTotal = 0;
-      if (shouldRefreshDownloadProgressUi(downloadProgress, downloadTotal, lastUiUpdateAt, lastProgressPercent,
+        if ((downloadedThisBatch % 4) == 0 &&
+            shouldRefreshDownloadProgressUi(downloadProgress, downloadTotal, lastUiUpdateAt, lastProgressPercent,
                                             true)) {
         requestUpdateAndWait();
       }
       vTaskDelay(1);
     }
     if (pendingChapterCount > downloadedThisBatch) {
-      tryDownloadSeriesCover();
       releaseDownloadMemory();
       vTaskDelay(4);
       continue;

@@ -4,6 +4,7 @@
 
 #include <optional>
 #include <vector>
+#include <unordered_map>
 
 #include "CrossPointSettings.h"
 #include "SeriesReadingContext.h"
@@ -32,6 +33,10 @@ class TxtReaderActivity final : public Activity {
   bool initialized = false;
   bool pageIndexComplete = false;
   bool pageIndexCacheSaved = false;
+  bool transitionPending = false;
+  std::optional<SeriesReadingContext> pendingSeriesSwitchContext;
+  bool pendingSeriesSwitchOpenAtLastPage = false;
+  std::unordered_map<int, std::string> seriesChapterPathCache;
   unsigned long lastBackgroundIndexTick = 0;
 
   // Cached settings for cache validation (different fonts/margins require re-indexing)
@@ -56,6 +61,7 @@ class TxtReaderActivity final : public Activity {
   void continueBackgroundIndexing();
   void persistSeriesReadingState() const;
   int getCurrentSeriesChapterIndex() const;
+  void queueSeriesChapterSwitch(SeriesReadingContext context, bool openChapterAtLastPage = false);
   bool tryNavigateAdjacentSeriesChapter(int chapterDelta, bool openChapterAtLastPage);
   void openSeriesChapterSelection();
   void saveProgress() const;

@@ -10,6 +10,7 @@
 class SeriesChapterSelectionActivity final : public Activity {
   std::string seriesDir;
   std::string seriesTitle;
+  std::vector<int> chapterOrder;
   std::vector<SeriesChapter> visibleChapters;
   std::vector<bool> visibleAvailability;
   ButtonNavigator buttonNavigator;

@@ -107,6 +107,11 @@ void TxtReaderActivity::onEnter() {
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(buildRecentBookEntry(*txt, seriesContext));
 
+  transitionPending = false;
+  pendingSeriesSwitchContext.reset();
+  pendingSeriesSwitchOpenAtLastPage = false;
+  seriesChapterPathCache.clear();
+
   // Trigger first update
   requestUpdate();
 }
@@ -119,13 +124,27 @@ void TxtReaderActivity::onExit() {
 
   pageOffsets.clear();
   currentPageLines.clear();
+  pendingSeriesSwitchContext.reset();
+  seriesChapterPathCache.clear();
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
   txt.reset();
 }
 
 void TxtReaderActivity::loop() {
-  continueBackgroundIndexing();
+  if (transitionPending) {
+    if (pendingSeriesSwitchContext.has_value()) {
+      auto context = std::move(*pendingSeriesSwitchContext);
+      pendingSeriesSwitchContext.reset();
+      activityManager.goToReader(std::move(context), pendingSeriesSwitchOpenAtLastPage);
+    }
+    return;
+  }
+
+  if (initialized && txt && !pageIndexComplete) {
+    RenderLock lock(*this);
+    continueBackgroundIndexing();
+  }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     openSeriesChapterSelection();
@@ -587,6 +606,14 @@ void TxtReaderActivity::persistSeriesReadingState() const {
   APP_STATE.setOpenReadingState(context);
 }
 
+void TxtReaderActivity::queueSeriesChapterSwitch(SeriesReadingContext context, const bool openChapterAtLastPage) {
+  APP_STATE.setOpenReadingState(context);
+  APP_STATE.saveToFile();
+  pendingSeriesSwitchContext = std::move(context);
+  pendingSeriesSwitchOpenAtLastPage = openChapterAtLastPage;
+  transitionPending = true;
+}
+
 int TxtReaderActivity::getCurrentSeriesChapterIndex() const {
   if (!txt || !seriesContext.has_value()) {
     return 0;
@@ -614,7 +641,17 @@ bool TxtReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta,
 
   std::string targetChapterPath;
   int targetChapterIndex = currentChapterIndex + chapterDelta;
-  while (SeriesManifestStore::tryResolveChapterPath(seriesContext->seriesDir, targetChapterIndex, targetChapterPath)) {
+  while (true) {
+    auto cached = seriesChapterPathCache.find(targetChapterIndex);
+    if (cached != seriesChapterPathCache.end()) {
+      targetChapterPath = cached->second;
+    } else if (SeriesManifestStore::tryResolveChapterPath(seriesContext->seriesDir, targetChapterIndex, targetChapterPath)) {
+      seriesChapterPathCache[targetChapterIndex] = targetChapterPath;
+    }
+
+    if (targetChapterPath.empty()) {
+      break;
+    }
     if (Storage.exists(targetChapterPath.c_str())) {
       break;
     }
@@ -630,9 +667,7 @@ bool TxtReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta,
   nextContext.seriesDir = seriesContext->seriesDir;
   nextContext.chapterPath = targetChapterPath;
   nextContext.chapterIndex = targetChapterIndex;
-  APP_STATE.setOpenReadingState(nextContext);
-  APP_STATE.saveToFile();
-  activityManager.goToReader(nextContext, openChapterAtLastPage);
+  queueSeriesChapterSwitch(std::move(nextContext), openChapterAtLastPage);
   return true;
 }
 
@@ -654,7 +689,7 @@ void TxtReaderActivity::openSeriesChapterSelection() {
         context.chapterPath = seriesChapter.chapterPath;
         context.chapterIndex = seriesChapter.chapterIndex;
         if (context.chapterPath != txt->getPath() && Storage.exists(context.chapterPath.c_str())) {
-          activityManager.goToReader(std::move(context));
+          queueSeriesChapterSwitch(std::move(context));
         }
       });
 }

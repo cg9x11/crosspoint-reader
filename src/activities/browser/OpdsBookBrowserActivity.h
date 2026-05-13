@@ -4,6 +4,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 
 #include "../Activity.h"
 #include "OpdsServerStore.h"
@@ -32,6 +33,14 @@ class OpdsBookBrowserActivity final : public Activity {
     std::string status;
     std::string summary;
     std::string coverBmpPath;
+  };
+
+  struct LocalSeriesPreviewCache {
+    std::string status;
+    std::string coverBmpPath;
+    size_t downloadedChapters = 0;
+    size_t totalChapters = 0;
+    bool ready = false;
   };
 
   ButtonNavigator buttonNavigator;
@@ -64,6 +73,7 @@ class OpdsBookBrowserActivity final : public Activity {
   size_t currentFileDownloaded = 0;
   size_t currentFileTotal = 0;
   PreviewData currentPreview;
+  std::unordered_map<std::string, LocalSeriesPreviewCache> localSeriesPreviewCache;
 
   OpdsServer server;  // Copied at construction - safe even if the store changes during browsing
 
@@ -92,6 +102,7 @@ class OpdsBookBrowserActivity final : public Activity {
   bool hydrateEntryMetadata(OpdsEntry& entry, bool allowRemoteFetch = true);
   void resetPreviewSummaryCache();
   void ensurePreviewSummaryCache(const PreviewData& preview, int textWidth);
+  const LocalSeriesPreviewCache& getLocalSeriesPreviewCache(const std::string& seriesDir);
   std::string getPreviewCoverPath(const OpdsEntry& entry, const std::string& baseUrl);
   void drawPreviewPanel(const Rect& rect, const PreviewData& preview);
   bool preventAutoSleep() override { return true; }

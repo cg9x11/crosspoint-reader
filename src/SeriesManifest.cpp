@@ -548,6 +548,17 @@ bool SeriesManifestStore::tryGetChapterContext(const std::string& chapterPath, s
   return chapterIndexOut > 0 && !seriesIdOut.empty() && !seriesDirOut.empty();
 }
 
+bool SeriesManifestStore::buildChapterIndexOrder(const std::string& seriesDir, std::vector<int>& chapterIndicesOut) {
+  chapterIndicesOut.clear();
+  return forEachChapterInSeriesDir(
+      seriesDir,
+      [&chapterIndicesOut](const SeriesChapter& chapter) {
+        chapterIndicesOut.push_back(chapter.chapterIndex);
+        return true;
+      },
+      nullptr);
+}
+
 bool SeriesManifestStore::tryGetChapterIndexByPath(const std::string& chapterPath, int& chapterIndexOut) {
   chapterIndexOut = 0;
   const std::string seriesDir = extractSeriesDir(chapterPath);

@@ -3,6 +3,7 @@
 #include <HalPowerManager.h>
 
 #include <algorithm>
+#include <Logging.h>
 
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
@@ -306,6 +307,14 @@ void ActivityManager::requestUpdate(bool immediate) {
     requestedUpdate = true;
   }
 }
+namespace {
+TaskHandle_t g_renderLockOwner = nullptr;
+const char* currentTaskTag() {
+  TaskHandle_t task = xTaskGetCurrentTaskHandle();
+  return pcTaskGetName(task);
+}
+}
+
 void ActivityManager::requestUpdateAndWait() {
   if (!renderTaskHandle) {
     return;
@@ -339,26 +348,38 @@ void ActivityManager::requestUpdateAndWait() {
 // RenderLock
 
 RenderLock::RenderLock() {
+  LOG_DBG("RLOCK", "take begin task=%s owner=%s", currentTaskTag(), g_renderLockOwner ? pcTaskGetName(g_renderLockOwner) : "<none>");
   xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
+  g_renderLockOwner = xTaskGetCurrentTaskHandle();
   isLocked = true;
+  LOG_DBG("RLOCK", "take done task=%s", currentTaskTag());
 }
 
 RenderLock::RenderLock([[maybe_unused]] Activity&) {
+  LOG_DBG("RLOCK", "take begin task=%s owner=%s", currentTaskTag(), g_renderLockOwner ? pcTaskGetName(g_renderLockOwner) : "<none>");
   xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
+  g_renderLockOwner = xTaskGetCurrentTaskHandle();
   isLocked = true;
+  LOG_DBG("RLOCK", "take done task=%s", currentTaskTag());
 }
 
 RenderLock::~RenderLock() {
   if (isLocked) {
+    LOG_DBG("RLOCK", "give begin task=%s owner=%s", currentTaskTag(), g_renderLockOwner ? pcTaskGetName(g_renderLockOwner) : "<none>");
     xSemaphoreGive(activityManager.renderingMutex);
+    g_renderLockOwner = nullptr;
     isLocked = false;
+    LOG_DBG("RLOCK", "give done task=%s", currentTaskTag());
   }
 }
 
 void RenderLock::unlock() {
   if (isLocked) {
+    LOG_DBG("RLOCK", "unlock begin task=%s owner=%s", currentTaskTag(), g_renderLockOwner ? pcTaskGetName(g_renderLockOwner) : "<none>");
     xSemaphoreGive(activityManager.renderingMutex);
+    g_renderLockOwner = nullptr;
     isLocked = false;
+    LOG_DBG("RLOCK", "unlock done task=%s", currentTaskTag());
   }
 }
 

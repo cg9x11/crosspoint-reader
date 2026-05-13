@@ -303,49 +303,6 @@ bool hasPreviewCoverBitmap(const std::string& coverBmpPath, const int thumbHeigh
   return !resolvePreviewCoverPath(coverBmpPath, thumbHeight).empty();
 }
 
-bool hasUsableDownloadedSeriesChapterFile(const std::string& path) {
-  if (!Storage.exists(path.c_str())) {
-    return false;
-  }
-
-  FsFile file;
-  if (!Storage.openFileForRead("FBA", path.c_str(), file) || !file || file.isDirectory()) {
-    if (file) {
-      file.close();
-    }
-    return false;
-  }
-
-  const size_t fileSize = file.size();
-  std::string_view filename{path};
-  bool usable = false;
-  if (FsHelpers::hasEpubExtension(filename)) {
-    uint8_t header[2] = {0, 0};
-    usable = fileSize >= 256 && file.read(header, sizeof(header)) == static_cast<int>(sizeof(header)) && header[0] == 'P' &&
-             header[1] == 'K';
-  } else if (FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename)) {
-    usable = fileSize >= 8;
-  } else {
-    usable = fileSize > 0;
-  }
-
-  file.close();
-  return usable;
-}
-
-size_t countDownloadedSeriesChapters(const std::string& seriesDir) {
-  size_t count = 0;
-  SeriesManifestStore::forEachChapterInSeriesDir(
-      seriesDir,
-      [&seriesDir, &count](const SeriesChapter& chapter) {
-        if (hasUsableDownloadedSeriesChapterFile(SeriesManifestStore::buildChapterPath(seriesDir, chapter.file))) {
-          ++count;
-        }
-        return true;
-      },
-      nullptr);
-  return count;
-}
 
 bool scanDownloadedSeriesFiles(const std::string& seriesDir, size_t& downloadedCount, std::string& firstDownloadedFile) {
   downloadedCount = 0;
@@ -359,8 +316,8 @@ bool scanDownloadedSeriesFiles(const std::string& seriesDir, size_t& downloadedC
   dir.rewindDirectory();
   char childName[256];
   for (auto child = dir.openNextFile(); child; child = dir.openNextFile()) {
-    child.getName(childName, sizeof(childName));
     const bool isDir = child.isDirectory();
+    child.getName(childName, sizeof(childName));
     child.close();
     if (isDir) {
       continue;
@@ -368,11 +325,6 @@ bool scanDownloadedSeriesFiles(const std::string& seriesDir, size_t& downloadedC
 
     std::string_view filename{childName};
     if (!isSeriesChapterFilename(filename)) {
-      continue;
-    }
-
-    const std::string chapterPath = SeriesManifestStore::buildChapterPath(seriesDir, std::string(filename));
-    if (!hasUsableDownloadedSeriesChapterFile(chapterPath)) {
       continue;
     }
 
