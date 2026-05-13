@@ -28,6 +28,24 @@ constexpr const char* SERIES_VALUE = "SER";
 constexpr int PREVIEW_COVER_HEIGHT = 200;
 constexpr const char* NO_DESCRIPTION_TEXT = "No description";
 constexpr const char* CURRENT_READING_TEXT = "Current";
+constexpr const char* ONLINE_LIBRARY_ROOT_DIR = "/.online-library";
+constexpr const char* ONLINE_LIBRARY_ENTRY_RAW = "__online_library__/";
+constexpr const char* ONLINE_LIBRARY_ENTRY_TITLE = "[Online Library]";
+
+bool isOnlineLibraryVirtualEntry(std::string_view rawName) { return rawName == ONLINE_LIBRARY_ENTRY_RAW; }
+
+bool isLegacyRootSeriesDirectoryName(std::string_view name) { return name.rfind("series_", 0) == 0; }
+
+std::string normalizeOnlineLibraryPath(const std::string& path) {
+  if (path.rfind("/series_", 0) != 0) {
+    return path;
+  }
+  const std::string migrated = std::string(ONLINE_LIBRARY_ROOT_DIR) + path;
+  if (Storage.exists(migrated.c_str())) {
+    return migrated;
+  }
+  return path;
+}
 
 bool isSeriesChapterFilename(std::string_view filename) {
   if (filename.size() < 8 || filename.rfind("ch_", 0) != 0) {
@@ -452,8 +470,9 @@ bool FileBrowserActivity::tryBuildSeriesEntry(const std::string& directoryName, 
       break;
     }
   }
-  if (recent && !recent->path.empty() && !cache->hasRecentChapter) {
-    cache = getSeriesBrowseCache(seriesDir, recent->path);
+  const std::string normalizedRecentPath = recent ? normalizeOnlineLibraryPath(recent->path) : std::string();
+  if (recent && !normalizedRecentPath.empty() && !cache->hasRecentChapter) {
+    cache = getSeriesBrowseCache(seriesDir, normalizedRecentPath);
     if (!cache) {
       return false;
     }
@@ -461,9 +480,9 @@ bool FileBrowserActivity::tryBuildSeriesEntry(const std::string& directoryName, 
 
   SeriesChapter activeChapter = cache->firstChapter;
   std::string resumePath = SeriesManifestStore::buildChapterPath(cache->manifest.seriesDir, activeChapter.file);
-  if (recent && !recent->path.empty() && cache->hasRecentChapter && Storage.exists(recent->path.c_str())) {
+  if (recent && !normalizedRecentPath.empty() && cache->hasRecentChapter && Storage.exists(normalizedRecentPath.c_str())) {
     activeChapter = cache->recentChapter;
-    resumePath = recent->path;
+    resumePath = normalizedRecentPath;
   } else if (!Storage.exists(resumePath.c_str()) && cache->hasFirstDownloadedChapter) {
     activeChapter = cache->firstDownloadedChapter;
     resumePath = SeriesManifestStore::buildChapterPath(cache->manifest.seriesDir, activeChapter.file);
@@ -662,6 +681,15 @@ void FileBrowserActivity::loadFiles() {
 
   root.rewindDirectory();
 
+  if (mode == Mode::Books && basepath == "/") {
+    Storage.ensureDirectoryExists(ONLINE_LIBRARY_ROOT_DIR);
+    FileBrowserEntry onlineEntry;
+    onlineEntry.rawName = ONLINE_LIBRARY_ENTRY_RAW;
+    onlineEntry.title = ONLINE_LIBRARY_ENTRY_TITLE;
+    onlineEntry.kind = EntryKind::Directory;
+    files.push_back(std::move(onlineEntry));
+  }
+
   struct PendingEntry {
     std::string name;
     bool isDirectory = false;
@@ -689,6 +717,20 @@ void FileBrowserActivity::loadFiles() {
     std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles item name=%s dir=%d\n", pending.name.c_str(),
                  pending.isDirectory ? 1 : 0);
     if (pending.isDirectory) {
+      if (mode == Mode::Books && basepath == "/" && isLegacyRootSeriesDirectoryName(pending.name)) {
+        const std::string oldPath = joinPath(basepath, pending.name);
+        const std::string newPath = std::string(ONLINE_LIBRARY_ROOT_DIR) + "/" + pending.name;
+        if (!Storage.exists(newPath.c_str())) {
+          Storage.ensureDirectoryExists(ONLINE_LIBRARY_ROOT_DIR);
+          if (Storage.rename(oldPath.c_str(), newPath.c_str())) {
+            LOG_DBG("FBA", "Migrated online series dir: %s -> %s", oldPath.c_str(), newPath.c_str());
+            continue;
+          }
+        } else {
+          continue;
+        }
+      }
+
       auto dir = Storage.open(joinPath(basepath, pending.name).c_str());
       std::string normalizedDirectoryName = pending.name;
       if (dir && dir.isDirectory()) {
@@ -845,7 +887,12 @@ bool FileBrowserActivity::deletePathRecursive(const std::string& fullPath) {
 }
 
 void FileBrowserActivity::openDirectory(const std::string& rawName) {
-  basepath = joinPath(basepath, rawName.substr(0, rawName.length() - 1));
+  if (isOnlineLibraryVirtualEntry(rawName)) {
+    Storage.ensureDirectoryExists(ONLINE_LIBRARY_ROOT_DIR);
+    basepath = ONLINE_LIBRARY_ROOT_DIR;
+  } else {
+    basepath = joinPath(basepath, rawName.substr(0, rawName.length() - 1));
+  }
   loadFiles();
   selectorIndex = 0;
   resetPreviewSummaryCache();
@@ -1033,8 +1080,13 @@ void FileBrowserActivity::loop() {
         if (basepath.empty()) basepath = "/";
         loadFiles();
 
-        const auto pos = oldPath.find_last_of('/');
-        const std::string dirName = oldPath.substr(pos + 1) + "/";
+        std::string dirName;
+        if (oldPath == ONLINE_LIBRARY_ROOT_DIR) {
+          dirName = ONLINE_LIBRARY_ENTRY_RAW;
+        } else {
+          const auto pos = oldPath.find_last_of('/');
+          dirName = oldPath.substr(pos + 1) + "/";
+        }
         selectorIndex = findEntry(dirName);
 
         resetPreviewSummaryCache();

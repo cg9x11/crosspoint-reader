@@ -51,8 +51,10 @@ class FileBrowserActivity final : public Activity {
     size_t downloadedChapters = 0;
     bool hasFirstChapter = false;
     bool hasRecentChapter = false;
+    bool hasFirstDownloadedChapter = false;
     SeriesChapter firstChapter;
     SeriesChapter recentChapter;
+    SeriesChapter firstDownloadedChapter;
     SeriesManifest manifest;
   };
 
@@ -88,6 +90,7 @@ class FileBrowserActivity final : public Activity {
   // Files state
   std::string basepath = "/";
   std::vector<FileBrowserEntry> files;
+  bool currentDirectoryIsSeries = false;
   mutable std::vector<SeriesBrowseCache> seriesBrowseCache;
   PreviewData currentPreview;
   int previewSummaryScrollOffset = 0;

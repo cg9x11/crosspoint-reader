@@ -11,6 +11,7 @@
 static constexpr const char* TRACE_LOG_DIR = "/.crosspoint/logs";
 static constexpr const char* TRACE_LOG_FILE = "/.crosspoint/logs/http_trace.log";
 static constexpr size_t TRACE_LOG_MAX_BYTES = 64 * 1024;
+static constexpr bool TRACE_LOG_ENABLED = false;
 static bool g_traceSessionOpened = false;
 static bool g_traceWriteInProgress = false;
 
@@ -46,6 +47,9 @@ bool shouldPersistTraceLog(const char* origin) {
 }
 
 bool ensureTraceLogReadyInternal(FsFile* openedFile = nullptr) {
+  if (!TRACE_LOG_ENABLED) {
+    return false;
+  }
   if (!SdMan.ready() || !SdMan.ensureDirectoryExists("/.crosspoint") || !SdMan.ensureDirectoryExists(TRACE_LOG_DIR)) {
     return false;
   }
@@ -65,7 +69,7 @@ bool ensureTraceLogReadyInternal(FsFile* openedFile = nullptr) {
     return true;
   }
 
-  auto file = SdMan.open(TRACE_LOG_FILE, O_WRITE | O_CREAT);
+  auto file = SdMan.open(TRACE_LOG_FILE, O_WRONLY | O_CREAT);
   if (!file) {
     return false;
   }
@@ -96,7 +100,7 @@ void appendTraceLog(const char* message) {
     return;
   }
 
-  auto file = SdMan.open(TRACE_LOG_FILE, O_WRITE | O_CREAT);
+  auto file = SdMan.open(TRACE_LOG_FILE, O_WRONLY | O_CREAT);
   if (!file) {
     g_traceWriteInProgress = false;
     return;
@@ -153,6 +157,9 @@ void logPrintf(const char* level, const char* origin, const char* format, ...) {
 }
 
 void traceLogPrintf(const char* origin, const char* format, ...) {
+  if (!TRACE_LOG_ENABLED) {
+    return;
+  }
   char buf[MAX_ENTRY_LEN];
   buf[0] = '\0';
   int prefixLen = snprintf(buf, sizeof(buf), "[%lu] [TRC] [%s] ", millis(), origin);

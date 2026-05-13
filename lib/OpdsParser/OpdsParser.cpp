@@ -51,9 +51,15 @@ void appendCapped(std::string& target, const XML_Char* s, const int len, const s
 
 OpdsParser::OpdsParser(const bool captureExtendedMetadata, const size_t maxEntriesOverride)
     : captureExtendedMetadata(captureExtendedMetadata) {
-  maxEntries = maxEntriesOverride > 0
-                   ? maxEntriesOverride
-                   : (captureExtendedMetadata ? MAX_OPDS_EXTENDED_ENTRIES : MAX_OPDS_LIGHTWEIGHT_ENTRIES);
+  // Ensure safe caps to avoid heap exhaustion on large OPDS feeds.
+  size_t effectiveCap = maxEntriesOverride > 0 ? maxEntriesOverride : 0;
+  if (effectiveCap == 0) {
+    effectiveCap = captureExtendedMetadata ? MAX_OPDS_EXTENDED_ENTRIES
+                                          : MAX_OPDS_LIGHTWEIGHT_ENTRIES;
+  }
+  maxEntries = std::min(effectiveCap,
+                        captureExtendedMetadata ? MAX_OPDS_EXTENDED_ENTRIES
+                                                : MAX_OPDS_LIGHTWEIGHT_ENTRIES);
   if (maxEntries > 0) {
     entries.reserve(maxEntries);
   }
@@ -63,7 +69,6 @@ OpdsParser::OpdsParser(const bool captureExtendedMetadata, const size_t maxEntri
     LOG_DBG("OPDS", "Couldn't allocate memory for parser");
   }
 }
-
 OpdsParser::~OpdsParser() { destroyXmlParser(parser); }
 
 size_t OpdsParser::write(uint8_t c) { return write(&c, 1); }
@@ -81,23 +86,12 @@ size_t OpdsParser::write(const uint8_t* xmlData, const size_t length) {
 
   while (remaining > 0) {
     void* const buf = XML_GetBuffer(parser, chunkSize);
-    if (!buf) {
-      errorOccured = true;
-      LOG_DBG("OPDS", "Couldn't allocate memory for buffer");
-      destroyXmlParser(parser);
-      return length;
-    }
+    if (!buf) { errorOccured = true; LOG_DBG("OPDS", "Memory error"); return length; }
 
     const size_t toRead = remaining < chunkSize ? remaining : chunkSize;
     memcpy(buf, currentPos, toRead);
 
-    if (XML_ParseBuffer(parser, static_cast<int>(toRead), 0) == XML_STATUS_ERROR) {
-      errorOccured = true;
-      LOG_DBG("OPDS", "Parse error at line %lu: %s", XML_GetCurrentLineNumber(parser),
-              XML_ErrorString(XML_GetErrorCode(parser)));
-      destroyXmlParser(parser);
-      return length;
-    }
+    if (XML_ParseBuffer(parser, static_cast<int>(toRead), 0) == XML_STATUS_ERROR) { errorOccured = true; return length; }
     currentPos += toRead;
     remaining -= toRead;
   }
@@ -109,10 +103,7 @@ void OpdsParser::flush() {
     errorOccured = true;
     return;
   }
-  if (XML_Parse(parser, nullptr, 0, XML_TRUE) != XML_STATUS_OK) {
-    errorOccured = true;
-    destroyXmlParser(parser);
-  }
+  if (XML_Parse(parser, nullptr, 0, XML_TRUE) != XML_STATUS_OK) { errorOccured = true; }
 }
 
 bool OpdsParser::error() const { return errorOccured; }
@@ -281,8 +272,14 @@ void XMLCALL OpdsParser::characterData(void* userData, const XML_Char* s, const 
     return;
   }
   if (self->inTitle || self->inFeedTitle || self->inAuthorName || self->inId || self->inSummary || self->inContent) {
-    appendCapped(self->currentText, s, len,
-                 currentTextLimit(self->inSummary, self->inContent, self->inAuthorName, self->inId,
-                                  self->inFeedTitle));
+    const size_t limit =
+        currentTextLimit(self->inSummary, self->inContent, self->inAuthorName, self->inId, self->inFeedTitle);
+    if (self->currentText.size() >= limit) {
+      return;
+    }
+    appendCapped(self->currentText, s, len, limit);
   }
 }
+
+
+

@@ -36,6 +36,7 @@ class EpubReaderActivity final : public Activity {
   bool consumeRightRelease = false;
   std::optional<SeriesReadingContext> seriesContext;
   bool openAtLastPage = false;
+  std::string seriesDisplayTitle;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;

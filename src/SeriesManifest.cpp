@@ -8,6 +8,10 @@
 #include <functional>
 
 namespace {
+std::string extractFilename(const std::string& path) {
+  const size_t pos = path.find_last_of("/\\");
+  return (pos == std::string::npos) ? path : path.substr(pos + 1);
+}
 constexpr const char* CHAPTER_INDEX_TOKEN = "\"chapterIndex\"";
 
 std::string normalizeDir(std::string dir) {
@@ -307,61 +311,6 @@ bool forEachManifestChapter(FsFile& file, const std::function<bool(const SeriesC
 }
 }  // namespace
 
-bool SeriesManifestStore::loadFromSeriesDir(const std::string& seriesDir, SeriesManifest& manifest) {
-  const std::string normalizedDir = normalizeDir(seriesDir);
-  const std::string manifestPath = buildChapterPath(normalizedDir, MANIFEST_FILE);
-  if (!Storage.exists(manifestPath.c_str())) {
-    LOG_DBG("SER", "Series manifest missing: %s", manifestPath.c_str());
-    return false;
-  }
-
-  SeriesManifest parsed;
-  if (!loadMetadataFromSeriesDir(normalizedDir, parsed)) {
-    return false;
-  }
-  parsed.seriesDir = normalizedDir;
-
-  FsFile file;
-  if (!Storage.openFileForRead("SER", manifestPath.c_str(), file) || !file) {
-    LOG_ERR("SER", "Series manifest open failed: %s", manifestPath.c_str());
-    return false;
-  }
-
-  if (file.size() == 0) {
-    LOG_ERR("SER", "Series manifest empty: %s", manifestPath.c_str());
-    file.close();
-    return false;
-  }
-
-  const size_t estimatedChapterCount = countManifestChapters(file);
-  if (estimatedChapterCount > 0) {
-    parsed.chapters.reserve(estimatedChapterCount);
-  }
-
-  const bool chaptersLoaded = forEachManifestChapter(
-      file,
-      [&parsed](const SeriesChapter& chapter) {
-        parsed.chapters.push_back(chapter);
-        return true;
-      },
-      nullptr);
-  file.close();
-  if (!chaptersLoaded) {
-    LOG_ERR("SER", "Series manifest chapters parse failed: %s", manifestPath.c_str());
-    return false;
-  }
-
-  if (!parsed.isValid()) {
-    LOG_ERR("SER", "Series manifest invalid for dir: %s", normalizedDir.c_str());
-    return false;
-  }
-
-  std::sort(parsed.chapters.begin(), parsed.chapters.end(),
-            [](const SeriesChapter& left, const SeriesChapter& right) { return left.chapterIndex < right.chapterIndex; });
-  manifest = std::move(parsed);
-  return true;
-}
-
 bool SeriesManifestStore::loadMetadataFromSeriesDir(const std::string& seriesDir, SeriesManifest& manifest) {
   const std::string normalizedDir = normalizeDir(seriesDir);
   const std::string manifestPath = buildChapterPath(normalizedDir, MANIFEST_FILE);
@@ -471,19 +420,22 @@ bool SeriesManifestStore::findFirstChapterInSeriesDir(const std::string& seriesD
 
 bool SeriesManifestStore::findChapterByPathInSeriesDir(const std::string& seriesDir, const std::string& chapterPath,
                                                        SeriesChapter& chapterOut, size_t* outCount) {
-  bool found = false;
   chapterOut = {};
+  const std::string targetFile = extractFilename(chapterPath);
+  bool found = false;
   size_t chapterCount = 0;
+
   const bool ok = forEachChapterInSeriesDir(
       seriesDir,
-      [&seriesDir, &chapterPath, &chapterOut, &found](const SeriesChapter& chapter) {
-        if (buildChapterPath(seriesDir, chapter.file) == chapterPath) {
+      [&found, &chapterOut, &targetFile](const SeriesChapter& chapter) {
+        if (!found && chapter.file == targetFile) {
           chapterOut = chapter;
           found = true;
         }
         return true;
       },
       &chapterCount);
+
   if (outCount) {
     *outCount = chapterCount;
   }
@@ -524,14 +476,6 @@ bool SeriesManifestStore::loadChapterSliceFromSeriesDir(const std::string& serie
   return ok;
 }
 
-bool SeriesManifestStore::tryLoadForChapterPath(const std::string& chapterPath, SeriesManifest& manifest) {
-  const std::string seriesDir = extractSeriesDir(chapterPath);
-  if (seriesDir.empty()) {
-    return false;
-  }
-  return loadFromSeriesDir(seriesDir, manifest);
-}
-
 bool SeriesManifestStore::tryLoadMetadataForChapterPath(const std::string& chapterPath, SeriesManifest& manifest) {
   const std::string seriesDir = extractSeriesDir(chapterPath);
   if (seriesDir.empty()) {
@@ -562,33 +506,39 @@ bool SeriesManifestStore::tryGetChapterContext(const std::string& chapterPath, s
   return chapterIndexOut > 0 && !seriesIdOut.empty() && !seriesDirOut.empty();
 }
 
-std::optional<SeriesChapter> SeriesManifestStore::findByIndex(const SeriesManifest& manifest, const int chapterIndex) {
-  auto it = std::find_if(manifest.chapters.begin(), manifest.chapters.end(),
-                         [chapterIndex](const SeriesChapter& chapter) { return chapter.chapterIndex == chapterIndex; });
-  if (it == manifest.chapters.end()) {
-    return std::nullopt;
-  }
-  return *it;
-}
-
-std::optional<SeriesChapter> SeriesManifestStore::findByPath(const SeriesManifest& manifest,
-                                                             const std::string& chapterPath) {
-  for (const auto& chapter : manifest.chapters) {
-    if (buildChapterPath(manifest.seriesDir, chapter.file) == chapterPath) {
-      return chapter;
-    }
-  }
-  return std::nullopt;
-}
-
-bool SeriesManifestStore::resolveChapterPath(const SeriesManifest& manifest, const int chapterIndex,
-                                             std::string& chapterPath) {
-  const auto chapter = findByIndex(manifest, chapterIndex);
-  if (!chapter.has_value()) {
+bool SeriesManifestStore::tryGetChapterIndexByPath(const std::string& chapterPath, int& chapterIndexOut) {
+  chapterIndexOut = 0;
+  const std::string seriesDir = extractSeriesDir(chapterPath);
+  if (seriesDir.empty()) {
     return false;
   }
-  chapterPath = buildChapterPath(manifest.seriesDir, chapter->file);
-  return true;
+
+  SeriesChapter chapter;
+  if (!findChapterByPathInSeriesDir(seriesDir, chapterPath, chapter, nullptr)) {
+    return false;
+  }
+
+  chapterIndexOut = chapter.chapterIndex;
+  return chapterIndexOut > 0;
+}
+
+bool SeriesManifestStore::tryResolveChapterPath(const std::string& seriesDir, const int chapterIndex,
+                                                std::string& chapterPath) {
+  std::vector<SeriesChapter> slice;
+  constexpr size_t kSliceSize = 64;
+  const size_t total = countChaptersFromSeriesDir(seriesDir);
+  for (size_t start = 0; start < total; start += kSliceSize) {
+    if (!loadChapterSliceFromSeriesDir(seriesDir, start, kSliceSize, slice)) {
+      return false;
+    }
+    for (const auto& chapter : slice) {
+      if (chapter.chapterIndex == chapterIndex) {
+        chapterPath = buildChapterPath(seriesDir, chapter.file);
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 std::string SeriesManifestStore::buildChapterPath(const std::string& seriesDir, const std::string& relativeFile) {
@@ -608,48 +558,4 @@ std::string SeriesManifestStore::extractSeriesDir(const std::string& chapterPath
     return "/";
   }
   return chapterPath.substr(0, slashPos);
-}
-
-bool SeriesManifestStore::parseJson(const std::string& json, const std::string& seriesDir, SeriesManifest& manifest) {
-  JsonDocument doc;
-  auto error = deserializeJson(doc, json.c_str());
-  if (error) {
-    LOG_ERR("SER", "Series manifest parse error: %s", error.c_str());
-    return false;
-  }
-
-  SeriesManifest parsed;
-  parsed.version = doc["version"] | 0;
-  parsed.seriesId = doc["seriesId"] | std::string("");
-  parsed.title = doc["title"] | std::string("");
-  parsed.author = doc["author"] | std::string("");
-  parsed.sourceId = doc["sourceId"] | std::string("");
-  parsed.sourceName = doc["sourceName"] | std::string("");
-  parsed.description = doc["description"] | std::string("");
-  parsed.coverPath = doc["coverPath"] | std::string("");
-  parsed.status = doc["status"] | std::string("");
-  parsed.updatedAt = doc["updatedAt"] | std::string("");
-  parsed.seriesDir = seriesDir;
-
-  JsonArray chapters = doc["chapters"].as<JsonArray>();
-  for (JsonObject chapterObj : chapters) {
-    SeriesChapter chapter;
-    chapter.chapterIndex = chapterObj["chapterIndex"] | 0;
-    chapter.title = chapterObj["title"] | std::string("");
-    chapter.file = chapterObj["file"] | std::string("");
-    if (chapter.chapterIndex <= 0 || chapter.file.empty()) {
-      continue;
-    }
-    parsed.chapters.push_back(std::move(chapter));
-  }
-
-  if (!parsed.isValid()) {
-    LOG_ERR("SER", "Series manifest invalid for dir: %s", seriesDir.c_str());
-    return false;
-  }
-
-  std::sort(parsed.chapters.begin(), parsed.chapters.end(),
-            [](const SeriesChapter& left, const SeriesChapter& right) { return left.chapterIndex < right.chapterIndex; });
-  manifest = std::move(parsed);
-  return true;
 }

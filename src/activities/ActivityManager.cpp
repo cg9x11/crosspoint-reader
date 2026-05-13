@@ -3,6 +3,7 @@
 #include <HalPowerManager.h>
 
 #include <algorithm>
+#include <cstdio>
 
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
@@ -59,9 +60,17 @@ void ActivityManager::renderTaskLoop() {
 }
 
 void ActivityManager::loop() {
+  std::fprintf(stderr, "[EMUDBG] ActivityManager::loop enter current=%s pendingAction=%d pending=%s\n",
+               currentActivity ? currentActivity->name.c_str() : "<none>", static_cast<int>(pendingAction),
+               pendingActivity ? pendingActivity->name.c_str() : "<none>");
   if (currentActivity) {
     // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed
+    LOG_DBG("ACT", "Loop activity begin: %s", currentActivity->name.c_str());
     currentActivity->loop();
+    std::fprintf(stderr, "[EMUDBG] ActivityManager::loop after current loop current=%s pendingAction=%d pending=%s\n",
+                 currentActivity ? currentActivity->name.c_str() : "<none>", static_cast<int>(pendingAction),
+                 pendingActivity ? pendingActivity->name.c_str() : "<none>");
+    LOG_DBG("ACT", "Loop activity end: %s", currentActivity->name.c_str());
   }
 
   while (pendingAction != PendingAction::None) {
@@ -113,11 +122,24 @@ void ActivityManager::loop() {
 
     } else if (pendingActivity) {
       // Current activity has requested a new activity to be launched
+      std::fprintf(stderr, "[EMUDBG] ActivityManager pending branch before RenderLock action=%d pending=%s current=%s\n",
+                   static_cast<int>(pendingAction), pendingActivity ? pendingActivity->name.c_str() : "<none>",
+                   currentActivity ? currentActivity->name.c_str() : "<none>");
       RenderLock lock;
+      std::fprintf(stderr, "[EMUDBG] ActivityManager pending branch after RenderLock action=%d pending=%s current=%s\n",
+                   static_cast<int>(pendingAction), pendingActivity ? pendingActivity->name.c_str() : "<none>",
+                   currentActivity ? currentActivity->name.c_str() : "<none>");
+      std::fprintf(stderr, "[EMUDBG] ActivityManager pending branch before ACT log\n");
+      LOG_DBG("ACT", "Processing pending activity: %s action=%d current=%s", pendingActivity->name.c_str(),
+              static_cast<int>(pendingAction), currentActivity ? currentActivity->name.c_str() : "<none>");
+      std::fprintf(stderr, "[EMUDBG] ActivityManager pending branch after ACT log\n");
 
       if (pendingAction == PendingAction::Replace) {
         // Destroy the current activity
+        std::fprintf(stderr, "[EMUDBG] ActivityManager replace before exitActivity\n");
+        LOG_DBG("ACT", "Replace: exiting current activity");
         exitActivity(lock);
+        std::fprintf(stderr, "[EMUDBG] ActivityManager replace after exitActivity\n");
         // Clear the stack
         while (!stackActivities.empty()) {
           stackActivities.back()->onExit();
@@ -128,11 +150,22 @@ void ActivityManager::loop() {
         stackActivities.push_back(std::move(currentActivity));
         LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
       }
+      std::fprintf(stderr, "[EMUDBG] ActivityManager before clear pendingAction\n");
       pendingAction = PendingAction::None;
+      std::fprintf(stderr, "[EMUDBG] ActivityManager before move current=pending\n");
       currentActivity = std::move(pendingActivity);
+      std::fprintf(stderr, "[EMUDBG] ActivityManager after move current=%s\n",
+                   currentActivity ? currentActivity->name.c_str() : "<none>");
+      LOG_DBG("ACT", "About to enter activity: %s", currentActivity ? currentActivity->name.c_str() : "<none>");
 
+      std::fprintf(stderr, "[EMUDBG] ActivityManager before unlock\n");
       lock.unlock();  // onEnter may acquire its own lock
+      std::fprintf(stderr, "[EMUDBG] ActivityManager before onEnter current=%s\n",
+                   currentActivity ? currentActivity->name.c_str() : "<none>");
       currentActivity->onEnter();
+      std::fprintf(stderr, "[EMUDBG] ActivityManager after onEnter current=%s\n",
+                   currentActivity ? currentActivity->name.c_str() : "<none>");
+      LOG_DBG("ACT", "Activity onEnter returned: %s", currentActivity ? currentActivity->name.c_str() : "<none>");
 
       // onEnter may request another pending action, we will handle it in the next loop iteration
       continue;
