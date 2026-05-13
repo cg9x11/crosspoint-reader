@@ -34,8 +34,7 @@ function setSessionCookie(app: FastifyInstance, request: FastifyRequest, reply: 
   const forwardedProtoValue = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
   const secureCookie =
     request.protocol === "https" ||
-    forwardedProtoValue === "https" ||
-    (app.appConfig.PROXY_TRUST && app.appConfig.APP_BASE_URL.startsWith("https://"));
+    forwardedProtoValue === "https";
 
   reply.setCookie(getSessionCookieName(), sessionToken, {
     httpOnly: true,
