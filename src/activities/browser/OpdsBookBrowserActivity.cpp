@@ -1573,6 +1573,14 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
     }
     queueFetch(returnPath);
   };
+  auto failSeriesDownload = [this](const std::string& failedUrl, const char* fallbackPhase) {
+    currentFileDownloaded = 0;
+    currentFileTotal = 0;
+    state = BrowserState::ERROR;
+    errorMessage = buildVerboseHttpErrorText(failedUrl, fallbackPhase);
+    LOG_ERR("OPDS", "Series download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
+    requestUpdate();
+  };
   if (!Storage.ensureDirectoryExists(localSeriesDir.c_str())) {
     LOG_ERR("OPDS", "Failed to create series dir: %s", localSeriesDir.c_str());
     state = BrowserState::ERROR;
@@ -1735,10 +1743,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
             return;
           }
           if (result != HttpDownloader::OK) {
-            LOG_ERR("OPDS", "Series chapter download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
-            currentFileDownloaded = 0;
-            currentFileTotal = 0;
-            reloadBrowseFeed(false);
+            failSeriesDownload(pending.chapterUrl, "chapter");
             return;
           }
 
@@ -1878,10 +1883,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
         return;
       }
       if (result != HttpDownloader::OK) {
-        LOG_ERR("OPDS", "Series chapter download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
-        currentFileDownloaded = 0;
-        currentFileTotal = 0;
-        reloadBrowseFeed(false);
+        failSeriesDownload(pending.chapterUrl, "chapter");
         return;
       }
 
