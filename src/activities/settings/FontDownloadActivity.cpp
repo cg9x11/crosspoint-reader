@@ -298,6 +298,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
       fileProgress_ = downloaded;
       fileTotal_ = total;
       requestUpdate(true);
+      return true;
     });
 
     if (result != HttpDownloader::OK) {

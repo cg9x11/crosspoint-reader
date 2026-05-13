@@ -102,17 +102,17 @@ typedef struct {
 
 /// Maps a codepoint to a kerning class ID, sorted by codepoint for binary search.
 /// Class IDs are 1-based; codepoints not in the table have implicit class 0 (no kerning).
-EPD_PACKED_STRUCT(typedef struct {
+typedef struct __attribute__((packed)) {
   uint16_t codepoint;  ///< Unicode codepoint
   uint8_t classId;     ///< 1-based kerning class ID
-} EpdKernClassEntry);
+} EpdKernClassEntry;
 
 /// Ligature substitution for a specific glyph pair, sorted by `pair` for binary search.
 /// `pair` encodes (leftCodepoint << 16 | rightCodepoint) for single-key lookup.
-EPD_PACKED_STRUCT(typedef struct {
+typedef struct __attribute__((packed)) {
   uint32_t pair;        ///< Packed codepoint pair (left << 16 | right)
   uint32_t ligatureCp;  ///< Codepoint of the replacement ligature glyph
-} EpdLigaturePair);
+} EpdLigaturePair;
 
 /// Data stored for FONT AS A WHOLE
 typedef struct {
