@@ -4375,11 +4375,20 @@
       }
 
       if (route.page === "translations") {
-      return {
-        title: "Đang tải bản dịch",
-        subtitle: "Chuẩn bị project dịch, glossary, version và export..."
-      };
-    }
+      activatePage("translations", "translations");
+      await loadTranslationProjects(route.projectId ? true : false);
+      if (route.projectId) {
+        await loadTranslationProjectDetail(route.projectId);
+      } else {
+        state.translationDetail = null;
+        state.activeTranslationProjectId = null;
+      }
+      if (token !== state.routeToken) {
+        return;
+      }
+      renderTranslations();
+      return;
+      }
 
     if (route.page === "server") {
       activatePage("server", "server");
@@ -4436,4 +4445,3 @@
     void initAppPage();
   });
 })();
-
