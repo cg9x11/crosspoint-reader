@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { z } from "zod";
 
@@ -28,9 +28,14 @@ function validationErrorMessage(result: z.SafeParseError<unknown>) {
   return result.error.issues[0]?.message || "Dữ liệu gửi lên không hợp lệ.";
 }
 
-function setSessionCookie(app: FastifyInstance, reply: FastifyReply, username: string) {
+function setSessionCookie(app: FastifyInstance, request: FastifyRequest, reply: FastifyReply, username: string) {
   const sessionToken = createSessionToken(username, app.appConfig.SESSION_SECRET);
-  const secureCookie = app.appConfig.APP_BASE_URL.startsWith("https://");
+  const forwardedProto = request.headers["x-forwarded-proto"];
+  const forwardedProtoValue = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  const secureCookie =
+    request.protocol === "https" ||
+    forwardedProtoValue === "https" ||
+    (app.appConfig.PROXY_TRUST && app.appConfig.APP_BASE_URL.startsWith("https://"));
 
   reply.setCookie(getSessionCookieName(), sessionToken, {
     httpOnly: true,
@@ -78,7 +83,7 @@ export async function registerAuthApiRoutes(app: FastifyInstance) {
       };
     }
 
-    setSessionCookie(app, reply, authState.username);
+    setSessionCookie(app, request, reply, authState.username);
 
     return {
       ok: true,
@@ -147,7 +152,7 @@ export async function registerAuthApiRoutes(app: FastifyInstance) {
 
     request.authState = nextAuthState;
     request.sessionUser = body.username;
-    setSessionCookie(app, reply, body.username);
+    setSessionCookie(app, request, reply, body.username);
 
     return {
       ok: true,

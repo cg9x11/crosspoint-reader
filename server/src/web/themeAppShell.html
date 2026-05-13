@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
@@ -10,9 +10,9 @@
 </head>
 <body>
 
-<!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+<!-- ═══════════════════════════════════════════════
      SIDEBAR NAV (Desktop)
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+════════════════════════════════════════════════ -->
 <nav class="sidebar" id="sidebar">
   <div class="sidebar-logo">
     <span class="logo-mark">X</span>
@@ -27,7 +27,7 @@
           <line x1="14" y1="4" x2="15.5" y2="4"/>
         </svg>
       </span>
-      <span class="nav-label">ThÆ° Viá»‡n</span>
+      <span class="nav-label">Thư Viện</span>
     </li>
     <li class="nav-item" data-page="sources">
       <span class="nav-icon">
@@ -37,7 +37,7 @@
           <path d="M3.5 6.5h13M3.5 13.5h13"/>
         </svg>
       </span>
-      <span class="nav-label">Nguá»“n</span>
+      <span class="nav-label">Nguồn</span>
     </li>
     <li class="nav-item" data-page="browse">
       <span class="nav-icon">
@@ -46,7 +46,7 @@
           <path d="M13.5 13.5L17 17"/>
         </svg>
       </span>
-      <span class="nav-label">KhÃ¡m PhÃ¡</span>
+      <span class="nav-label">Khám Phá</span>
     </li>
     <li class="nav-item" data-page="translations">
       <span class="nav-icon">
@@ -78,17 +78,17 @@
   </div>
 </nav>
 
-<!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+<!-- ═══════════════════════════════════════════════
      MAIN CONTENT
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+════════════════════════════════════════════════ -->
 <main class="main" id="main">
 
-  <!-- â”€â”€ LIBRARY PAGE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+  <!-- ── LIBRARY PAGE ─────────────────────────── -->
   <section class="page active" id="page-library">
     <header class="page-header">
       <div class="page-header-inner">
-        <h1 class="page-title">ThÆ° Viá»‡n</h1>
-        <button class="icon-btn" title="Sync táº¥t cáº£">
+        <h1 class="page-title">Thư Viện</h1>
+        <button class="icon-btn" title="Sync tất cả">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M3 10a7 7 0 0113.5-2.5M17 10a7 7 0 01-13.5 2.5"/>
             <path d="M15 5l1.5 2.5L14 8.5M5 15l-1.5-2.5L6 11.5" stroke-linecap="round"/>
@@ -96,10 +96,10 @@
         </button>
       </div>
       <div class="filter-bar">
-        <button class="filter-btn active" data-filter="all">Táº¥t cáº£</button>
-        <button class="filter-btn" data-filter="ongoing">Äang ra</button>
-        <button class="filter-btn" data-filter="completed">HoÃ n thÃ nh</button>
-        <button class="filter-btn" data-filter="downloaded">ÄÃ£ táº£i</button>
+        <button class="filter-btn active" data-filter="all">Tất cả</button>
+        <button class="filter-btn" data-filter="ongoing">Đang ra</button>
+        <button class="filter-btn" data-filter="completed">Hoàn thành</button>
+        <button class="filter-btn" data-filter="downloaded">Đã tải</button>
       </div>
     </header>
 
@@ -114,18 +114,18 @@
           <path d="M28 8v10h10M16 20h4M16 26h12M16 32h8"/>
         </svg>
       </div>
-      <p class="empty-title">ThÆ° viá»‡n trá»‘ng</p>
-      <p class="empty-sub">VÃ o <strong>KhÃ¡m PhÃ¡</strong> Ä‘á»ƒ tÃ¬m vÃ  lÆ°u truyá»‡n</p>
-      <button class="btn-primary" onclick="navigate('browse')">KhÃ¡m PhÃ¡ Ngay</button>
+      <p class="empty-title">Thư viện trống</p>
+      <p class="empty-sub">Vào <strong>Khám Phá</strong> để tìm và lưu truyện</p>
+      <button class="btn-primary" onclick="navigate('browse')">Khám Phá Ngay</button>
     </div>
   </section>
 
-  <!-- â”€â”€ SOURCES PAGE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+  <!-- ── SOURCES PAGE ──────────────────────────── -->
   <section class="page" id="page-sources">
     <header class="page-header">
       <div class="page-header-inner">
-        <h1 class="page-title">Nguá»“n</h1>
-        <button class="icon-btn" id="add-source-btn" title="ThÃªm nguá»“n">
+        <h1 class="page-title">Nguồn</h1>
+        <button class="icon-btn" id="add-source-btn" title="Thêm nguồn">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
             <circle cx="10" cy="10" r="7"/>
             <line x1="10" y1="6.5" x2="10" y2="13.5"/>
@@ -149,16 +149,16 @@
             <line x1="6.5" y1="10" x2="13.5" y2="10"/>
           </svg>
         </span>
-        ThÃªm nguá»“n tá»« URL
+        Thêm nguồn từ URL
       </button>
     </div>
   </section>
 
-  <!-- â”€â”€ BROWSE PAGE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+  <!-- ── BROWSE PAGE ───────────────────────────── -->
   <section class="page" id="page-browse">
     <header class="page-header browse-header">
       <div class="page-header-inner">
-        <h1 class="page-title">KhÃ¡m PhÃ¡</h1>
+        <h1 class="page-title">Khám Phá</h1>
       </div>
 
       <!-- Source selector -->
@@ -169,14 +169,14 @@
       <!-- Search bar -->
       <div class="search-wrap">
         <div class="search-box">
-          <button class="search-submit" id="browse-search-submit" type="button" aria-label="TÃ¬m kiáº¿m">
+          <button class="search-submit" id="browse-search-submit" type="button" aria-label="Tìm kiếm">
             <svg class="search-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
               <circle cx="9" cy="9" r="5.5"/>
               <path d="M13.5 13.5L17 17"/>
             </svg>
           </button>
           <input type="search" class="search-input" id="browse-search"
-                 placeholder="TÃ¬m truyá»‡n, tÃ¡c giáº£â€¦" autocomplete="off">
+                 placeholder="Tìm truyện, tác giả…" autocomplete="off">
           <button class="search-clear" id="search-clear" style="display:none">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
               <line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/>
@@ -187,15 +187,15 @@
 
       <!-- Category tabs -->
       <div class="category-bar" id="category-bar">
-        <button class="cat-btn active" data-cat="all">Táº¥t cáº£</button>
-        <button class="cat-btn" data-cat="new">Má»›i cáº­p nháº­t</button>
-        <button class="cat-btn" data-cat="hot">Ná»•i báº­t</button>
-        <button class="cat-btn" data-cat="completed">HoÃ n thÃ nh</button>
-        <button class="cat-btn" data-cat="tiÃªn hiá»‡p">TiÃªn Hiá»‡p</button>
-        <button class="cat-btn" data-cat="kiáº¿m hiá»‡p">Kiáº¿m Hiá»‡p</button>
-        <button class="cat-btn" data-cat="Ä‘Ã´ thá»‹">ÄÃ´ Thá»‹</button>
-        <button class="cat-btn" data-cat="huyá»n huyá»…n">Huyá»n Huyá»…n</button>
-        <button class="cat-btn" data-cat="ngÃ´n tÃ¬nh">NgÃ´n TÃ¬nh</button>
+        <button class="cat-btn active" data-cat="all">Tất cả</button>
+        <button class="cat-btn" data-cat="new">Mới cập nhật</button>
+        <button class="cat-btn" data-cat="hot">Nổi bật</button>
+        <button class="cat-btn" data-cat="completed">Hoàn thành</button>
+        <button class="cat-btn" data-cat="tiên hiệp">Tiên Hiệp</button>
+        <button class="cat-btn" data-cat="kiếm hiệp">Kiếm Hiệp</button>
+        <button class="cat-btn" data-cat="đô thị">Đô Thị</button>
+        <button class="cat-btn" data-cat="huyền huyễn">Huyền Huyễn</button>
+        <button class="cat-btn" data-cat="ngôn tình">Ngôn Tình</button>
       </div>
     </header>
 
@@ -204,18 +204,18 @@
     </div>
 
     <div class="load-more-wrap">
-      <button class="btn-load-more" id="load-more-btn">Táº£i thÃªm</button>
+      <button class="btn-load-more" id="load-more-btn">Tải thêm</button>
     </div>
   </section>
 
-  <!-- â”€â”€ NOVEL DETAIL PAGE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+  <!-- ── NOVEL DETAIL PAGE ─────────────────────── -->
   <section class="page" id="page-detail">
     <header class="page-header detail-header">
       <button class="back-btn" id="back-btn">
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8">
           <path d="M12 4L5 10l7 6" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        <span>Quay láº¡i</span>
+        <span>Quay lại</span>
       </button>
     </header>
 
@@ -230,7 +230,7 @@
         </h2>
         <p class="detail-author" id="detail-author"></p>
         <a class="detail-origin-link" id="detail-origin-link" href="#" target="_blank" rel="noopener noreferrer">
-          Má»Ÿ truyá»‡n gá»‘c
+          Mở truyện gốc
         </a>
         <div class="detail-badges" id="detail-badges"></div>
       </div>
@@ -243,49 +243,49 @@
 
       <div class="detail-stats">
         <div class="stat-item">
-          <span class="stat-val" id="stat-chapters">â€”</span>
-          <span class="stat-lbl">ChÆ°Æ¡ng</span>
+          <span class="stat-val" id="stat-chapters">—</span>
+          <span class="stat-lbl">Chương</span>
         </div>
         <div class="stat-item">
-          <span class="stat-val" id="stat-status">â€”</span>
-          <span class="stat-lbl">Tráº¡ng thÃ¡i</span>
+          <span class="stat-val" id="stat-status">—</span>
+          <span class="stat-lbl">Trạng thái</span>
         </div>
         <div class="stat-item">
-          <span class="stat-val" id="stat-source">â€”</span>
-          <span class="stat-lbl">Nguá»“n</span>
+          <span class="stat-val" id="stat-source">—</span>
+          <span class="stat-lbl">Nguồn</span>
         </div>
       </div>
 
       <div class="detail-actions" id="detail-actions">
         <button class="btn-primary btn-full" id="btn-add-library">
-          + ThÃªm vÃ o ThÆ° Viá»‡n
+          + Thêm vào Thư Viện
         </button>
         <button class="btn-secondary btn-full" id="btn-download-all" style="display:none">
-          â†“ Táº£i táº¥t cáº£ chÆ°Æ¡ng
+          ↓ Tải tất cả chương
         </button>
         <button class="btn-secondary btn-full" id="btn-rebuild-library" style="display:none">
-          â†» Rebuild local files
+          ↻ Rebuild local files
         </button>
         <button class="btn-secondary btn-full" id="btn-export-epub" style="display:none">
-          â‡© Xuáº¥t EPUB tá»•ng há»£p
+          ⇩ Xuất EPUB tổng hợp
         </button>
         <button class="btn-ghost btn-full" id="btn-remove-library" style="display:none">
-          XÃ³a khá»i thÆ° viá»‡n
+          Xóa khỏi thư viện
         </button>
         <button class="btn-ghost btn-full" id="btn-in-library" style="display:none">
-          âœ“ ÄÃ£ trong thÆ° viá»‡n
+          ✓ Đã trong thư viện
         </button>
       </div>
 
       <!-- Chapter list -->
       <div class="chapter-section">
         <div class="chapter-section-header">
-          <h3 class="section-title">Danh sÃ¡ch chÆ°Æ¡ng</h3>
+          <h3 class="section-title">Danh sách chương</h3>
           <button class="sort-btn" id="sort-btn" data-asc="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
               <path d="M2 4h12M4 8h8M6 12h4"/>
             </svg>
-            Má»›i nháº¥t
+            Mới nhất
           </button>
         </div>
         <div class="chapter-list" id="chapter-list">
@@ -295,7 +295,7 @@
     </div>
   </section>
 
-  <!-- â”€â”€ SERVER PAGE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+  <!-- ── SERVER PAGE ───────────────────────────── -->
   <section class="page" id="page-translations">
     <header class="page-header">
       <div class="page-header-inner">
@@ -337,7 +337,7 @@
         </div>
         <div class="status-indicator" id="status-indicator">
           <div class="status-pulse"></div>
-          <span class="status-text" id="status-text">Äang cháº¡y</span>
+          <span class="status-text" id="status-text">Đang chạy</span>
         </div>
         <div class="server-url-row">
           <code class="server-url" id="server-url">http://xteink-reader.local:8080/opds</code>
@@ -348,7 +348,7 @@
             </svg>
           </button>
         </div>
-        <p class="server-hint">Nháº­p URL nÃ y vÃ o Xteink â†’ Settings â†’ OPDS Servers</p>
+        <p class="server-hint">Nhập URL này vào Xteink → Settings → OPDS Servers</p>
       </div>
 
       <!-- Stats -->
@@ -356,22 +356,22 @@
         <div class="server-stats-grid">
           <div class="server-stat">
             <span class="s-val" id="s-novels">24</span>
-            <span class="s-lbl">Truyá»‡n</span>
+            <span class="s-lbl">Truyện</span>
           </div>
           <div class="server-stat">
             <span class="s-val" id="s-chapters">8,432</span>
-            <span class="s-lbl">ChÆ°Æ¡ng</span>
+            <span class="s-lbl">Chương</span>
           </div>
           <div class="server-stat">
             <span class="s-val" id="s-size">1.2 GB</span>
-            <span class="s-lbl">Dung lÆ°á»£ng</span>
+            <span class="s-lbl">Dung lượng</span>
           </div>
         </div>
       </div>
 
       <!-- Activity log -->
       <div class="server-card log-card">
-        <h3 class="card-title">Hoáº¡t Ä‘á»™ng gáº§n Ä‘Ã¢y</h3>
+        <h3 class="card-title">Hoạt động gần đây</h3>
         <div class="log-list" id="log-list">
           <!-- Generated by JS -->
         </div>
@@ -379,7 +379,7 @@
 
       <!-- Xteink connection -->
       <div class="server-card connect-card">
-        <h3 class="card-title">Thiáº¿t bá»‹ káº¿t ná»‘i</h3>
+        <h3 class="card-title">Thiết bị kết nối</h3>
         <div class="device-row">
           <div class="device-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3">
@@ -390,7 +390,7 @@
           </div>
           <div class="device-info">
             <span class="device-name">Xteink X4</span>
-            <span class="device-last">Káº¿t ná»‘i láº§n cuá»‘i: 2 phÃºt trÆ°á»›c</span>
+            <span class="device-last">Kết nối lần cuối: 2 phút trước</span>
           </div>
           <span class="device-dot online"></span>
         </div>
@@ -404,24 +404,24 @@
   <div class="route-loading-card">
     <div class="route-loading-mark">X</div>
     <p class="route-loading-kicker" id="route-loading-kicker">XteinkReader</p>
-    <h2 class="route-loading-title" id="route-loading-title">Äang táº£i dá»¯ liá»‡u</h2>
-    <p class="route-loading-subtitle" id="route-loading-subtitle">Chuáº©n bá»‹ ná»™i dung trangâ€¦</p>
+    <h2 class="route-loading-title" id="route-loading-title">Đang tải dữ liệu</h2>
+    <p class="route-loading-subtitle" id="route-loading-subtitle">Chuẩn bị nội dung trang…</p>
     <div class="route-loading-bar" aria-hidden="true">
       <span class="route-loading-bar-fill"></span>
     </div>
   </div>
 </div>
 
-<!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+<!-- ═══════════════════════════════════════════════
      BOTTOM NAV (Mobile)
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+════════════════════════════════════════════════ -->
 <nav class="bottom-nav" id="bottom-nav">
   <button class="bnav-item active" data-page="library">
     <svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.5">
       <path d="M4 4h3v14H4zM9 4h3v14H9zM17 4l-1 14"/>
       <line x1="14.5" y1="4" x2="16.5" y2="4"/>
     </svg>
-    <span>ThÆ° Viá»‡n</span>
+    <span>Thư Viện</span>
   </button>
   <button class="bnav-item" data-page="sources">
     <svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -429,14 +429,14 @@
       <path d="M11 3c-2.2 2.2-3.5 5-3.5 8s1.3 5.8 3.5 8M11 3c2.2 2.2 3.5 5 3.5 8s-1.3 5.8-3.5 8M3 11h16"/>
       <path d="M3.5 7h15M3.5 15h15"/>
     </svg>
-    <span>Nguá»“n</span>
+    <span>Nguồn</span>
   </button>
   <button class="bnav-item" data-page="browse">
     <svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.5">
       <circle cx="10" cy="10" r="6"/>
       <path d="M14.5 14.5L19 19"/>
     </svg>
-    <span>KhÃ¡m PhÃ¡</span>
+    <span>Khám Phá</span>
   </button>
   <button class="bnav-item" data-page="translations">
     <svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -456,15 +456,15 @@
   </button>
 </nav>
 
-<!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+<!-- ═══════════════════════════════════════════════
      MODALS
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+════════════════════════════════════════════════ -->
 
 <!-- Add Source Modal -->
 <div class="modal-overlay" id="add-source-modal" style="display:none">
   <div class="modal">
     <div class="modal-header">
-      <h3 class="modal-title">ThÃªm Nguá»“n</h3>
+      <h3 class="modal-title">Thêm Nguồn</h3>
       <button class="modal-close" data-close="add-source-modal">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
           <line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/>
@@ -475,11 +475,11 @@
       <label class="form-label">URL Manifest (plugin.json)</label>
       <input type="url" class="form-input" id="source-url-input"
              placeholder="https://example.com/plugin.json">
-      <p class="form-hint">DÃ¡n URL file manifest cá»§a plugin Ä‘á»ƒ thÃªm nguá»“n má»›i</p>
+      <p class="form-hint">Dán URL file manifest của plugin để thêm nguồn mới</p>
     </div>
     <div class="modal-footer">
-      <button class="btn-ghost" data-close="add-source-modal">Huá»·</button>
-      <button class="btn-primary" id="confirm-add-source">ThÃªm</button>
+      <button class="btn-ghost" data-close="add-source-modal">Huỷ</button>
+      <button class="btn-primary" id="confirm-add-source">Thêm</button>
     </div>
   </div>
 </div>

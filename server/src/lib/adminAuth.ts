@@ -1,4 +1,4 @@
-﻿import type { PrismaClient } from "./prisma.js";
+import type { PrismaClient } from "./prisma.js";
 
 import type { AppConfig } from "../config/env.js";
 import { hashAdminPassword } from "./auth.js";

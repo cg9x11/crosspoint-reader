@@ -1,4 +1,4 @@
-﻿import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { resolveAdminAuthState } from "../lib/adminAuth.js";
 import { getAppCss, getAppJs, getUiMeta, renderAppPage, renderLoginPage } from "../web/shell.js";
