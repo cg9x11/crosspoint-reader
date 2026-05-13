@@ -13,6 +13,88 @@ import {
 import { fileExists, writeJsonFileAtomic } from "../lib/filesystem.js";
 import { repairJsonStringsDeep } from "../lib/text.js";
 
+async function resolveEditionSelection(
+  app: FastifyInstance,
+  novel: {
+    id: string;
+    defaultEditionKind: string;
+    defaultTranslationProjectId: string | null;
+  },
+  requestedEditionId?: string | null
+) {
+  const selectedEditionId = requestedEditionId && requestedEditionId !== "default" ? requestedEditionId : null;
+  const projectId =
+    selectedEditionId && selectedEditionId !== "original"
+      ? selectedEditionId
+      : novel.defaultEditionKind === "translation"
+        ? novel.defaultTranslationProjectId
+        : null;
+
+  if (!projectId) {
+    return {
+      id: "original",
+      kind: "original",
+      label: "Bản gốc",
+      chapterMap: new Map<number, { path: string; fileName: string }>()
+    };
+  }
+
+  const project = await app.prisma.translationProject.findFirst({
+    where: {
+      id: projectId,
+      novelId: novel.id
+    },
+    select: {
+      id: true,
+      name: true,
+      targetLanguage: true,
+      chapterTranslations: {
+        include: {
+          chapter: {
+            select: {
+              chapterIndex: true
+            }
+          },
+          versions: true
+        }
+      }
+    }
+  });
+
+  if (!project) {
+    return {
+      id: "original",
+      kind: "original",
+      label: "Bản gốc",
+      chapterMap: new Map<number, { path: string; fileName: string }>()
+    };
+  }
+
+  const chapterMap = new Map<number, { path: string; fileName: string }>();
+  for (const item of project.chapterTranslations) {
+    const published = item.versions.find((entry) => entry.id === item.currentPublishedVersionId);
+    if (!published) {
+      continue;
+    }
+    const assetPath = published.textPath || published.htmlPath;
+    if (!assetPath || !(await fileExists(assetPath))) {
+      continue;
+    }
+    chapterMap.set(item.chapter.chapterIndex, {
+      path: assetPath,
+      fileName: path.basename(assetPath)
+    });
+  }
+
+  return {
+    id: project.id,
+    kind: "translation",
+    label: project.name,
+    language: project.targetLanguage,
+    chapterMap
+  };
+}
+
 function absoluteUrl(baseUrl: string, routePath: string) {
   return new URL(routePath, `${baseUrl}/`).toString();
 }
@@ -190,6 +272,7 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
   app.get("/opds/series/:novelId", async (request, reply) => {
     const baseUrl = resolvePublicBaseUrl(request, app.appConfig.APP_BASE_URL);
     const novelId = (request.params as { novelId: string }).novelId;
+    const editionQuery = (request.query as { edition?: string } | undefined)?.edition ?? null;
     const novel = await app.prisma.novel.findUnique({
       where: { id: novelId },
       include: {
@@ -205,13 +288,15 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
       return { ok: false, error: "SERIES_NOT_FOUND" };
     }
 
+    const edition = await resolveEditionSelection(app, novel, editionQuery);
+
     const feed = buildOpdsFeed({
-      id: absoluteUrl(baseUrl, `/opds/series/${novelId}`),
-      title: novel.title,
+      id: absoluteUrl(baseUrl, `/opds/series/${novelId}${edition.id !== "original" ? `?edition=${encodeURIComponent(edition.id)}` : ""}`),
+      title: edition.kind === "translation" ? `${novel.title} — ${edition.label}` : novel.title,
       updatedAt: novel.updatedAt.toISOString(),
       links: [
         {
-          href: absoluteUrl(baseUrl, `/opds/series/${novelId}`),
+          href: absoluteUrl(baseUrl, `/opds/series/${novelId}${edition.id !== "original" ? `?edition=${encodeURIComponent(edition.id)}` : ""}`),
           rel: "self",
           type: "application/atom+xml;profile=opds-catalog;kind=acquisition"
         },
@@ -223,21 +308,28 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
       ],
       entries: await Promise.all(
         novel.chapters.map(async (chapter) => {
-          const asset = await resolveChapterDownloadAsset(novelId, chapter.chapterIndex, chapter.epubPath);
+          const translationAsset = edition.chapterMap.get(chapter.chapterIndex) || null;
+          const originalAsset = await resolveChapterDownloadAsset(novelId, chapter.chapterIndex, chapter.epubPath);
+          const asset = translationAsset || originalAsset;
           const fileName = asset?.fileName || `ch_${String(chapter.chapterIndex).padStart(3, "0")}.txt`;
-          const mediaType = fileName.toLowerCase().endsWith(".epub")
+          const mediaType = translationAsset
+            ? "text/plain; charset=utf-8"
+            : fileName.toLowerCase().endsWith(".epub")
             ? "application/epub+zip"
             : "text/plain; charset=utf-8";
 
           return {
             id: `urn:chapter:${chapter.id}`,
-            title: chapter.title,
+            title: edition.kind === "translation" ? `${chapter.title} · ${edition.label}` : chapter.title,
             updatedAt: (chapter.publishedAt ?? chapter.updatedAt).toISOString(),
             summary: novel.description ?? undefined,
             author: novel.author ?? undefined,
             links: [
               {
-                href: absoluteUrl(baseUrl, `/opds/download/${novelId}/${fileName}`),
+                href: absoluteUrl(
+                  baseUrl,
+                  `/opds/download/${novelId}/${fileName}${edition.id !== "original" ? `?edition=${encodeURIComponent(edition.id)}` : ""}`
+                ),
                 rel: "http://opds-spec.org/acquisition",
                 type: mediaType
               }
@@ -297,6 +389,7 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
 
   app.get("/opds/download/:novelId/:chapterRef", async (request, reply) => {
     const { novelId, chapterRef } = request.params as { novelId: string; chapterRef: string };
+    const editionQuery = (request.query as { edition?: string } | undefined)?.edition ?? null;
     const chapterIndex = parseChapterIndex(chapterRef);
 
     if (chapterIndex <= 0) {
@@ -314,11 +407,21 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
         status: "published"
       },
       select: {
-        epubPath: true
+        epubPath: true,
+        novel: {
+          select: {
+            id: true,
+            defaultEditionKind: true,
+            defaultTranslationProjectId: true
+          }
+        }
       }
     });
 
-    const asset = await resolveChapterDownloadAsset(novelId, chapterIndex, chapter?.epubPath);
+    const edition = chapter?.novel ? await resolveEditionSelection(app, chapter.novel, editionQuery) : null;
+    const asset =
+      edition?.chapterMap.get(chapterIndex) ||
+      (await resolveChapterDownloadAsset(novelId, chapterIndex, chapter?.epubPath));
     if (!asset || !(await fileExists(asset.path))) {
       reply.code(404);
       return {
@@ -330,7 +433,7 @@ export async function registerOpdsRoutes(app: FastifyInstance) {
     try {
       const file = await fs.readFile(asset.path);
       reply.header("Content-Disposition", `attachment; filename="${path.basename(asset.path)}"`);
-      if (asset.path.toLowerCase().endsWith(".txt")) {
+      if (asset.path.toLowerCase().endsWith(".txt") || asset.path.toLowerCase().endsWith(".html")) {
         reply.type("text/plain; charset=utf-8");
       } else {
         reply.type("application/epub+zip");

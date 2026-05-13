@@ -1,11 +1,11 @@
-import { Worker } from "bullmq";
+﻿import { Worker } from "bullmq";
 import cron from "node-cron";
 
 import { loadConfig } from "../config/env.js";
 import { createPrismaClient, initializePrismaClient } from "../lib/db.js";
 import { createQueues } from "../queues/index.js";
-import { createRedisConnection } from "../queues/redis.js";
 import { QUEUE_NAMES } from "../queues/names.js";
+import { createRedisConnection } from "../queues/redis.js";
 import { createStorageLayout, ensureStorageLayout } from "../storage/paths.js";
 import {
   processChapterBuildJob,
@@ -13,6 +13,7 @@ import {
   processNovelSyncJob,
   runScheduledSyncScan
 } from "./handlers.js";
+import { processTranslationChapterJob } from "./translations.js";
 
 async function main() {
   const config = loadConfig();
@@ -48,6 +49,11 @@ async function main() {
       { connection, concurrency: config.QUEUE_CONCURRENCY_CHAPTER_BUILD }
     ),
     new Worker(
+      QUEUE_NAMES.translationChapter,
+      async (job) => processTranslationChapterJob(context, job),
+      { connection, concurrency: config.QUEUE_CONCURRENCY_TRANSLATION }
+    ),
+    new Worker(
       QUEUE_NAMES.maintenance,
       async (job) => {
         console.log(`${logPrefix} maintenance job ${job.name} (${job.id}) received`);
@@ -56,6 +62,7 @@ async function main() {
       { connection, concurrency: config.QUEUE_CONCURRENCY_MAINTENANCE }
     )
   ];
+
   const scheduledTask = cron.schedule(config.SYNC_CRON, async () => {
     try {
       const result = await runScheduledSyncScan(context);

@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+﻿import type { PrismaClient } from "./prisma.js";
 
 import type { AppConfig } from "../config/env.js";
 import { hashAdminPassword } from "./auth.js";
@@ -10,6 +10,7 @@ const AUTH_SETTING_KEYS = {
 } as const;
 
 const AUTH_HIDDEN_SETTING_KEYS = new Set<string>(Object.values(AUTH_SETTING_KEYS));
+const TRANSLATION_HIDDEN_PREFIXES = ["translation.secret.", "translation.settings."];
 
 export interface AdminAuthState {
   username: string;
@@ -107,5 +108,8 @@ export async function persistAdminCredentials(
 }
 
 export function isHiddenAppSettingKey(key: string) {
-  return AUTH_HIDDEN_SETTING_KEYS.has(key);
+  return AUTH_HIDDEN_SETTING_KEYS.has(key) || TRANSLATION_HIDDEN_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
+
+
+

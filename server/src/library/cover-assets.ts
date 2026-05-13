@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
+﻿import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "../lib/prisma.js";
 
 import { buildBmpImageAsset, buildEpubImageAsset } from "../lib/image-assets.js";
 import { ensureDir, fileExists, writeFileAtomic } from "../lib/filesystem.js";
@@ -110,3 +110,4 @@ export async function readEpubCoverBuffer(storagePaths: StorageLayout, novelId: 
     mediaType: "image/png"
   };
 }
+

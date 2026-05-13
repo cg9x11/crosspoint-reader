@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+﻿import type { PrismaClient } from "../lib/prisma.js";
 import type { Redis } from "ioredis";
 
 import type { AppConfig } from "../config/env.js";
@@ -22,3 +22,4 @@ declare module "fastify" {
 }
 
 export {};
+

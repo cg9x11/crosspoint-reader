@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+﻿import { PrismaClient } from "./prisma.js";
 
 export function createPrismaClient() {
   return new PrismaClient();
@@ -25,3 +25,4 @@ export async function initializePrismaClient(prisma: PrismaClient) {
     // Best-effort only.
   }
 }
+

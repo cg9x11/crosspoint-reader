@@ -1,6 +1,6 @@
-import "dotenv/config";
+﻿import "dotenv/config";
 
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../src/generated/prisma/index.js";
 
 const AUTH_SETTING_KEYS = [
   "auth.admin.username",
@@ -33,3 +33,4 @@ try {
 } finally {
   await prisma.$disconnect();
 }
+

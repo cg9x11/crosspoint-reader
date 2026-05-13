@@ -1,7 +1,7 @@
-import Fastify from "fastify";
+﻿import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "./lib/prisma.js";
 import type { Redis } from "ioredis";
 
 import type { AppConfig } from "./config/env.js";
@@ -98,3 +98,4 @@ export async function buildApp({ config, prisma, redis, storagePaths }: BuildApp
 
   return app;
 }
+

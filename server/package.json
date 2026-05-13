@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "worker:dev": "tsx watch src/worker/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-generated-prisma.mjs",
     "start": "node dist/src/index.js",
     "worker:start": "node dist/src/worker/index.js",
     "prisma:generate": "prisma generate",

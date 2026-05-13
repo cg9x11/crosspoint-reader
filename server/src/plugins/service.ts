@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
+﻿import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "../lib/prisma.js";
 
 import type { StorageLayout } from "../storage/paths.js";
 import {
@@ -873,3 +873,4 @@ export async function getSourceHandler(
   const { runtime } = await resolveRuntime(storagePaths, prisma, sourceId);
   return runtime;
 }
+

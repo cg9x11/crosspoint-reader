@@ -1,4 +1,4 @@
-import type { AppQueues } from "./index.js";
+﻿import type { AppQueues } from "./index.js";
 
 export interface NovelSyncJobData {
   novelId: string;
@@ -13,6 +13,14 @@ export interface ChapterFetchJobData {
 export interface ChapterBuildJobData {
   novelId: string;
   chapterId: string;
+}
+
+export interface TranslationChapterJobData {
+  projectId: string;
+  chapterId: string;
+  runId?: string;
+  triggerType?: string;
+  forcePublish?: boolean;
 }
 
 const DEFAULT_JOB_OPTIONS = {
@@ -71,6 +79,10 @@ export function getChapterBuildJobId(chapterId: string) {
   return buildSafeJobId("chapter-build", chapterId);
 }
 
+export function getTranslationChapterJobId(projectId: string, chapterId: string) {
+  return buildSafeJobId("translation-chapter", `${projectId}__${chapterId}`);
+}
+
 export async function enqueueNovelSync(
   queues: AppQueues,
   data: NovelSyncJobData
@@ -90,4 +102,16 @@ export async function enqueueChapterBuild(
   data: ChapterBuildJobData
 ) {
   return addOrReplaceJob(queues.chapterBuild, "build-chapter", data, getChapterBuildJobId(data.chapterId));
+}
+
+export async function enqueueTranslationChapter(
+  queues: AppQueues,
+  data: TranslationChapterJobData
+) {
+  return addOrReplaceJob(
+    queues.translationChapter,
+    "translate-chapter",
+    data,
+    getTranslationChapterJobId(data.projectId, data.chapterId)
+  );
 }

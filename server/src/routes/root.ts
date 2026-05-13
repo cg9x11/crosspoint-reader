@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+﻿import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { resolveAdminAuthState } from "../lib/adminAuth.js";
 import { getAppCss, getAppJs, getUiMeta, renderAppPage, renderLoginPage } from "../web/shell.js";
@@ -102,7 +102,11 @@ export async function registerRootRoutes(app: FastifyInstance) {
   app.get("/library/:novelId", renderProtectedPage);
   app.get("/sources", renderProtectedPage);
   app.get("/sources/:sourceId", renderProtectedPage);
+  app.get("/translations", renderProtectedPage);
+  app.get("/translations/:projectId", renderProtectedPage);
   app.get("/tasks", renderProtectedPage);
   app.get("/extensions", renderProtectedPage);
   app.get("/settings", renderProtectedPage);
 }
+
+

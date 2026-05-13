@@ -1,4 +1,4 @@
-import path from "node:path";
+﻿import path from "node:path";
 
 import { config as loadDotEnv } from "dotenv";
 import { z } from "zod";
@@ -39,6 +39,7 @@ const envSchema = z.object({
   QUEUE_CONCURRENCY_NOVEL_SYNC: z.coerce.number().int().positive().default(1),
   QUEUE_CONCURRENCY_CHAPTER_FETCH: z.coerce.number().int().positive().default(1),
   QUEUE_CONCURRENCY_CHAPTER_BUILD: z.coerce.number().int().positive().default(1),
+  QUEUE_CONCURRENCY_TRANSLATION: z.coerce.number().int().positive().default(1),
   QUEUE_CONCURRENCY_MAINTENANCE: z.coerce.number().int().positive().default(1)
 });
 

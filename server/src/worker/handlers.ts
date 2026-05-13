@@ -1,9 +1,9 @@
-import fs from "node:fs/promises";
+﻿import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { Job } from "bullmq";
-import { Prisma } from "@prisma/client";
-import type { PrismaClient } from "@prisma/client";
+import { Prisma } from "../lib/prisma.js";
+import type { PrismaClient } from "../lib/prisma.js";
 
 import type { AppConfig } from "../config/env.js";
 import {
@@ -30,6 +30,7 @@ import {
   enqueueChapterBuild,
   enqueueChapterFetch,
   enqueueNovelSync,
+  enqueueTranslationChapter,
   getChapterBuildJobId,
   getChapterFetchJobId,
   getNovelSyncJobId
@@ -976,6 +977,22 @@ export async function processChapterBuildJob(
       await updateNovelAggregateState(context.prisma, chapter.novelId);
       await closeRunningRebuildRunIfSettled(context.prisma, chapter.novelId);
     });
+
+    const activeProjects = await context.prisma.translationProject.findMany({
+      where: {
+        novelId: chapter.novelId,
+        isActiveAuto: true,
+        autoTranslateNewChapters: true
+      },
+      select: { id: true }
+    });
+    for (const project of activeProjects) {
+      await enqueueTranslationChapter(context.queues, {
+        projectId: project.id,
+        chapterId: chapter.id,
+        triggerType: "auto_new_chapter"
+      });
+    }
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Chapter build failed";
@@ -1016,3 +1033,7 @@ export async function processChapterBuildJob(
     throw error;
   }
 }
+
+
+
+

@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+﻿import type { PrismaClient } from "./prisma.js";
 
 import type { AppConfig } from "../config/env.js";
 
@@ -131,3 +131,4 @@ export async function updateSourcePolicy(
 
   return resolveSourcePolicy(prisma, fallback);
 }
+

@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
+﻿import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { PrismaClient, Novel } from "@prisma/client";
+import type { PrismaClient, Novel } from "../lib/prisma.js";
 
 import { formatChapterFilename, formatChapterStem } from "../lib/filesystem.js";
 import type { SourceDetailPayload } from "../plugins/types.js";
@@ -163,6 +163,22 @@ export async function getLibraryNovel(prisma: PrismaClient, novelId: string) {
   return prisma.novel.findUnique({
     where: { id: novelId },
     include: {
+      translationProjects: {
+        select: {
+          id: true,
+          name: true,
+          targetLanguage: true,
+          provider: true,
+          model: true,
+          status: true,
+          isActiveAuto: true,
+          isDefaultEdition: true,
+          autoTranslateNewChapters: true,
+          chapterConcurrency: true,
+          updatedAt: true
+        },
+        orderBy: [{ isDefaultEdition: "desc" }, { updatedAt: "desc" }]
+      },
       chapters: {
         orderBy: { chapterIndex: "asc" }
       },
@@ -219,3 +235,4 @@ export async function updateNovelAggregateState(prisma: PrismaClient, novelId: s
 export function buildSeriesId(novel: Pick<Novel, "id" | "sourceId">) {
   return `${novel.sourceId}:${novel.id}`;
 }
+

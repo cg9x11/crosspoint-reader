@@ -1,4 +1,4 @@
-import { Queue } from "bullmq";
+﻿import { Queue } from "bullmq";
 import type { Redis } from "ioredis";
 
 import type { AppConfig } from "../config/env.js";
@@ -9,6 +9,7 @@ export function createQueues(config: AppConfig, connection: Redis) {
     novelSync: new Queue(QUEUE_NAMES.novelSync, { connection }),
     chapterFetch: new Queue(QUEUE_NAMES.chapterFetch, { connection }),
     chapterBuild: new Queue(QUEUE_NAMES.chapterBuild, { connection }),
+    translationChapter: new Queue(QUEUE_NAMES.translationChapter, { connection }),
     maintenance: new Queue(QUEUE_NAMES.maintenance, { connection })
   };
 }

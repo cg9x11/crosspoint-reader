@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+﻿import { PrismaClient } from "../src/generated/prisma/index.js";
 
 import { syncNovelCoverAssets } from "../dist/src/library/cover-assets.js";
 import { createStorageLayout } from "../dist/src/storage/paths.js";
@@ -43,3 +43,4 @@ try {
 } finally {
   await prisma.$disconnect();
 }
+
