@@ -93,6 +93,14 @@ void EpubReaderActivity::onEnter() {
 
   epub->setupCacheDir();
 
+  seriesDisplayTitle.clear();
+  if (seriesContext.has_value()) {
+    SeriesManifest manifest;
+    if (SeriesManifestStore::tryLoadMetadataForChapterPath(epub->getPath(), manifest) && !manifest.title.empty()) {
+      seriesDisplayTitle = manifest.title;
+    }
+  }
+
   FsFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
     uint8_t data[6];
@@ -179,28 +187,10 @@ void EpubReaderActivity::loop() {
     }
   }
 
-  // Enter reader menu activity.
+  // Select opens chapter chooser directly.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    const int currentPage = section ? section->currentPage + 1 : 0;
-    const int totalPages = section ? section->pageCount : 0;
-    float bookProgress = 0.0f;
-    if (epub->getBookSize() > 0 && section && section->pageCount > 0) {
-      const float chapterProgress = static_cast<float>(section->currentPage) / static_cast<float>(section->pageCount);
-      bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
-    }
-    const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
-    startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
-                               renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
-                               SETTINGS.orientation, !currentPageFootnotes.empty()),
-                           [this](const ActivityResult& result) {
-                             // Always apply orientation change even if the menu was cancelled
-                             const auto& menu = std::get<MenuResult>(result.data);
-                             applyOrientation(menu.orientation);
-                             toggleAutoPageTurn(menu.pageTurnOption);
-                             if (!result.isCancelled) {
-                               onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
-                             }
-                           });
+    onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER);
+    return;
   }
 
   // Long press BACK (1s+) goes to file selection
@@ -371,16 +361,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
   switch (action) {
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
       if (seriesContext.has_value() && seriesContext->hasSeriesIdentity()) {
-        SeriesManifest manifest;
-        bool manifestLoaded = false;
-        {
-          RenderLock lock(*this);
-          manifestLoaded = SeriesManifestStore::loadFromSeriesDir(seriesContext->seriesDir, manifest);
-        }
-        if (manifestLoaded) {
-          const int currentChapterIndex = getCurrentSeriesChapterIndex();
+        const int currentChapterIndex = getCurrentSeriesChapterIndex();
+        if (!seriesContext->seriesDir.empty()) {
           startActivityForResult(
-              std::make_unique<SeriesChapterSelectionActivity>(renderer, mappedInput, std::move(manifest),
+              std::make_unique<SeriesChapterSelectionActivity>(renderer, mappedInput, seriesContext->seriesDir,
                                                                currentChapterIndex),
               [this](const ActivityResult& result) {
                 if (result.isCancelled || !seriesContext.has_value()) {
@@ -391,7 +375,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                 SeriesReadingContext context = *seriesContext;
                 context.chapterPath = seriesChapter.chapterPath;
                 context.chapterIndex = seriesChapter.chapterIndex;
-                if (context.chapterPath != epub->getPath()) {
+                if (context.chapterPath != epub->getPath() && Storage.exists(context.chapterPath.c_str())) {
                   activityManager.goToReader(std::move(context));
                 }
               });
@@ -626,15 +610,14 @@ int EpubReaderActivity::getCurrentSeriesChapterIndex() const {
   if (!epub) {
     return 0;
   }
-  SeriesManifest manifest;
+  int chapterIndex = 0;
   {
     RenderLock lock(const_cast<EpubReaderActivity&>(*this));
-    if (!SeriesManifestStore::tryLoadForChapterPath(epub->getPath(), manifest)) {
+    if (!SeriesManifestStore::tryGetChapterIndexByPath(epub->getPath(), chapterIndex)) {
       return 0;
     }
   }
-  const auto chapter = SeriesManifestStore::findByPath(manifest, epub->getPath());
-  return chapter.has_value() ? chapter->chapterIndex : 0;
+  return chapterIndex;
 }
 
 void EpubReaderActivity::persistSeriesReadingState() const {
@@ -660,20 +643,13 @@ bool EpubReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta
     return false;
   }
 
-  SeriesManifest manifest;
   int currentChapterIndex = 0;
   std::string targetChapterPath;
   {
     RenderLock lock(*this);
-    if (!SeriesManifestStore::tryLoadForChapterPath(epub->getPath(), manifest)) {
-      LOG_DBG("ERS", "No valid series manifest for: %s", epub->getPath().c_str());
-      return false;
-    }
-
     currentChapterIndex = seriesContext->chapterIndex;
-    if (currentChapterIndex <= 0) {
-      const auto chapter = SeriesManifestStore::findByPath(manifest, epub->getPath());
-      currentChapterIndex = chapter.has_value() ? chapter->chapterIndex : 0;
+    if (currentChapterIndex <= 0 && !SeriesManifestStore::tryGetChapterIndexByPath(epub->getPath(), currentChapterIndex)) {
+      currentChapterIndex = 0;
     }
     if (currentChapterIndex <= 0) {
       LOG_DBG("ERS", "Cannot resolve current series chapter index");
@@ -681,7 +657,7 @@ bool EpubReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta
     }
 
     const int targetChapterIndex = currentChapterIndex + chapterDelta;
-    if (!SeriesManifestStore::resolveChapterPath(manifest, targetChapterIndex, targetChapterPath)) {
+    if (!SeriesManifestStore::tryResolveChapterPath(seriesContext->seriesDir, targetChapterIndex, targetChapterPath)) {
       LOG_DBG("ERS", "Series chapter %d not found", targetChapterIndex);
       return false;
     }
@@ -693,8 +669,8 @@ bool EpubReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta
   }
 
   SeriesReadingContext nextContext;
-  nextContext.seriesId = manifest.seriesId;
-  nextContext.seriesDir = manifest.seriesDir;
+  nextContext.seriesId = seriesContext->seriesId;
+  nextContext.seriesDir = seriesContext->seriesDir;
   nextContext.chapterPath = targetChapterPath;
   nextContext.chapterIndex = currentChapterIndex + chapterDelta;
   APP_STATE.setOpenReadingState(nextContext);
@@ -1069,7 +1045,7 @@ void EpubReaderActivity::renderStatusBar() const {
     }
 
   } else if (SETTINGS.statusBarTitle == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE) {
-    title = epub->getTitle();
+    title = seriesDisplayTitle.empty() ? epub->getTitle() : seriesDisplayTitle;
   }
 
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset);

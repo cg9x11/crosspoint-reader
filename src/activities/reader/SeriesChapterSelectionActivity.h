@@ -1,23 +1,35 @@
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include "SeriesManifest.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
 class SeriesChapterSelectionActivity final : public Activity {
-  SeriesManifest manifest;
+  std::string seriesDir;
+  std::string seriesTitle;
+  std::vector<SeriesChapter> visibleChapters;
+  std::vector<bool> visibleAvailability;
   ButtonNavigator buttonNavigator;
   int selectorIndex = 0;
   int currentChapterIndex = 0;
+  int totalItems = 0;
+  int pageStartIndex = 0;
 
   int getPageItems() const;
   int getTotalItems() const;
+  bool loadMetadata();
+  bool locateCurrentSelection();
+  bool loadVisiblePage();
+  bool isVisibleChapterAvailable(int localIndex) const;
 
  public:
   explicit SeriesChapterSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                          SeriesManifest manifest, int currentChapterIndex)
+                                          std::string seriesDir, int currentChapterIndex)
       : Activity("SeriesChapterSelection", renderer, mappedInput),
-        manifest(std::move(manifest)),
+        seriesDir(std::move(seriesDir)),
         currentChapterIndex(currentChapterIndex) {}
 
   void onEnter() override;

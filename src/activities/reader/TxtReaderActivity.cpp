@@ -649,7 +649,7 @@ void TxtReaderActivity::openSeriesChapterSelection() {
         SeriesReadingContext context = *seriesContext;
         context.chapterPath = seriesChapter.chapterPath;
         context.chapterIndex = seriesChapter.chapterIndex;
-        if (context.chapterPath != txt->getPath()) {
+        if (context.chapterPath != txt->getPath() && Storage.exists(context.chapterPath.c_str())) {
           activityManager.goToReader(std::move(context));
         }
       });

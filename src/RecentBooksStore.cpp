@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <JsonSettingsIO.h>
 #include <Logging.h>
+#include <SeriesManifest.h>
 #include <Serialization.h>
 #include <Xtc.h>
 
@@ -120,6 +121,20 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   }
 
   LOG_DBG("RBS", "Loading recent book: %s", path.c_str());
+
+  SeriesManifest seriesManifest;
+  if (SeriesManifestStore::tryLoadMetadataForChapterPath(path, seriesManifest)) {
+    std::string coverBmpPath;
+    if (!seriesManifest.coverPath.empty()) {
+      const std::string coverPath = SeriesManifestStore::buildChapterPath(seriesManifest.seriesDir, seriesManifest.coverPath);
+      if (Storage.exists(coverPath.c_str())) {
+        coverBmpPath = coverPath;
+      }
+    }
+    return RecentBook{seriesManifest.seriesId, path,
+                      !seriesManifest.title.empty() ? seriesManifest.title : lastBookFileName,
+                      seriesManifest.author, coverBmpPath};
+  }
 
   // If epub, try to load the metadata for title/author and cover.
   // Use buildIfMissing=false to avoid heavy epub loading on boot; getTitle()/getAuthor() may be
