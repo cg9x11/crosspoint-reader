@@ -20,42 +20,16 @@
 #include "util/ScreenDebugRecorder.h"
 #include "util/FullScreenMessageActivity.h"
 
-void ActivityManager::begin() {
-  xTaskCreate(&renderTaskTrampoline, "ActivityManagerRender",
-              8192,              // Stack size
-              this,              // Parameters
-              1,                 // Priority
-              &renderTaskHandle  // Task handle
-  );
-  assert(renderTaskHandle != nullptr && "Failed to create render task");
-}
+void ActivityManager::begin() {}
 
-void ActivityManager::renderTaskTrampoline(void* param) {
-  auto* self = static_cast<ActivityManager*>(param);
-  self->renderTaskLoop();
-}
-
-void ActivityManager::renderTaskLoop() {
-  while (true) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    // Acquire the lock before reading currentActivity to avoid a TOCTOU race
-    // where the main task deletes the activity between the null-check and render().
-    RenderLock lock;
-    if (currentActivity) {
-      HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
-      ScreenDebugRecorder::beginFrame(currentActivity->name);
-      currentActivity->render(std::move(lock));
-      ScreenDebugRecorder::applyScreenshotInfo(currentActivity->getScreenshotInfo());
-    }
-    // Notify any task blocked in requestUpdateAndWait() that the render is done.
-    TaskHandle_t waiter = nullptr;
-    taskENTER_CRITICAL(nullptr);
-    waiter = waitingTaskHandle;
-    waitingTaskHandle = nullptr;
-    taskEXIT_CRITICAL(nullptr);
-    if (waiter) {
-      xTaskNotify(waiter, 1, eIncrement);
-    }
+void ActivityManager::renderNow() {
+  requestedUpdate = false;
+  RenderLock lock;
+  if (currentActivity) {
+    HalPowerManager::Lock powerLock;
+    ScreenDebugRecorder::beginFrame(currentActivity->name);
+    currentActivity->render(std::move(lock));
+    ScreenDebugRecorder::applyScreenshotInfo(currentActivity->getScreenshotInfo());
   }
 }
 
@@ -148,12 +122,7 @@ void ActivityManager::loop() {
   }
 
   if (requestedUpdate) {
-    requestedUpdate = false;
-    // Using direct notification to signal the render task to update
-    // Increment counter so multiple rapid calls won't be lost
-    if (renderTaskHandle) {
-      xTaskNotify(renderTaskHandle, 1, eIncrement);
-    }
+    renderNow();
   }
 }
 
@@ -298,14 +267,18 @@ bool ActivityManager::injectAutomationText(const std::string& text) {
 
 void ActivityManager::requestUpdate(bool immediate) {
   if (immediate) {
-    if (renderTaskHandle) {
-      xTaskNotify(renderTaskHandle, 1, eIncrement);
+    auto currTaskHandler = xTaskGetCurrentTaskHandle();
+    auto mutexHolder = xSemaphoreGetMutexHolder(renderingMutex);
+    bool holdingRenderLock = (mutexHolder == currTaskHandler);
+    if (!holdingRenderLock) {
+      renderNow();
+      return;
     }
-  } else {
-    // Deferring the update until current loop is finished
-    // This is to avoid multiple updates being requested in the same loop
-    requestedUpdate = true;
   }
+
+  // Deferring the update until current loop is finished
+  // This is to avoid multiple updates being requested in the same loop
+  requestedUpdate = true;
 }
 namespace {
 TaskHandle_t g_renderLockOwner = nullptr;
@@ -316,33 +289,12 @@ const char* currentTaskTag() {
 }
 
 void ActivityManager::requestUpdateAndWait() {
-  if (!renderTaskHandle) {
-    return;
-  }
-
-  // Atomic section to perform checks
-  taskENTER_CRITICAL(nullptr);
   auto currTaskHandler = xTaskGetCurrentTaskHandle();
   auto mutexHolder = xSemaphoreGetMutexHolder(renderingMutex);
-  bool isRenderTask = (currTaskHandler == renderTaskHandle);
-  bool alreadyWaiting = (waitingTaskHandle != nullptr);
   bool holdingRenderLock = (mutexHolder == currTaskHandler);
-  if (!alreadyWaiting && !isRenderTask && !holdingRenderLock) {
-    waitingTaskHandle = currTaskHandler;
-  }
-  taskEXIT_CRITICAL(nullptr);
 
-  // Render task cannot call requestUpdateAndWait() or it will cause a deadlock
-  assert(!isRenderTask && "Render task cannot call requestUpdateAndWait()");
-
-  // There should never be the case where 2 tasks are waiting for a render at the same time
-  assert(!alreadyWaiting && "Already waiting for a render to complete");
-
-  // Cannot call while holding RenderLock or it will cause a deadlock
   assert(!holdingRenderLock && "Cannot call requestUpdateAndWait() while holding RenderLock");
-
-  xTaskNotify(renderTaskHandle, 1, eIncrement);
-  ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+  renderNow();
 }
 
 // RenderLock

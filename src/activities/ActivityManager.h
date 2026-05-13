@@ -41,20 +41,12 @@ class ActivityManager {
   std::unique_ptr<Activity> currentActivity;
 
   void exitActivity(const RenderLock& lock);
+  void renderNow();
 
   // Pending activity to be launched on next loop iteration
   std::unique_ptr<Activity> pendingActivity;
   enum class PendingAction { None, Push, Pop, Replace };
   PendingAction pendingAction = PendingAction::None;
-
-  // Task to render and display the activity
-  TaskHandle_t renderTaskHandle = nullptr;
-  static void renderTaskTrampoline(void* param);
-  [[noreturn]] virtual void renderTaskLoop();
-
-  // Set by requestUpdateAndWait(); read and cleared by the render task after render completes.
-  // Note: only one waiting task is supported at a time
-  TaskHandle_t waitingTaskHandle = nullptr;
 
   // Mutex to protect rendering operations from race conditions
   // Must only be used via RenderLock
