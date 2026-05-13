@@ -189,6 +189,7 @@ void SettingsActivity::toggleCurrentSetting() {
       // Launch font selection submenu instead of cycling
       startActivityForResult(std::make_unique<FontSelectionActivity>(renderer, mappedInput, &sdFontSystem.registry()),
                              [this](const ActivityResult&) {
+                               ensureSdFontLoaded();
                                SETTINGS.saveToFile();
                                rebuildSettingsLists();
                              });

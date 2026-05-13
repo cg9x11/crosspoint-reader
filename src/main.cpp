@@ -475,8 +475,9 @@ void loop() {
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
       delay(50);
     } else {
-      // Short delay to prevent tight loop while still being responsive
-      delay(10);
+      // Keep a small guard delay so button handling stays responsive across all screens
+      // without falling back to a busy-spin loop.
+      delay(4);
     }
   }
 }

@@ -179,6 +179,7 @@ void ActivityManager::goToReader(std::string path) {
 }
 
 void ActivityManager::goToReader(SeriesReadingContext context, const bool openAtLastPage) {
+  ensureSdFontLoaded();
   std::string chapterPath = context.chapterPath;
   replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(chapterPath), std::move(context),
                                                    openAtLastPage));

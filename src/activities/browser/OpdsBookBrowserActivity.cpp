@@ -40,12 +40,14 @@ constexpr size_t SERIES_DOWNLOAD_REFILL_LIMIT = 24;
 constexpr size_t SERIES_DOWNLOAD_REFILL_LIMIT_MEDIUM = 16;
 constexpr const char* OPDS_CACHE_DIR = "/.crosspoint/opds";
 constexpr const char* ONLINE_LIBRARY_ROOT_DIR = "/.online-library";
+constexpr unsigned long DOWNLOAD_CANCEL_HOLD_MS = 180;
 
 MappedInputManager* g_seriesDownloadInput = nullptr;
 size_t* g_seriesCurrentFileDownloaded = nullptr;
 size_t* g_seriesCurrentFileTotal = nullptr;
 OpdsBookBrowserActivity* g_seriesDownloadActivity = nullptr;
 bool* g_seriesCancelRequested = nullptr;
+bool* g_seriesCancelArmed = nullptr;
 
 std::string summarizeFetchUrl(const std::string& url) {
   std::string summary = url;
@@ -105,6 +107,26 @@ bool extractFirstRootNavigationHref(const std::string& xml, std::string& hrefOut
   return !hrefOut.empty();
 }
 
+bool pollDownloadCancelIntent(MappedInputManager& input, bool& cancelRequested, bool& cancelArmed) {
+  input.update();
+
+  // Ignore stale Back release/hold state carried into the download flow.
+  // We only arm cancel once Back is fully released after download starts.
+  if (!cancelArmed) {
+    if (!input.isPressed(MappedInputManager::Button::Back)) {
+      cancelArmed = true;
+    }
+    return !cancelRequested;
+  }
+
+  if (input.wasPressed(MappedInputManager::Button::Back) ||
+      (input.isPressed(MappedInputManager::Button::Back) && input.getHeldTime() >= DOWNLOAD_CANCEL_HOLD_MS)) {
+    cancelRequested = true;
+  }
+
+  return !cancelRequested;
+}
+
 bool seriesDownloadProgressCallback(const size_t downloaded, const size_t total) {
   if (g_seriesCurrentFileDownloaded != nullptr) {
     *g_seriesCurrentFileDownloaded = downloaded;
@@ -112,11 +134,8 @@ bool seriesDownloadProgressCallback(const size_t downloaded, const size_t total)
   if (g_seriesCurrentFileTotal != nullptr) {
     *g_seriesCurrentFileTotal = total;
   }
-  if (g_seriesDownloadInput != nullptr && g_seriesCancelRequested != nullptr) {
-    g_seriesDownloadInput->update();
-    if (g_seriesDownloadInput->wasReleased(MappedInputManager::Button::Back)) {
-      *g_seriesCancelRequested = true;
-    }
+  if (g_seriesDownloadInput != nullptr && g_seriesCancelRequested != nullptr && g_seriesCancelArmed != nullptr) {
+    return pollDownloadCancelIntent(*g_seriesDownloadInput, *g_seriesCancelRequested, *g_seriesCancelArmed);
   }
   return g_seriesCancelRequested == nullptr || !*g_seriesCancelRequested;
 }
@@ -1428,12 +1447,9 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   unsigned long lastUiUpdateAt = millis();
   int lastProgressPercent = -1;
   bool cancelRequested = false;
-  auto pollCancel = [this, &cancelRequested]() {
-    mappedInput.update();
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      cancelRequested = true;
-    }
-    return !cancelRequested;
+  bool cancelArmed = false;
+  auto pollCancel = [this, &cancelRequested, &cancelArmed]() {
+    return pollDownloadCancelIntent(mappedInput, cancelRequested, cancelArmed);
   };
 
   const std::string feedUrl = UrlUtils::buildUrl(server.url, currentPath);
@@ -1464,7 +1480,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
 
   const auto result = HttpDownloader::downloadToFile(
       downloadUrl, filename,
-      [this, &lastUiUpdateAt, &lastProgressPercent, &pollCancel](const size_t downloaded, const size_t total) {
+      [this, &lastUiUpdateAt, &lastProgressPercent, &pollCancel](const size_t downloaded, const size_t total) -> bool {
         currentFileDownloaded = downloaded;
         currentFileTotal = total;
         downloadProgress = downloaded;
@@ -1520,12 +1536,9 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   unsigned long lastUiUpdateAt = millis();
   int lastProgressPercent = -1;
   bool cancelRequested = false;
-  auto pollCancel = [this, &cancelRequested]() {
-    mappedInput.update();
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      cancelRequested = true;
-    }
-    return !cancelRequested;
+  bool cancelArmed = false;
+  auto pollCancel = [this, &cancelRequested, &cancelArmed]() {
+    return pollDownloadCancelIntent(mappedInput, cancelRequested, cancelArmed);
   };
 
   const std::string returnPath = currentPath;

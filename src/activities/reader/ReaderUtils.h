@@ -38,20 +38,22 @@ struct PageTurnResult {
 };
 
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
-  const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
-  const bool prev = tiltPrev || (usePress ? (input.wasPressed(MappedInputManager::Button::PageBack) ||
-                                             input.wasPressed(MappedInputManager::Button::Left))
-                                          : (input.wasReleased(MappedInputManager::Button::PageBack) ||
-                                             input.wasReleased(MappedInputManager::Button::Left)));
+
+  // Page-turn buttons should react on press for snappier reading UX.
+  // Long-press behaviors are handled separately by each reader and consume the
+  // matching release, so triggering here on press avoids the sluggish wait-for-release path.
+  const bool prevButton = input.wasPressed(MappedInputManager::Button::PageBack) ||
+                          input.wasPressed(MappedInputManager::Button::Left);
+  const bool nextButton = input.wasPressed(MappedInputManager::Button::PageForward) ||
+                          input.wasPressed(MappedInputManager::Button::Right);
+
+  // Keep power-button page turn on release to avoid accidental flips while holding power.
   const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                          input.wasReleased(MappedInputManager::Button::Power);
-  const bool next = tiltNext || (usePress ? (input.wasPressed(MappedInputManager::Button::PageForward) || powerTurn ||
-                                             input.wasPressed(MappedInputManager::Button::Right))
-                                          : (input.wasReleased(MappedInputManager::Button::PageForward) || powerTurn ||
-                                             input.wasReleased(MappedInputManager::Button::Right)));
-  return {prev, next, tiltPrev || tiltNext};
+
+  return {tiltPrev || prevButton, tiltNext || nextButton || powerTurn, tiltPrev || tiltNext};
 }
 
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
