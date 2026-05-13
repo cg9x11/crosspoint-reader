@@ -26,6 +26,8 @@ constexpr int HTTP_CONNECT_TIMEOUT_MS = 12000;
 constexpr int HTTP_READ_TIMEOUT_MS = 20000;
 constexpr int HTTP_RETRY_COUNT = 3;
 constexpr uint32_t HTTPS_SAME_HOST_COOLDOWN_MS = 250;
+constexpr size_t HTTP_DOWNLOAD_CHUNK_SIZE = 512;
+constexpr size_t HTTP_DOWNLOAD_FLUSH_INTERVAL = 2048;
 
 struct ParsedUrl {
   bool valid = false;
@@ -471,33 +473,97 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
       return FILE_ERROR;
     }
 
-    FileWriteStream fileStream(file, contentLength, progress);
-    const int writeResult = http.writeToStream(&fileStream);
+    uint8_t buffer[HTTP_DOWNLOAD_CHUNK_SIZE];
+    WiFiClient* stream = http.getStreamPtr();
+    size_t downloaded = 0;
+    size_t flushedAt = 0;
+    bool aborted = false;
+    bool writeOk = true;
+    bool readOk = true;
+    unsigned long lastDataAt = millis();
 
+    while (true) {
+      if (contentLength > 0 && downloaded >= contentLength) {
+        break;
+      }
+
+      int available = stream != nullptr ? stream->available() : 0;
+      if (available <= 0) {
+        if ((stream == nullptr || !stream->connected()) && !http.connected()) {
+          break;
+        }
+        if (millis() - lastDataAt > HTTP_READ_TIMEOUT_MS) {
+          readOk = false;
+          setLastHttpError("read_timeout", sanitizedUrl, -1004);
+          LOG_ERR("HTTP", "Read timeout (attempt %d/%d): downloaded=%zu expected=%zu", attempt,
+                  HTTP_RETRY_COUNT, downloaded, contentLength);
+          traceRequest(requestId, true, "read_timeout", sanitizedUrl);
+          break;
+        }
+        delay(1);
+        continue;
+      }
+
+      size_t toRead = static_cast<size_t>(available);
+      if (toRead > HTTP_DOWNLOAD_CHUNK_SIZE) {
+        toRead = HTTP_DOWNLOAD_CHUNK_SIZE;
+      }
+      if (contentLength > 0) {
+        const size_t remaining = contentLength - downloaded;
+        if (toRead > remaining) {
+          toRead = remaining;
+        }
+      }
+      if (toRead == 0) {
+        break;
+      }
+
+      const size_t readCount = stream->readBytes(buffer, toRead);
+      if (readCount == 0) {
+        if (millis() - lastDataAt > HTTP_READ_TIMEOUT_MS) {
+          readOk = false;
+          setLastHttpError("read_zero", sanitizedUrl, -1005);
+          LOG_ERR("HTTP", "Read stalled (attempt %d/%d): downloaded=%zu expected=%zu", attempt,
+                  HTTP_RETRY_COUNT, downloaded, contentLength);
+          traceRequest(requestId, true, "read_zero", sanitizedUrl);
+          break;
+        }
+        delay(1);
+        continue;
+      }
+
+      lastDataAt = millis();
+      const size_t written = file.write(buffer, readCount);
+      if (written != readCount) {
+        writeOk = false;
+        LOG_ERR("HTTP", "Chunk write failed: wrote=%zu expected=%zu", written, readCount);
+        traceRequest(requestId, true, "chunk_write_fail", sanitizedUrl, destPath.c_str());
+        break;
+      }
+
+      downloaded += written;
+      if (downloaded - flushedAt >= HTTP_DOWNLOAD_FLUSH_INTERVAL) {
+        file.flush();
+        flushedAt = downloaded;
+      }
+
+      if (progress != nullptr && contentLength > 0) {
+        if (!progress(downloaded, contentLength)) {
+          aborted = true;
+          break;
+        }
+      }
+    }
+
+    file.flush();
     file.close();
     finalizeRequestClient(http, client, target);
 
-    if (fileStream.aborted()) {
+    if (aborted) {
       Storage.remove(destPath.c_str());
       return ABORTED;
     }
 
-    if (writeResult < 0) {
-      setLastHttpError("write", sanitizedUrl, writeResult);
-      LOG_ERR("HTTP", "writeToStream error (attempt %d/%d): %d", attempt, HTTP_RETRY_COUNT, writeResult);
-      char detail[96];
-      snprintf(detail, sizeof(detail), "attempt=%d/%d write_result=%d downloaded=%zu", attempt, HTTP_RETRY_COUNT,
-               writeResult, fileStream.downloaded());
-      traceRequest(requestId, true, "write_fail", sanitizedUrl, detail);
-      Storage.remove(destPath.c_str());
-      if (!shouldRetryHttpCode(writeResult) || attempt >= HTTP_RETRY_COUNT) {
-        return HTTP_ERROR;
-      }
-      delay(250);
-      continue;
-    }
-
-    const size_t downloaded = fileStream.downloaded();
     if (progress != nullptr) {
       LOG_DBG("HTTP", "Downloaded %zu bytes", downloaded);
       char detail[96];
@@ -505,11 +571,20 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
       traceRequest(requestId, true, "write_done", sanitizedUrl, detail);
     }
 
-    if (!fileStream.ok()) {
+    if (!writeOk) {
       LOG_ERR("HTTP", "Write failed during download");
       traceRequest(requestId, true, "file_write_fail", sanitizedUrl, destPath.c_str());
       Storage.remove(destPath.c_str());
       return FILE_ERROR;
+    }
+
+    if (!readOk) {
+      Storage.remove(destPath.c_str());
+      if (attempt < HTTP_RETRY_COUNT) {
+        delay(250);
+        continue;
+      }
+      return HTTP_ERROR;
     }
 
     if (contentLength == 0 && downloaded == 0) {
