@@ -26,6 +26,25 @@ std::string normalizeOnlineLibraryPath(const std::string& path) {
   }
   return path;
 }
+
+std::string normalizeOnlineLibraryCoverPath(const std::string& coverPath) {
+  if (coverPath.empty()) {
+    return "";
+  }
+  const size_t heightTokenPos = coverPath.find("[HEIGHT]");
+  const std::string basePath = heightTokenPos == std::string::npos ? coverPath : coverPath.substr(0, heightTokenPos);
+  if (basePath.rfind("/series_", 0) != 0) {
+    return coverPath;
+  }
+  const std::string migratedBase = std::string(ONLINE_LIBRARY_ROOT_DIR) + basePath;
+  if (!Storage.exists(migratedBase.c_str())) {
+    return coverPath;
+  }
+  if (heightTokenPos == std::string::npos) {
+    return migratedBase;
+  }
+  return migratedBase + coverPath.substr(heightTokenPos);
+}
 }  // namespace
 
 void RecentBooksActivity::loadRecentBooks() {
@@ -36,6 +55,7 @@ void RecentBooksActivity::loadRecentBooks() {
   for (const auto& book : books) {
     RecentBook normalized = book;
     normalized.path = normalizeOnlineLibraryPath(book.path);
+    normalized.coverBmpPath = normalizeOnlineLibraryCoverPath(book.coverBmpPath);
 
     // Skip if file no longer exists
     if (!Storage.exists(normalized.path.c_str())) {
@@ -51,7 +71,17 @@ void RecentBooksActivity::loadRecentBooks() {
         if (!manifest.author.empty()) {
           normalized.author = manifest.author;
         }
+        if (!manifest.coverPath.empty()) {
+          const std::string coverPath = SeriesManifestStore::buildChapterPath(manifest.seriesDir, manifest.coverPath);
+          if (Storage.exists(coverPath.c_str())) {
+            normalized.coverBmpPath = coverPath;
+          }
+        }
       }
+    }
+
+    if (!normalized.coverBmpPath.empty() && !Storage.exists(normalized.coverBmpPath.c_str())) {
+      normalized.coverBmpPath.clear();
     }
 
     recentBooks.push_back(std::move(normalized));

@@ -1,6 +1,5 @@
 #include "FileBrowserActivity.h"
 
-#include <cstdio>
 
 #include <Bitmap.h>
 #include <Epub.h>
@@ -45,6 +44,25 @@ std::string normalizeOnlineLibraryPath(const std::string& path) {
     return migrated;
   }
   return path;
+}
+
+std::string normalizeOnlineLibraryCoverPath(const std::string& coverPath) {
+  if (coverPath.empty()) {
+    return "";
+  }
+  const size_t heightTokenPos = coverPath.find("[HEIGHT]");
+  const std::string basePath = heightTokenPos == std::string::npos ? coverPath : coverPath.substr(0, heightTokenPos);
+  if (basePath.rfind("/series_", 0) != 0) {
+    return coverPath;
+  }
+  const std::string migratedBase = std::string(ONLINE_LIBRARY_ROOT_DIR) + basePath;
+  if (!Storage.exists(migratedBase.c_str())) {
+    return coverPath;
+  }
+  if (heightTokenPos == std::string::npos) {
+    return migratedBase;
+  }
+  return migratedBase + coverPath.substr(heightTokenPos);
 }
 
 bool isSeriesChapterFilename(std::string_view filename) {
@@ -547,7 +565,7 @@ void FileBrowserActivity::loadSeriesPreview(const FileBrowserEntry& entry, Previ
 
   const RecentBook* recent = findRecentBookForPath(entry.resumePath, manifest.seriesId);
   if (recent && !recent->coverBmpPath.empty()) {
-    preview.coverBmpPath = recent->coverBmpPath;
+    preview.coverBmpPath = normalizeOnlineLibraryCoverPath(recent->coverBmpPath);
   }
 
   if (!hasPreviewCoverBitmap(preview.coverBmpPath, PREVIEW_COVER_HEIGHT)) {
@@ -581,7 +599,7 @@ void FileBrowserActivity::loadFilePreview(const FileBrowserEntry& entry, const s
       preview.title = recent->title;
     }
     preview.author = recent->author;
-    preview.coverBmpPath = recent->coverBmpPath;
+    preview.coverBmpPath = normalizeOnlineLibraryCoverPath(recent->coverBmpPath);
   }
 
   if (FsHelpers::hasEpubExtension(filename)) {
@@ -629,7 +647,7 @@ void FileBrowserActivity::loadFilePreview(const FileBrowserEntry& entry, const s
       preview.author = recent->author;
     }
     if (preview.coverBmpPath.empty()) {
-      preview.coverBmpPath = recent->coverBmpPath;
+      preview.coverBmpPath = normalizeOnlineLibraryCoverPath(recent->coverBmpPath);
     }
   }
 
@@ -663,17 +681,12 @@ void FileBrowserActivity::loadPreviewForSelection() {
 }
 
 void FileBrowserActivity::loadFiles() {
-  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles begin base=%s\n", basepath.c_str());
   LOG_DBG("FBA", "loadFiles begin base=%s", basepath.c_str());
   files.clear();
   seriesBrowseCache.clear();
   currentDirectoryIsSeries = Storage.exists(SeriesManifestStore::buildChapterPath(basepath, SeriesManifestStore::MANIFEST_FILE).c_str());
-  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles exists currentDirectoryIsSeries=%d\n",
-               currentDirectoryIsSeries ? 1 : 0);
 
   auto root = Storage.open(basepath.c_str());
-  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles after open root ok=%d isDir=%d\n", root ? 1 : 0,
-               (root && root.isDirectory()) ? 1 : 0);
   if (!root || !root.isDirectory()) {
     LOG_DBG("FBA", "loadFiles root invalid base=%s", basepath.c_str());
     return;
@@ -710,12 +723,8 @@ void FileBrowserActivity::loadFiles() {
     file.close();
   }
   root.close();
-  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles pending count=%u\n",
-               static_cast<unsigned>(pendingEntries.size()));
 
   for (const auto& pending : pendingEntries) {
-    std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles item name=%s dir=%d\n", pending.name.c_str(),
-                 pending.isDirectory ? 1 : 0);
     if (pending.isDirectory) {
       if (mode == Mode::Books && basepath == "/" && isLegacyRootSeriesDirectoryName(pending.name)) {
         const std::string oldPath = joinPath(basepath, pending.name);
@@ -780,27 +789,21 @@ void FileBrowserActivity::loadFiles() {
             [](const FileBrowserEntry& left, const FileBrowserEntry& right) {
               return compareFileBrowserNames(left.rawName, right.rawName);
             });
-  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::loadFiles done count=%u\n", static_cast<unsigned>(files.size()));
   LOG_DBG("FBA", "loadFiles done base=%s count=%u", basepath.c_str(), static_cast<unsigned>(files.size()));
 }
 
 void FileBrowserActivity::onEnter() {
   Activity::onEnter();
-  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter base=%s\n", basepath.c_str());
   LOG_DBG("FBA", "onEnter base=%s", basepath.c_str());
 
   selectorIndex = 0;
   resetPreviewSummaryCache();
 
   auto root = Storage.open(basepath.c_str());
-  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter after open root ok=%d isDir=%d\n", root ? 1 : 0,
-               (root && root.isDirectory()) ? 1 : 0);
   if (!root) {
-    std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter branch root missing\n");
     basepath = "/";
     loadFiles();
   } else if (!root.isDirectory()) {
-    std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter branch root file\n");
     lockLongPressBack = mappedInput.isPressed(MappedInputManager::Button::Back);
 
     const std::string oldPath = basepath;
@@ -811,17 +814,14 @@ void FileBrowserActivity::onEnter() {
     const std::string fileName = oldPath.substr(pos + 1);
     selectorIndex = findEntry(fileName);
   } else {
-    std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter branch root dir\n");
     loadFiles();
   }
 
-  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter before preview\n");
   if (shouldLoadImmediatePreview(files.size())) {
     loadPreviewForSelection();
   } else {
     currentPreview = {};
   }
-  std::fprintf(stderr, "[EMUDBG] FileBrowserActivity::onEnter after preview files=%u\n", static_cast<unsigned>(files.size()));
   LOG_DBG("FBA", "onEnter ready base=%s files=%u", basepath.c_str(), static_cast<unsigned>(files.size()));
   requestUpdate();
 }
@@ -1288,3 +1288,4 @@ size_t FileBrowserActivity::findEntry(const std::string& name) const {
     if (files[i].rawName == name) return i;
   return 0;
 }
+

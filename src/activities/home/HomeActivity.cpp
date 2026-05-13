@@ -35,6 +35,25 @@ std::string normalizeOnlineLibraryPath(const std::string& path) {
   }
   return path;
 }
+
+std::string normalizeOnlineLibraryCoverPath(const std::string& coverPath) {
+  if (coverPath.empty()) {
+    return "";
+  }
+  const size_t heightTokenPos = coverPath.find("[HEIGHT]");
+  const std::string basePath = heightTokenPos == std::string::npos ? coverPath : coverPath.substr(0, heightTokenPos);
+  if (basePath.rfind("/series_", 0) != 0) {
+    return coverPath;
+  }
+  const std::string migratedBase = std::string(ONLINE_LIBRARY_ROOT_DIR) + basePath;
+  if (!Storage.exists(migratedBase.c_str())) {
+    return coverPath;
+  }
+  if (heightTokenPos == std::string::npos) {
+    return migratedBase;
+  }
+  return migratedBase + coverPath.substr(heightTokenPos);
+}
 }  // namespace
 
 bool HomeActivity::hasStandaloneContinueReadingTile() const {
@@ -85,6 +104,7 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
 
     RecentBook normalized = book;
     normalized.path = normalizeOnlineLibraryPath(book.path);
+    normalized.coverBmpPath = normalizeOnlineLibraryCoverPath(book.coverBmpPath);
 
     // Skip if file no longer exists
     if (!Storage.exists(normalized.path.c_str())) {
@@ -109,6 +129,13 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
       }
     }
 
+    if (!normalized.coverBmpPath.empty()) {
+      std::string probeCoverPath = UITheme::getCoverThumbPath(normalized.coverBmpPath, UITheme::getInstance().getMetrics().homeCoverHeight);
+      if (!Storage.exists(probeCoverPath.c_str()) && !Storage.exists(normalized.coverBmpPath.c_str())) {
+        normalized.coverBmpPath.clear();
+      }
+    }
+
     recentBooks.push_back(std::move(normalized));
   }
 }
@@ -119,6 +146,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   Rect popupRect;
 
   int progress = 0;
+  bool listChanged = false;
   for (RecentBook& book : recentBooks) {
     if (!book.coverBmpPath.empty()) {
       std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
@@ -127,6 +155,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       }
       if (!Storage.exists(coverPath.c_str())) {
         if (!book.seriesId.empty()) {
+          RECENT_BOOKS.updateBook(book.path, book.title, book.author, "", book.seriesId);
+          book.coverBmpPath.clear();
+          listChanged = true;
           ++progress;
           continue;
         }
@@ -146,9 +177,13 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           if (!success) {
             RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
             book.coverBmpPath = "";
+            listChanged = true;
+          } else {
+            book.coverBmpPath = epub.getThumbBmpPath();
+            RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
+            listChanged = true;
           }
           coverRendered = false;
-          requestUpdate();
         } else if (FsHelpers::hasXtcExtension(book.path)) {
           // Handle XTC file
           Xtc xtc(book.path, "/.crosspoint");
@@ -163,9 +198,13 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             if (!success) {
               RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
               book.coverBmpPath = "";
+              listChanged = true;
+            } else {
+              book.coverBmpPath = xtc.getThumbBmpPath();
+              RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
+              listChanged = true;
             }
             coverRendered = false;
-            requestUpdate();
           }
         } else if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path)) {
           Txt txt(book.path, "/.crosspoint");
@@ -179,11 +218,13 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             if (!success) {
               RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
               book.coverBmpPath = "";
+              listChanged = true;
             } else {
               book.coverBmpPath = txt.getCoverBmpPath();
+              RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath);
+              listChanged = true;
             }
             coverRendered = false;
-            requestUpdate();
           }
         }
       }
@@ -191,6 +232,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     progress++;
   }
 
+  if (listChanged) {
+    requestUpdate();
+  }
   recentsLoaded = true;
   recentsLoading = false;
 }

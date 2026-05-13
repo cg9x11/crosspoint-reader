@@ -1680,7 +1680,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
         currentFileDownloaded = 0;
         currentFileTotal = 0;
         if (shouldRefreshDownloadProgressUi(downloadProgress, downloadTotal, lastUiUpdateAt, lastProgressPercent,
-                                            false)) {
+                                            true)) {
           requestUpdateAndWait();
         }
         vTaskDelay(1);
@@ -1813,7 +1813,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
       currentFileDownloaded = 0;
       currentFileTotal = 0;
       if (shouldRefreshDownloadProgressUi(downloadProgress, downloadTotal, lastUiUpdateAt, lastProgressPercent,
-                                          false)) {
+                                            true)) {
         requestUpdateAndWait();
       }
       vTaskDelay(1);

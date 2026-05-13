@@ -33,6 +33,30 @@
 namespace {
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
 constexpr unsigned long skipChapterMs = 700;
+
+bool isPrevHoldPressed(const MappedInputManager& mappedInput) {
+  return mappedInput.isPressed(MappedInputManager::Button::Left) ||
+         mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+         mappedInput.isPressed(MappedInputManager::Button::Up);
+}
+
+bool isNextHoldPressed(const MappedInputManager& mappedInput) {
+  return mappedInput.isPressed(MappedInputManager::Button::Right) ||
+         mappedInput.isPressed(MappedInputManager::Button::PageForward) ||
+         mappedInput.isPressed(MappedInputManager::Button::Down);
+}
+
+bool wasPrevHoldReleased(const MappedInputManager& mappedInput) {
+  return mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+         mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
+         mappedInput.wasReleased(MappedInputManager::Button::Up);
+}
+
+bool wasNextHoldReleased(const MappedInputManager& mappedInput) {
+  return mappedInput.wasReleased(MappedInputManager::Button::Right) ||
+         mappedInput.wasReleased(MappedInputManager::Button::PageForward) ||
+         mappedInput.wasReleased(MappedInputManager::Button::Down);
+}
 // pages per minute, first item is 1 to prevent division by zero if accessed
 const std::vector<int> PAGE_TURN_LABELS = {1, 1, 3, 6, 12};
 
@@ -210,11 +234,11 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  if (consumeLeftRelease && mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+  if (consumeLeftRelease && wasPrevHoldReleased(mappedInput)) {
     consumeLeftRelease = false;
     return;
   }
-  if (consumeRightRelease && mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+  if (consumeRightRelease && wasNextHoldReleased(mappedInput)) {
     consumeRightRelease = false;
     return;
   }
@@ -223,8 +247,7 @@ void EpubReaderActivity::loop() {
       SETTINGS.longPressButtonBehavior == CrossPointSettings::LONG_PRESS_BUTTON_BEHAVIOR::CHAPTER_SKIP;
 
   if (longPressChapterSkip && section && section->pageCount > 0) {
-    if (!consumeLeftRelease && mappedInput.isPressed(MappedInputManager::Button::Left) &&
-        mappedInput.getHeldTime() > skipChapterMs) {
+    if (!consumeLeftRelease && isPrevHoldPressed(mappedInput) && mappedInput.getHeldTime() > skipChapterMs) {
       consumeLeftRelease = true;
       if (section->currentPage != 0) {
         section->currentPage = 0;
@@ -233,8 +256,7 @@ void EpubReaderActivity::loop() {
       }
       return;
     }
-    if (!consumeRightRelease && mappedInput.isPressed(MappedInputManager::Button::Right) &&
-        mappedInput.getHeldTime() > skipChapterMs) {
+    if (!consumeRightRelease && isNextHoldPressed(mappedInput) && mappedInput.getHeldTime() > skipChapterMs) {
       consumeRightRelease = true;
       const int lastPage = section->pageCount - 1;
       if (section->currentPage != lastPage) {
@@ -656,23 +678,26 @@ bool EpubReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta
       return false;
     }
 
-    const int targetChapterIndex = currentChapterIndex + chapterDelta;
-    if (!SeriesManifestStore::tryResolveChapterPath(seriesContext->seriesDir, targetChapterIndex, targetChapterPath)) {
-      LOG_DBG("ERS", "Series chapter %d not found", targetChapterIndex);
+    int targetChapterIndex = currentChapterIndex + chapterDelta;
+    while (SeriesManifestStore::tryResolveChapterPath(seriesContext->seriesDir, targetChapterIndex, targetChapterPath)) {
+      if (Storage.exists(targetChapterPath.c_str())) {
+        break;
+      }
+      targetChapterIndex += chapterDelta;
+      targetChapterPath.clear();
+    }
+    if (targetChapterPath.empty()) {
+      LOG_DBG("ERS", "No available series chapter from %d delta=%d", currentChapterIndex, chapterDelta);
       return false;
     }
-
-    if (!Storage.exists(targetChapterPath.c_str())) {
-      LOG_ERR("ERS", "Series chapter file missing: %s", targetChapterPath.c_str());
-      return false;
-    }
+    currentChapterIndex = targetChapterIndex;
   }
 
   SeriesReadingContext nextContext;
   nextContext.seriesId = seriesContext->seriesId;
   nextContext.seriesDir = seriesContext->seriesDir;
   nextContext.chapterPath = targetChapterPath;
-  nextContext.chapterIndex = currentChapterIndex + chapterDelta;
+  nextContext.chapterIndex = currentChapterIndex;
   APP_STATE.setOpenReadingState(nextContext);
   APP_STATE.saveToFile();
   activityManager.goToReader(nextContext, openChapterAtLastPage);
@@ -1130,3 +1155,7 @@ ScreenshotInfo EpubReaderActivity::getScreenshotInfo() const {
   }
   return info;
 }
+
+
+
+

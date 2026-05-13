@@ -36,8 +36,11 @@ class SeriesManifestStore {
 
   static bool loadMetadataFromSeriesDir(const std::string& seriesDir, SeriesManifest& manifest);
   static size_t countChaptersFromSeriesDir(const std::string& seriesDir);
+  static size_t countAvailableChaptersFromSeriesDir(const std::string& seriesDir);
   static bool loadChapterSliceFromSeriesDir(const std::string& seriesDir, size_t startIndex, size_t maxItems,
                                             std::vector<SeriesChapter>& chaptersOut);
+  static bool loadAvailableChapterSliceFromSeriesDir(const std::string& seriesDir, size_t startIndex, size_t maxItems,
+                                                     std::vector<SeriesChapter>& chaptersOut);
   static bool forEachChapterInSeriesDir(const std::string& seriesDir, const std::function<bool(const SeriesChapter&)>& callback,
                                         size_t* outCount = nullptr);
   static bool findFirstChapterInSeriesDir(const std::string& seriesDir, SeriesChapter& chapterOut, size_t* outCount = nullptr);
@@ -48,6 +51,8 @@ class SeriesManifestStore {
                                    int& chapterIndexOut);
   static bool tryGetChapterIndexByPath(const std::string& chapterPath, int& chapterIndexOut);
   static bool tryResolveChapterPath(const std::string& seriesDir, int chapterIndex, std::string& chapterPath);
+  static bool tryResolveAvailableChapterPath(const std::string& seriesDir, int chapterIndex, std::string& chapterPath,
+                                             int* resolvedChapterIndexOut = nullptr);
   static std::string buildChapterPath(const std::string& seriesDir, const std::string& relativeFile);
 
  private:

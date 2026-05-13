@@ -378,6 +378,23 @@ size_t SeriesManifestStore::countChaptersFromSeriesDir(const std::string& series
   return count;
 }
 
+size_t SeriesManifestStore::countAvailableChaptersFromSeriesDir(const std::string& seriesDir) {
+  size_t count = 0;
+  if (!forEachChapterInSeriesDir(
+          seriesDir,
+          [&seriesDir, &count](const SeriesChapter& chapter) {
+            const std::string chapterPath = buildChapterPath(seriesDir, chapter.file);
+            if (Storage.exists(chapterPath.c_str())) {
+              ++count;
+            }
+            return true;
+          },
+          nullptr)) {
+    return 0;
+  }
+  return count;
+}
+
 bool SeriesManifestStore::forEachChapterInSeriesDir(const std::string& seriesDir,
                                                     const std::function<bool(const SeriesChapter&)>& callback,
                                                     size_t* outCount) {
@@ -476,6 +493,31 @@ bool SeriesManifestStore::loadChapterSliceFromSeriesDir(const std::string& serie
   return ok;
 }
 
+bool SeriesManifestStore::loadAvailableChapterSliceFromSeriesDir(const std::string& seriesDir, const size_t startIndex,
+                                                                 const size_t maxItems,
+                                                                 std::vector<SeriesChapter>& chaptersOut) {
+  chaptersOut.clear();
+  if (maxItems == 0) {
+    return true;
+  }
+
+  size_t index = 0;
+  return forEachChapterInSeriesDir(
+      seriesDir,
+      [&chaptersOut, &index, &seriesDir, startIndex, maxItems](const SeriesChapter& chapter) {
+        const std::string chapterPath = buildChapterPath(seriesDir, chapter.file);
+        if (!Storage.exists(chapterPath.c_str())) {
+          return true;
+        }
+        if (index++ < startIndex) {
+          return true;
+        }
+        chaptersOut.push_back(chapter);
+        return chaptersOut.size() < maxItems;
+      },
+      nullptr);
+}
+
 bool SeriesManifestStore::tryLoadMetadataForChapterPath(const std::string& chapterPath, SeriesManifest& manifest) {
   const std::string seriesDir = extractSeriesDir(chapterPath);
   if (seriesDir.empty()) {
@@ -539,6 +581,26 @@ bool SeriesManifestStore::tryResolveChapterPath(const std::string& seriesDir, co
     }
   }
   return false;
+}
+
+bool SeriesManifestStore::tryResolveAvailableChapterPath(const std::string& seriesDir, const int chapterIndex,
+                                                        std::string& chapterPath, int* resolvedChapterIndexOut) {
+  chapterPath.clear();
+  if (resolvedChapterIndexOut) {
+    *resolvedChapterIndexOut = 0;
+  }
+
+  if (!tryResolveChapterPath(seriesDir, chapterIndex, chapterPath)) {
+    return false;
+  }
+  if (!Storage.exists(chapterPath.c_str())) {
+    chapterPath.clear();
+    return false;
+  }
+  if (resolvedChapterIndexOut) {
+    *resolvedChapterIndexOut = chapterIndex;
+  }
+  return true;
 }
 
 std::string SeriesManifestStore::buildChapterPath(const std::string& seriesDir, const std::string& relativeFile) {

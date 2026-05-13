@@ -29,7 +29,7 @@ bool SeriesChapterSelectionActivity::loadMetadata() {
     return false;
   }
   seriesTitle = manifest.title;
-  totalItems = static_cast<int>(SeriesManifestStore::countChaptersFromSeriesDir(seriesDir));
+  totalItems = static_cast<int>(SeriesManifestStore::countAvailableChaptersFromSeriesDir(seriesDir));
   return totalItems > 0;
 }
 
@@ -43,8 +43,8 @@ bool SeriesChapterSelectionActivity::locateCurrentSelection() {
   constexpr int kScanSliceSize = 64;
   for (int sliceStart = 0; sliceStart < totalItems; sliceStart += kScanSliceSize) {
     std::vector<SeriesChapter> slice;
-    if (!SeriesManifestStore::loadChapterSliceFromSeriesDir(seriesDir, static_cast<size_t>(sliceStart), kScanSliceSize,
-                                                            slice)) {
+    if (!SeriesManifestStore::loadAvailableChapterSliceFromSeriesDir(seriesDir, static_cast<size_t>(sliceStart),
+                                                                     kScanSliceSize, slice)) {
       return false;
     }
     for (size_t i = 0; i < slice.size(); ++i) {
@@ -63,16 +63,12 @@ bool SeriesChapterSelectionActivity::locateCurrentSelection() {
 bool SeriesChapterSelectionActivity::loadVisiblePage() {
   visibleChapters.clear();
   visibleAvailability.clear();
-  if (!SeriesManifestStore::loadChapterSliceFromSeriesDir(seriesDir, static_cast<size_t>(pageStartIndex),
-                                                          static_cast<size_t>(getPageItems()), visibleChapters)) {
+  if (!SeriesManifestStore::loadAvailableChapterSliceFromSeriesDir(seriesDir, static_cast<size_t>(pageStartIndex),
+                                                                   static_cast<size_t>(getPageItems()), visibleChapters)) {
     return false;
   }
 
-  visibleAvailability.reserve(visibleChapters.size());
-  for (const auto& chapter : visibleChapters) {
-    const std::string chapterPath = SeriesManifestStore::buildChapterPath(seriesDir, chapter.file);
-    visibleAvailability.push_back(Storage.exists(chapterPath.c_str()));
-  }
+  visibleAvailability.assign(visibleChapters.size(), true);
   return true;
 }
 

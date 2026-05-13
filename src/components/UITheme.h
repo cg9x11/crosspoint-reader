@@ -17,7 +17,7 @@ class UITheme {
   const ThemeMetrics& getMetrics() const { return *currentMetrics; }
   const BaseTheme& getTheme() const { return *currentTheme; }
   void reload();
-  void setTheme(CrossPointSettings::UI_THEME type);
+  void setTheme(CrossPointSettings::UI_THEME type, bool logSelection = true);
   static int getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
                                      bool hasSubtitle, int extraReservedHeight = 0);
   static std::string getCoverThumbPath(std::string coverBmpPath, int coverHeight);
@@ -32,3 +32,4 @@ class UITheme {
 
 // Helper macro to access current theme
 #define GUI UITheme::getInstance().getTheme()
+

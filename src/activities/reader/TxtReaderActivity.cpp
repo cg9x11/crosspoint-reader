@@ -153,7 +153,7 @@ void TxtReaderActivity::loop() {
         mappedInput.getHeldTime() > skipChapterMs) {
       consumeLeftRelease = true;
       consumePageBackRelease = true;
-      consumeUpRelease = mappedInput.isPressed(MappedInputManager::Button::Up);
+      consumeUpRelease = true;
       if (currentPage != 0) {
         currentPage = 0;
         requestUpdate();
@@ -164,7 +164,7 @@ void TxtReaderActivity::loop() {
         mappedInput.getHeldTime() > skipChapterMs) {
       consumeRightRelease = true;
       consumePageForwardRelease = true;
-      consumeDownRelease = mappedInput.isPressed(MappedInputManager::Button::Down);
+      consumeDownRelease = true;
       const int lastPage = totalPages - 1;
       if (currentPage != lastPage) {
         currentPage = lastPage;
@@ -613,11 +613,15 @@ bool TxtReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta,
   }
 
   std::string targetChapterPath;
-  const int targetChapterIndex = currentChapterIndex + chapterDelta;
-  if (!SeriesManifestStore::tryResolveChapterPath(seriesContext->seriesDir, targetChapterIndex, targetChapterPath)) {
-    return false;
+  int targetChapterIndex = currentChapterIndex + chapterDelta;
+  while (SeriesManifestStore::tryResolveChapterPath(seriesContext->seriesDir, targetChapterIndex, targetChapterPath)) {
+    if (Storage.exists(targetChapterPath.c_str())) {
+      break;
+    }
+    targetChapterIndex += chapterDelta;
+    targetChapterPath.clear();
   }
-  if (!Storage.exists(targetChapterPath.c_str())) {
+  if (targetChapterPath.empty()) {
     return false;
   }
 
@@ -846,3 +850,5 @@ ScreenshotInfo TxtReaderActivity::getScreenshotInfo() const {
   if (info.progressPercent > 100) info.progressPercent = 100;
   return info;
 }
+
+

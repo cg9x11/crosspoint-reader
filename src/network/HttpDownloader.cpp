@@ -1,7 +1,6 @@
 #include "HttpDownloader.h"
 
 #include <Arduino.h>
-#include <HTTPClient.h>
 #include <Logging.h>
 #include <NetworkClient.h>
 #include <NetworkClientSecure.h>
@@ -10,8 +9,10 @@
 #include <base64.h>
 #include <esp_heap_caps.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstring>
-#include <memory>
+#include <string>
 #include <utility>
 
 #include "util/UrlUtils.h"
@@ -25,6 +26,7 @@ std::string g_lastHttpRequestHost;
 constexpr int HTTP_CONNECT_TIMEOUT_MS = 12000;
 constexpr int HTTP_READ_TIMEOUT_MS = 20000;
 constexpr int HTTP_RETRY_COUNT = 3;
+constexpr int HTTP_REDIRECT_LIMIT = 3;
 constexpr uint32_t HTTPS_SAME_HOST_COOLDOWN_MS = 250;
 constexpr size_t HTTP_DOWNLOAD_CHUNK_SIZE = 512;
 constexpr size_t HTTP_DOWNLOAD_FLUSH_INTERVAL = 16384;
@@ -44,6 +46,14 @@ struct ResolvedRequestTarget {
   std::string hostHeader;
   std::string connectHost;
   std::string path;
+};
+
+struct HttpResponseHeaders {
+  int statusCode = 0;
+  size_t contentLength = 0;
+  bool hasContentLength = false;
+  bool chunked = false;
+  std::string location;
 };
 
 std::string escapeUrlForLog(const std::string& text) {
@@ -67,6 +77,22 @@ const char* requestModeLabel(const bool isDownload) { return isDownload ? "downl
 
 std::string buildPartialDownloadPath(const std::string& destPath) { return destPath + ".part"; }
 
+std::string trimAscii(std::string value) {
+  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+    value.erase(value.begin());
+  }
+  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+    value.pop_back();
+  }
+  return value;
+}
+
+std::string toLowerAscii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return value;
+}
+
 void traceRequest(const uint32_t requestId, const bool isDownload, const char* phase, const std::string& url,
                   const char* detail = nullptr) {
   if (!isDownload) {
@@ -78,9 +104,11 @@ void traceRequest(const uint32_t requestId, const bool isDownload, const char* p
   snprintf(ipBuf, sizeof(ipBuf), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
   const long rssi = wifiStatus == WL_CONNECTED ? WiFi.RSSI() : 0;
   const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  traceLogPrintf("HTTP", "#%lu %s %s url=%s wifi=%d ip=%s rssi=%ld heap=%u min=%u largest=%u%s%s\n", requestId,
+  const unsigned stackWords = static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr));
+  traceLogPrintf("HTTP", "#%lu %s %s url=%s wifi=%d ip=%s rssi=%ld heap=%u min=%u largest=%u stack_words=%u%s%s\n",
+                 requestId,
                  requestModeLabel(isDownload), phase, url.c_str(), static_cast<int>(wifiStatus), ipBuf, rssi,
-                 ESP.getFreeHeap(), ESP.getMinFreeHeap(), largest, detail ? " " : "", detail ? detail : "");
+                 ESP.getFreeHeap(), ESP.getMinFreeHeap(), largest, stackWords, detail ? " " : "", detail ? detail : "");
 }
 
 void traceRequestTarget(const uint32_t requestId, const bool isDownload, const ResolvedRequestTarget& target) {
@@ -108,22 +136,7 @@ void setLastHttpError(const std::string& phase, const std::string& url, const in
   }
 }
 
-void configureHttpClient(HTTPClient& http, const std::string& username, const std::string& password) {
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  http.setTimeout(HTTP_READ_TIMEOUT_MS);
-  http.useHTTP10(true);
-  http.setReuse(false);
-  http.addHeader("User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
-
-  if (!username.empty() && !password.empty()) {
-    std::string credentials = username + ":" + password;
-    String encoded = base64::encode(credentials.c_str());
-    http.addHeader("Authorization", "Basic " + encoded);
-  }
-}
-
-bool shouldRetryHttpCode(const int httpCode) { return httpCode < 0; }
+bool shouldRetryHttpCode(const int httpCode) { return httpCode < 0 || httpCode >= 500; }
 
 ParsedUrl parseUrlForHttpClient(const std::string& sanitizedUrl) {
   ParsedUrl parsed;
@@ -134,6 +147,10 @@ ParsedUrl parseUrlForHttpClient(const std::string& sanitizedUrl) {
 
   const std::string scheme = sanitizedUrl.substr(0, schemePos);
   parsed.https = (scheme == "https");
+  if (!parsed.https && scheme != "http") {
+    return parsed;
+  }
+
   size_t hostStart = schemePos + 3;
   size_t pathStart = sanitizedUrl.find('/', hostStart);
   if (pathStart == std::string::npos) {
@@ -144,72 +161,51 @@ ParsedUrl parseUrlForHttpClient(const std::string& sanitizedUrl) {
   }
 
   std::string hostPort = sanitizedUrl.substr(hostStart, pathStart - hostStart);
+  if (hostPort.empty()) {
+    return parsed;
+  }
+
   const size_t colonPos = hostPort.rfind(':');
-  if (colonPos != std::string::npos && colonPos + 1 < hostPort.size()) {
+  if (colonPos != std::string::npos && colonPos + 1 < hostPort.size() && hostPort.find(']') == std::string::npos) {
     parsed.host = hostPort.substr(0, colonPos);
-    parsed.port = static_cast<uint16_t>(atoi(hostPort.substr(colonPos + 1).c_str()));
+    const long port = strtol(hostPort.substr(colonPos + 1).c_str(), nullptr, 10);
+    if (port <= 0 || port > 65535) {
+      return ParsedUrl{};
+    }
+    parsed.port = static_cast<uint16_t>(port);
   } else {
     parsed.host = hostPort;
     parsed.port = parsed.https ? 443 : 80;
   }
 
-  if (parsed.host.empty() || parsed.port == 0) {
-    parsed.host.clear();
-    parsed.path.clear();
-    parsed.port = 0;
-    return parsed;
-  }
-
-  parsed.valid = true;
+  parsed.valid = !parsed.host.empty();
   return parsed;
 }
 
-ResolvedRequestTarget resolveRequestTarget(const std::string& sanitizedUrl) {
+ResolvedRequestTarget resolveRequestTarget(const ParsedUrl& parsed) {
   ResolvedRequestTarget target;
-  const ParsedUrl parsed = parseUrlForHttpClient(sanitizedUrl);
-  if (!parsed.valid) {
+  if (!parsed.valid || parsed.host.empty()) {
     return target;
   }
 
+  target.valid = true;
   target.https = parsed.https;
   target.port = parsed.port;
   target.hostHeader = parsed.host;
   target.connectHost = parsed.host;
-  target.path = parsed.path;
-
-  IPAddress resolvedIp;
-  if (WiFi.hostByName(parsed.host.c_str(), resolvedIp) == 1 && resolvedIp != IPAddress(0, 0, 0, 0)) {
-    const std::string resolvedIpText = resolvedIp.toString().c_str();
-    LOG_DBG("HTTP", "Resolved %s -> %s", parsed.host.c_str(), resolvedIpText.c_str());
-    // For HTTPS endpoints behind Cloudflare/reverse proxies we must keep the hostname
-    // as the actual connect target so TLS SNI and host-based routing continue to work.
-    if (!parsed.https) {
-      target.connectHost = resolvedIpText;
-    }
-  } else {
-    LOG_DBG("HTTP", "DNS resolve failed for %s, using host directly", parsed.host.c_str());
+  if ((parsed.https && parsed.port != 443) || (!parsed.https && parsed.port != 80)) {
+    target.hostHeader += ":" + std::to_string(parsed.port);
   }
-
-  target.valid = true;
+  target.path = parsed.path.empty() ? "/" : parsed.path;
   return target;
-}
-
-bool beginHttpRequest(HTTPClient& http, NetworkClient& client, const ResolvedRequestTarget& target) {
-  if (!target.valid) {
-    return false;
-  }
-
-  LOG_DBG("HTTP", "Connect target: %s:%u%s", target.connectHost.c_str(), target.port, target.path.c_str());
-  const bool began = http.begin(client, target.connectHost.c_str(), target.port, target.path.c_str(), target.https);
-  if (began && target.connectHost != target.hostHeader) {
-    http.addHeader("Host", target.hostHeader.c_str(), true, true);
-  }
-  return began;
 }
 
 void applyRequestCooldown(const uint32_t requestId, const bool isDownload, const ResolvedRequestTarget& target,
                           const std::string& url) {
-  if (!target.https || g_lastHttpRequestEndedAtMs == 0 || g_lastHttpRequestHost != target.hostHeader) {
+  if (!target.valid || !target.https) {
+    return;
+  }
+  if (g_lastHttpRequestHost != target.hostHeader) {
     return;
   }
 
@@ -226,401 +222,539 @@ void applyRequestCooldown(const uint32_t requestId, const bool isDownload, const
   delay(waitMs);
 }
 
-void finalizeRequestClient(HTTPClient& http, std::unique_ptr<NetworkClient>& client, const ResolvedRequestTarget& target) {
-  http.end();
-  if (client) {
-    client->stop();
-    client.reset();
-  }
+void finalizeRequestTarget(const ResolvedRequestTarget& target) {
   g_lastHttpRequestHost = target.hostHeader;
   g_lastHttpRequestEndedAtMs = millis();
   delay(50);
 }
 
-class FileWriteStream final : public Stream {
- public:
-  FileWriteStream(FsFile& file, size_t total, HttpDownloader::ProgressCallback progress)
-      : file_(file), total_(total), progress_(std::move(progress)) {}
-
-  size_t write(uint8_t byte) override { return write(&byte, 1); }
-
-  size_t write(const uint8_t* buffer, size_t size) override {
-    if (aborted_) {
-      return 0;
-    }
-    // Write-through stream for HTTPClient::writeToStream with progress tracking.
-    const size_t written = file_.write(buffer, size);
-    if (written != size) {
-      writeOk_ = false;
-    }
-    downloaded_ += written;
-    if (progress_ && total_ > 0) {
-      if (!progress_(downloaded_, total_)) {
-        aborted_ = true;
-        return 0;
-      }
-    }
-    return written;
-  }
-
-  int available() override { return 0; }
-  int read() override { return -1; }
-  int peek() override { return -1; }
-  void flush() override { file_.flush(); }
-
-  size_t downloaded() const { return downloaded_; }
-  bool ok() const { return writeOk_; }
-  bool aborted() const { return aborted_; }
-
- private:
-  FsFile& file_;
-  size_t total_;
-  size_t downloaded_ = 0;
-  bool writeOk_ = true;
-  bool aborted_ = false;
-  HttpDownloader::ProgressCallback progress_;
-};
-}  // namespace
-
-bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const std::string& username,
-                              const std::string& password) {
-  clearLastHttpError();
-  const uint32_t requestId = nextRequestId();
-  const std::string sanitizedUrl = UrlUtils::sanitizeUrl(url);
-  if (sanitizedUrl != url) {
-    LOG_DBG("HTTP", "Sanitized fetch URL: raw=%s sanitized=%s", escapeUrlForLog(url).c_str(),
-            sanitizedUrl.c_str());
-  }
-  LOG_DBG("HTTP", "Fetching: %s", sanitizedUrl.c_str());
-  traceRequest(requestId, false, "start", sanitizedUrl);
-  const ResolvedRequestTarget target = resolveRequestTarget(sanitizedUrl);
-  if (!target.valid) {
-    setLastHttpError("parse", sanitizedUrl, -1003);
-    LOG_ERR("HTTP", "Fetch URL parse failed: %s", sanitizedUrl.c_str());
-    traceRequest(requestId, false, "parse_fail", sanitizedUrl);
+bool connectClient(NetworkClient& client, const ResolvedRequestTarget& target, const std::string& sanitizedUrl,
+                   const uint32_t requestId, const bool isDownload) {
+  client.setTimeout(HTTP_READ_TIMEOUT_MS);
+  if (!client.connect(target.connectHost.c_str(), target.port, HTTP_CONNECT_TIMEOUT_MS)) {
+    setLastHttpError("connect", sanitizedUrl, -2001);
+    traceRequest(requestId, isDownload, "connect_fail", sanitizedUrl, target.connectHost.c_str());
     return false;
   }
-  traceRequestTarget(requestId, false, target);
+  return true;
+}
 
-  for (int attempt = 1; attempt <= HTTP_RETRY_COUNT; ++attempt) {
-    std::unique_ptr<NetworkClient> client;
-    if (UrlUtils::isHttpsUrl(sanitizedUrl)) {
-      auto* secureClient = new NetworkClientSecure();
-      secureClient->setInsecure();
-      client.reset(secureClient);
-    } else {
-      client.reset(new NetworkClient());
+bool sendHttpRequest(NetworkClient& client, const ResolvedRequestTarget& target, const std::string& sanitizedUrl,
+                     const std::string& username, const std::string& password) {
+  std::string request;
+  request.reserve(512 + target.path.size());
+  request += "GET ";
+  request += target.path;
+  request += " HTTP/1.1\r\nHost: ";
+  request += target.hostHeader;
+  request += "\r\nUser-Agent: CrossPoint-ESP32-" CROSSPOINT_VERSION;
+  request += "\r\nAccept: */*\r\nConnection: close\r\n";
+
+  if (!username.empty() && !password.empty()) {
+    const std::string credentials = username + ":" + password;
+    String encoded = base64::encode(credentials.c_str());
+    request += "Authorization: Basic ";
+    request += encoded.c_str();
+    request += "\r\n";
+  }
+
+  request += "\r\n";
+  const size_t written = client.write(reinterpret_cast<const uint8_t*>(request.data()), request.size());
+  if (written != request.size()) {
+    setLastHttpError("write_request", sanitizedUrl, -2002);
+    return false;
+  }
+  return true;
+}
+
+bool readHttpLine(NetworkClient& client, std::string& line, const std::string& sanitizedUrl, const int errorCode,
+                  const char* errorPhase) {
+  line.clear();
+  const uint32_t startedAt = millis();
+  while (true) {
+    while (client.available() > 0) {
+      const int ch = client.read();
+      if (ch < 0) {
+        break;
+      }
+      if (ch == '\n') {
+        if (!line.empty() && line.back() == '\r') {
+          line.pop_back();
+        }
+        return true;
+      }
+      line.push_back(static_cast<char>(ch));
+      if (line.size() > 4096) {
+        setLastHttpError(errorPhase, sanitizedUrl, errorCode, "line_too_long");
+        return false;
+      }
     }
-    HTTPClient http;
-    applyRequestCooldown(requestId, false, target, sanitizedUrl);
 
-    if (!beginHttpRequest(http, *client, target)) {
-      setLastHttpError("begin", sanitizedUrl, -1000);
-      LOG_ERR("HTTP", "Fetch begin failed (attempt %d/%d): %s", attempt, HTTP_RETRY_COUNT,
-              escapeUrlForLog(sanitizedUrl).c_str());
-      char detail[48];
-      snprintf(detail, sizeof(detail), "attempt=%d/%d", attempt, HTTP_RETRY_COUNT);
-      traceRequest(requestId, false, "begin_fail", sanitizedUrl, detail);
+    if (!client.connected() && client.available() <= 0) {
+      setLastHttpError(errorPhase, sanitizedUrl, errorCode, "closed");
+      return false;
+    }
+    if (millis() - startedAt > HTTP_READ_TIMEOUT_MS) {
+      setLastHttpError(errorPhase, sanitizedUrl, errorCode, "timeout");
+      return false;
+    }
+    delay(1);
+  }
+}
+
+bool readHttpHeaders(NetworkClient& client, HttpResponseHeaders& headers, const std::string& sanitizedUrl) {
+  headers = HttpResponseHeaders{};
+
+  std::string line;
+  if (!readHttpLine(client, line, sanitizedUrl, -2003, "status_line")) {
+    return false;
+  }
+
+  const size_t firstSpace = line.find(' ');
+  if (firstSpace == std::string::npos) {
+    setLastHttpError("status_line", sanitizedUrl, -2003, line.c_str());
+    return false;
+  }
+  headers.statusCode = atoi(line.c_str() + firstSpace + 1);
+  g_lastHttpCode = headers.statusCode;
+
+  while (true) {
+    if (!readHttpLine(client, line, sanitizedUrl, -2004, "headers")) {
+      return false;
+    }
+    if (line.empty()) {
+      return true;
+    }
+
+    const size_t colonPos = line.find(':');
+    if (colonPos == std::string::npos) {
+      continue;
+    }
+    const std::string name = toLowerAscii(trimAscii(line.substr(0, colonPos)));
+    const std::string value = trimAscii(line.substr(colonPos + 1));
+    if (name == "content-length") {
+      headers.contentLength = static_cast<size_t>(strtoull(value.c_str(), nullptr, 10));
+      headers.hasContentLength = true;
+    } else if (name == "transfer-encoding") {
+      headers.chunked = toLowerAscii(value).find("chunked") != std::string::npos;
+    } else if (name == "location") {
+      headers.location = value;
+    }
+  }
+}
+
+std::string buildAbsoluteRedirectUrl(const ParsedUrl& base, const std::string& location) {
+  if (location.empty()) {
+    return std::string();
+  }
+  if (location.find("://") != std::string::npos) {
+    return location;
+  }
+  if (location[0] == '/') {
+    std::string url = base.https ? "https://" : "http://";
+    url += base.host;
+    if ((base.https && base.port != 443) || (!base.https && base.port != 80)) {
+      url += ":" + std::to_string(base.port);
+    }
+    url += location;
+    return url;
+  }
+
+  std::string basePath = base.path.empty() ? "/" : base.path;
+  const size_t slashPos = basePath.rfind('/');
+  if (slashPos == std::string::npos) {
+    basePath = "/";
+  } else {
+    basePath.erase(slashPos + 1);
+  }
+  std::string url = base.https ? "https://" : "http://";
+  url += base.host;
+  if ((base.https && base.port != 443) || (!base.https && base.port != 80)) {
+    url += ":" + std::to_string(base.port);
+  }
+  url += basePath;
+  url += location;
+  return url;
+}
+
+template <typename Writer>
+bool streamFixedBody(NetworkClient& client, const size_t contentLength, const std::string& sanitizedUrl,
+                     Writer&& writer) {
+  uint8_t buffer[HTTP_DOWNLOAD_CHUNK_SIZE];
+  size_t remaining = contentLength;
+  uint32_t lastDataAt = millis();
+
+  while (remaining > 0) {
+    int available = client.available();
+    if (available <= 0) {
+      if (!client.connected()) {
+        setLastHttpError("body_read", sanitizedUrl, -2005, "closed");
+        return false;
+      }
+      if (millis() - lastDataAt > HTTP_READ_TIMEOUT_MS) {
+        setLastHttpError("body_read", sanitizedUrl, -2005, "timeout");
+        return false;
+      }
+      delay(1);
+      continue;
+    }
+
+    size_t toRead = static_cast<size_t>(available);
+    if (toRead > sizeof(buffer)) {
+      toRead = sizeof(buffer);
+    }
+    if (toRead > remaining) {
+      toRead = remaining;
+    }
+
+    const size_t readCount = client.readBytes(buffer, toRead);
+    if (readCount == 0) {
+      if (millis() - lastDataAt > HTTP_READ_TIMEOUT_MS) {
+        setLastHttpError("body_read", sanitizedUrl, -2005, "zero");
+        return false;
+      }
+      delay(1);
+      continue;
+    }
+
+    lastDataAt = millis();
+    if (!writer(buffer, readCount)) {
+      return false;
+    }
+    remaining -= readCount;
+  }
+
+  return true;
+}
+
+template <typename Writer>
+bool streamUntilClose(NetworkClient& client, const std::string& sanitizedUrl, Writer&& writer) {
+  uint8_t buffer[HTTP_DOWNLOAD_CHUNK_SIZE];
+  uint32_t lastDataAt = millis();
+
+  while (client.connected() || client.available() > 0) {
+    int available = client.available();
+    if (available <= 0) {
+      if (millis() - lastDataAt > HTTP_READ_TIMEOUT_MS) {
+        setLastHttpError("body_read", sanitizedUrl, -2006, "timeout");
+        return false;
+      }
+      delay(1);
+      continue;
+    }
+
+    size_t toRead = static_cast<size_t>(available);
+    if (toRead > sizeof(buffer)) {
+      toRead = sizeof(buffer);
+    }
+    const size_t readCount = client.readBytes(buffer, toRead);
+    if (readCount == 0) {
+      if (millis() - lastDataAt > HTTP_READ_TIMEOUT_MS) {
+        setLastHttpError("body_read", sanitizedUrl, -2006, "zero");
+        return false;
+      }
+      delay(1);
+      continue;
+    }
+
+    lastDataAt = millis();
+    if (!writer(buffer, readCount)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+template <typename Writer>
+bool streamChunkedBody(NetworkClient& client, const std::string& sanitizedUrl, Writer&& writer) {
+  std::string line;
+  while (true) {
+    if (!readHttpLine(client, line, sanitizedUrl, -2007, "chunk_len")) {
+      return false;
+    }
+
+    const size_t semiPos = line.find(';');
+    const std::string sizeToken = semiPos == std::string::npos ? line : line.substr(0, semiPos);
+    const size_t chunkSize = static_cast<size_t>(strtoull(trimAscii(sizeToken).c_str(), nullptr, 16));
+    if (chunkSize == 0) {
+      while (true) {
+        if (!readHttpLine(client, line, sanitizedUrl, -2008, "chunk_trailer")) {
+          return false;
+        }
+        if (line.empty()) {
+          return true;
+        }
+      }
+    }
+
+    if (!streamFixedBody(client, chunkSize, sanitizedUrl, writer)) {
+      return false;
+    }
+
+    if (!readHttpLine(client, line, sanitizedUrl, -2009, "chunk_crlf")) {
+      return false;
+    }
+    if (!line.empty()) {
+      setLastHttpError("chunk_crlf", sanitizedUrl, -2009, line.c_str());
+      return false;
+    }
+  }
+}
+
+template <typename Writer>
+bool streamResponseBody(NetworkClient& client, const HttpResponseHeaders& headers, const std::string& sanitizedUrl,
+                        Writer&& writer) {
+  if (headers.chunked) {
+    return streamChunkedBody(client, sanitizedUrl, writer);
+  }
+  if (headers.hasContentLength) {
+    return streamFixedBody(client, headers.contentLength, sanitizedUrl, writer);
+  }
+  return streamUntilClose(client, sanitizedUrl, writer);
+}
+
+template <typename BodyHandler>
+bool executeHttpRequest(const std::string& url, const bool isDownload, const std::string& username,
+                        const std::string& password, const uint32_t requestId, BodyHandler&& bodyHandler,
+                        HttpResponseHeaders* headersOut = nullptr) {
+  std::string currentUrl = UrlUtils::sanitizeUrl(url);
+  traceRequest(requestId, isDownload, "start", currentUrl);
+
+  for (int redirectCount = 0; redirectCount <= HTTP_REDIRECT_LIMIT; ++redirectCount) {
+    const ParsedUrl parsed = parseUrlForHttpClient(currentUrl);
+    const ResolvedRequestTarget target = resolveRequestTarget(parsed);
+    if (!target.valid) {
+      setLastHttpError("parse", currentUrl, -2010);
+      traceRequest(requestId, isDownload, "parse_fail", currentUrl);
+      return false;
+    }
+
+    traceRequestTarget(requestId, isDownload, target);
+
+    for (int attempt = 1; attempt <= HTTP_RETRY_COUNT; ++attempt) {
+      NetworkClient plainClient;
+      NetworkClientSecure secureClient;
+      NetworkClient* client = nullptr;
+      if (target.https) {
+        secureClient.setInsecure();
+        client = &secureClient;
+      } else {
+        client = &plainClient;
+      }
+
+      applyRequestCooldown(requestId, isDownload, target, currentUrl);
+      if (!connectClient(*client, target, currentUrl, requestId, isDownload)) {
+        finalizeRequestTarget(target);
+        if (attempt < HTTP_RETRY_COUNT) {
+          delay(250);
+          continue;
+        }
+        return false;
+      }
+
+      if (!sendHttpRequest(*client, target, currentUrl, username, password)) {
+        client->stop();
+        finalizeRequestTarget(target);
+        if (attempt < HTTP_RETRY_COUNT) {
+          delay(250);
+          continue;
+        }
+        return false;
+      }
+
+      HttpResponseHeaders headers;
+      if (!readHttpHeaders(*client, headers, currentUrl)) {
+        client->stop();
+        finalizeRequestTarget(target);
+        if (attempt < HTTP_RETRY_COUNT) {
+          delay(250);
+          continue;
+        }
+        return false;
+      }
+
+      if (headersOut != nullptr) {
+        *headersOut = headers;
+      }
+
+      if (headers.statusCode >= 300 && headers.statusCode < 400 && !headers.location.empty()) {
+        client->stop();
+        finalizeRequestTarget(target);
+        currentUrl = buildAbsoluteRedirectUrl(parsed, headers.location);
+        traceRequest(requestId, isDownload, "redirect", currentUrl);
+        break;
+      }
+
+      if (headers.statusCode < 200 || headers.statusCode >= 300) {
+        setLastHttpError("status", currentUrl, headers.statusCode);
+        client->stop();
+        finalizeRequestTarget(target);
+        if (shouldRetryHttpCode(headers.statusCode) && attempt < HTTP_RETRY_COUNT) {
+          delay(250);
+          continue;
+        }
+        return false;
+      }
+
+      bool bodyOk = bodyHandler(*client, headers, currentUrl);
+      client->stop();
+      finalizeRequestTarget(target);
+      if (bodyOk) {
+        clearLastHttpError();
+        return true;
+      }
       if (attempt < HTTP_RETRY_COUNT) {
         delay(250);
         continue;
       }
       return false;
     }
-
-    configureHttpClient(http, username, password);
-    {
-      char detail[48];
-      snprintf(detail, sizeof(detail), "attempt=%d/%d", attempt, HTTP_RETRY_COUNT);
-      traceRequest(requestId, false, "get_begin", sanitizedUrl, detail);
-    }
-
-    const int httpCode = http.GET();
-    if (httpCode == HTTP_CODE_OK) {
-      http.writeToStream(&outContent);
-      finalizeRequestClient(http, client, target);
-      clearLastHttpError();
-      LOG_DBG("HTTP", "Fetch success");
-      traceRequest(requestId, false, "success", sanitizedUrl);
-      return true;
-    }
-
-    setLastHttpError("GET", sanitizedUrl, httpCode);
-    LOG_ERR("HTTP", "Fetch failed (attempt %d/%d): %d url=%s", attempt, HTTP_RETRY_COUNT, httpCode,
-            sanitizedUrl.c_str());
-    {
-      char traceDetail[64];
-      snprintf(traceDetail, sizeof(traceDetail), "attempt=%d/%d code=%d", attempt, HTTP_RETRY_COUNT, httpCode);
-      traceRequest(requestId, false, "get_fail", sanitizedUrl, traceDetail);
-    }
-    finalizeRequestClient(http, client, target);
-
-    if (!shouldRetryHttpCode(httpCode) || attempt >= HTTP_RETRY_COUNT) {
-      return false;
-    }
-    delay(250);
   }
+
+  setLastHttpError("redirect", url, -2011);
   return false;
 }
 
+}  // namespace
+
 bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, const std::string& username,
                               const std::string& password) {
-  StreamString stream;
-  if (!fetchUrl(url, stream, username, password)) {
+  outContent.clear();
+  StreamString response;
+  if (!fetchUrl(url, response, username, password)) {
     return false;
   }
-  outContent = stream.c_str();
+  outContent = response.c_str();
   return true;
+}
+
+bool HttpDownloader::fetchUrl(const std::string& url, Stream& stream, const std::string& username,
+                              const std::string& password) {
+  const uint32_t requestId = nextRequestId();
+  bool hadData = false;
+  const bool ok = executeHttpRequest(
+      url, false, username, password, requestId,
+      [&stream, &hadData](NetworkClient& client, const HttpResponseHeaders& headers, const std::string& currentUrl) {
+        return streamResponseBody(client, headers, currentUrl,
+                                  [&stream, &hadData](const uint8_t* buffer, const size_t size) {
+                                    if (size == 0) {
+                                      return true;
+                                    }
+                                    const size_t written = stream.write(buffer, size);
+                                    hadData = hadData || written > 0;
+                                    return written == size;
+                                  });
+      });
+
+  if (ok && !hadData) {
+    clearLastHttpError();
+  }
+  return ok;
 }
 
 HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& url, const std::string& destPath,
                                                              ProgressCallback progress, const std::string& username,
                                                              const std::string& password) {
-  clearLastHttpError();
   const uint32_t requestId = nextRequestId();
   const std::string sanitizedUrl = UrlUtils::sanitizeUrl(url);
-  if (sanitizedUrl != url) {
-    LOG_DBG("HTTP", "Sanitized download URL: raw=%s sanitized=%s", escapeUrlForLog(url).c_str(),
-            sanitizedUrl.c_str());
-  }
-  LOG_DBG("HTTP", "Downloading: %s", sanitizedUrl.c_str());
   if (progress != nullptr) {
+    LOG_DBG("HTTP", "Downloading: %s", escapeUrlForLog(sanitizedUrl).c_str());
     LOG_DBG("HTTP", "Destination: %s", destPath.c_str());
-  }
-  {
-    char detail[180];
+    char detail[96];
     snprintf(detail, sizeof(detail), "dest=%s", destPath.c_str());
     traceRequest(requestId, true, "start", sanitizedUrl, detail);
   }
-  const ResolvedRequestTarget target = resolveRequestTarget(sanitizedUrl);
-  if (!target.valid) {
-    setLastHttpError("parse", sanitizedUrl, -1003);
-    LOG_ERR("HTTP", "Download URL parse failed: %s", sanitizedUrl.c_str());
-    traceRequest(requestId, true, "parse_fail", sanitizedUrl);
+
+  const std::string partialPath = buildPartialDownloadPath(destPath);
+  Storage.remove(partialPath.c_str());
+
+  FsFile file;
+  if (!Storage.openFileForWrite("HTTP", partialPath.c_str(), file)) {
+    setLastHttpError("file_open", sanitizedUrl, -2012);
+    traceRequest(requestId, true, "file_open_fail", sanitizedUrl, partialPath.c_str());
+    return FILE_ERROR;
+  }
+
+  size_t downloaded = 0;
+  size_t flushedAt = 0;
+  bool aborted = false;
+  HttpResponseHeaders responseHeaders;
+  const bool ok = executeHttpRequest(
+      sanitizedUrl, true, username, password, requestId,
+      [&file, &progress, &downloaded, &flushedAt, &aborted, requestId](NetworkClient& client, const HttpResponseHeaders& headers,
+                                                             const std::string& currentUrl) {
+        char detail[128];
+        snprintf(detail, sizeof(detail), "status=%d len=%zu chunked=%d", headers.statusCode,
+                 headers.hasContentLength ? headers.contentLength : 0, headers.chunked ? 1 : 0);
+        traceRequest(requestId, true, "headers", currentUrl, detail);
+
+        return streamResponseBody(client, headers, currentUrl,
+                                  [&file, &progress, &downloaded, &flushedAt, &aborted, &headers](const uint8_t* buffer,
+                                                                                                   const size_t size) {
+                                    const size_t written = file.write(buffer, size);
+                                    if (written != size) {
+                                      return false;
+                                    }
+                                    downloaded += written;
+                                    if (downloaded - flushedAt >= HTTP_DOWNLOAD_FLUSH_INTERVAL) {
+                                      file.flush();
+                                      flushedAt = downloaded;
+                                    }
+                                    if (progress != nullptr && headers.hasContentLength) {
+                                      if (!progress(downloaded, headers.contentLength)) {
+                                        aborted = true;
+                                        setLastHttpError("aborted", std::string(), -2013);
+                                        return false;
+                                      }
+                                    }
+                                    return true;
+                                  });
+      },
+      &responseHeaders);
+
+  file.flush();
+  file.close();
+
+  if (aborted) {
+    Storage.remove(partialPath.c_str());
+    return ABORTED;
+  }
+
+  if (!ok) {
+    Storage.remove(partialPath.c_str());
+    return shouldRetryHttpCode(g_lastHttpCode) ? HTTP_ERROR : HTTP_ERROR;
+  }
+
+  if (responseHeaders.hasContentLength && downloaded != responseHeaders.contentLength) {
+    setLastHttpError("size", sanitizedUrl, -1002);
+    Storage.remove(partialPath.c_str());
     return HTTP_ERROR;
   }
-  traceRequestTarget(requestId, true, target);
 
-  for (int attempt = 1; attempt <= HTTP_RETRY_COUNT; ++attempt) {
-    std::unique_ptr<NetworkClient> client;
-    if (UrlUtils::isHttpsUrl(sanitizedUrl)) {
-      auto* secureClient = new NetworkClientSecure();
-      secureClient->setInsecure();
-      client.reset(secureClient);
-    } else {
-      client.reset(new NetworkClient());
-    }
-    HTTPClient http;
-    applyRequestCooldown(requestId, true, target, sanitizedUrl);
-
-    if (!beginHttpRequest(http, *client, target)) {
-      setLastHttpError("begin", sanitizedUrl, -1000);
-      LOG_ERR("HTTP", "Download begin failed (attempt %d/%d): %s", attempt, HTTP_RETRY_COUNT,
-              escapeUrlForLog(sanitizedUrl).c_str());
-      char detail[48];
-      snprintf(detail, sizeof(detail), "attempt=%d/%d", attempt, HTTP_RETRY_COUNT);
-      traceRequest(requestId, true, "begin_fail", sanitizedUrl, detail);
-      if (attempt < HTTP_RETRY_COUNT) {
-        delay(250);
-        continue;
-      }
-      return HTTP_ERROR;
-    }
-
-    configureHttpClient(http, username, password);
-    {
-      char detail[48];
-      snprintf(detail, sizeof(detail), "attempt=%d/%d", attempt, HTTP_RETRY_COUNT);
-      traceRequest(requestId, true, "get_begin", sanitizedUrl, detail);
-    }
-
-    const int httpCode = http.GET();
-    if (httpCode != HTTP_CODE_OK) {
-      setLastHttpError("GET", sanitizedUrl, httpCode);
-      LOG_ERR("HTTP", "Download failed (attempt %d/%d): %d url=%s", attempt, HTTP_RETRY_COUNT, httpCode,
-              sanitizedUrl.c_str());
-      {
-        char traceDetail[64];
-        snprintf(traceDetail, sizeof(traceDetail), "attempt=%d/%d code=%d", attempt, HTTP_RETRY_COUNT, httpCode);
-        traceRequest(requestId, true, "get_fail", sanitizedUrl, traceDetail);
-      }
-      finalizeRequestClient(http, client, target);
-      if (!shouldRetryHttpCode(httpCode) || attempt >= HTTP_RETRY_COUNT) {
-        return HTTP_ERROR;
-      }
-      delay(250);
-      continue;
-    }
-
-    const int64_t reportedLength = http.getSize();
-    const size_t contentLength = reportedLength > 0 ? static_cast<size_t>(reportedLength) : 0;
-    if (progress != nullptr) {
-      if (contentLength > 0) {
-        LOG_DBG("HTTP", "Content-Length: %zu", contentLength);
-      } else {
-        LOG_DBG("HTTP", "Content-Length: unknown");
-      }
-      char detail[64];
-      snprintf(detail, sizeof(detail), "content_length=%zu", contentLength);
-      traceRequest(requestId, true, "headers", sanitizedUrl, detail);
-    }
-
-    FsFile file;
-    if (!Storage.openFileForWrite("HTTP", destPath.c_str(), file)) {
-      LOG_ERR("HTTP", "Failed to open file for writing");
-      finalizeRequestClient(http, client, target);
-      traceRequest(requestId, true, "file_open_fail", sanitizedUrl, destPath.c_str());
-      return FILE_ERROR;
-    }
-
-    uint8_t buffer[HTTP_DOWNLOAD_CHUNK_SIZE];
-    WiFiClient* stream = http.getStreamPtr();
-    size_t downloaded = 0;
-    size_t flushedAt = 0;
-    bool aborted = false;
-    bool writeOk = true;
-    bool readOk = true;
-    unsigned long lastDataAt = millis();
-
-    while (true) {
-      if (contentLength > 0 && downloaded >= contentLength) {
-        break;
-      }
-
-      int available = stream != nullptr ? stream->available() : 0;
-      if (available <= 0) {
-        if ((stream == nullptr || !stream->connected()) && !http.connected()) {
-          break;
-        }
-        if (millis() - lastDataAt > HTTP_READ_TIMEOUT_MS) {
-          readOk = false;
-          setLastHttpError("read_timeout", sanitizedUrl, -1004);
-          LOG_ERR("HTTP", "Read timeout (attempt %d/%d): downloaded=%zu expected=%zu", attempt,
-                  HTTP_RETRY_COUNT, downloaded, contentLength);
-          traceRequest(requestId, true, "read_timeout", sanitizedUrl);
-          break;
-        }
-        delay(1);
-        continue;
-      }
-
-      size_t toRead = static_cast<size_t>(available);
-      if (toRead > HTTP_DOWNLOAD_CHUNK_SIZE) {
-        toRead = HTTP_DOWNLOAD_CHUNK_SIZE;
-      }
-      if (contentLength > 0) {
-        const size_t remaining = contentLength - downloaded;
-        if (toRead > remaining) {
-          toRead = remaining;
-        }
-      }
-      if (toRead == 0) {
-        break;
-      }
-
-      const size_t readCount = stream->readBytes(buffer, toRead);
-      if (readCount == 0) {
-        if (millis() - lastDataAt > HTTP_READ_TIMEOUT_MS) {
-          readOk = false;
-          setLastHttpError("read_zero", sanitizedUrl, -1005);
-          LOG_ERR("HTTP", "Read stalled (attempt %d/%d): downloaded=%zu expected=%zu", attempt,
-                  HTTP_RETRY_COUNT, downloaded, contentLength);
-          traceRequest(requestId, true, "read_zero", sanitizedUrl);
-          break;
-        }
-        delay(1);
-        continue;
-      }
-
-      lastDataAt = millis();
-      const size_t written = file.write(buffer, readCount);
-      if (written != readCount) {
-        writeOk = false;
-        LOG_ERR("HTTP", "Chunk write failed: wrote=%zu expected=%zu", written, readCount);
-        traceRequest(requestId, true, "chunk_write_fail", sanitizedUrl, destPath.c_str());
-        break;
-      }
-
-      downloaded += written;
-      if (downloaded - flushedAt >= HTTP_DOWNLOAD_FLUSH_INTERVAL) {
-        file.flush();
-        flushedAt = downloaded;
-      }
-
-      if (progress != nullptr && contentLength > 0) {
-        if (!progress(downloaded, contentLength)) {
-          aborted = true;
-          break;
-        }
-      }
-    }
-
-    file.flush();
-    file.close();
-    finalizeRequestClient(http, client, target);
-
-    if (aborted) {
-      Storage.remove(destPath.c_str());
-      return ABORTED;
-    }
-
-    if (progress != nullptr) {
-      LOG_DBG("HTTP", "Downloaded %zu bytes", downloaded);
-      char detail[96];
-      snprintf(detail, sizeof(detail), "attempt=%d/%d downloaded=%zu", attempt, HTTP_RETRY_COUNT, downloaded);
-      traceRequest(requestId, true, "write_done", sanitizedUrl, detail);
-    }
-
-    if (!writeOk) {
-      LOG_ERR("HTTP", "Write failed during download");
-      traceRequest(requestId, true, "file_write_fail", sanitizedUrl, destPath.c_str());
-      Storage.remove(destPath.c_str());
-      return FILE_ERROR;
-    }
-
-    if (!readOk) {
-      Storage.remove(destPath.c_str());
-      if (attempt < HTTP_RETRY_COUNT) {
-        delay(250);
-        continue;
-      }
-      return HTTP_ERROR;
-    }
-
-    if (contentLength == 0 && downloaded == 0) {
-      setLastHttpError("empty", sanitizedUrl, -1001);
-      LOG_ERR("HTTP", "Download failed: no data received");
-      traceRequest(requestId, true, "empty_fail", sanitizedUrl);
-      Storage.remove(destPath.c_str());
-      if (attempt < HTTP_RETRY_COUNT) {
-        delay(250);
-        continue;
-      }
-      return HTTP_ERROR;
-    }
-
-    if (contentLength > 0 && downloaded != contentLength) {
-      setLastHttpError("size", sanitizedUrl, -1002);
-      LOG_ERR("HTTP", "Size mismatch: got %zu, expected %zu", downloaded, contentLength);
-      char detail[96];
-      snprintf(detail, sizeof(detail), "downloaded=%zu expected=%zu", downloaded, contentLength);
-      traceRequest(requestId, true, "size_fail", sanitizedUrl, detail);
-      Storage.remove(destPath.c_str());
-      if (attempt < HTTP_RETRY_COUNT) {
-        delay(250);
-        continue;
-      }
-      return HTTP_ERROR;
-    }
-    clearLastHttpError();
-    if (progress != nullptr) {
-      traceRequest(requestId, true, "success", sanitizedUrl);
-    }
-    return OK;
+  if (downloaded == 0) {
+    setLastHttpError("empty", sanitizedUrl, -1001);
+    Storage.remove(partialPath.c_str());
+    return HTTP_ERROR;
   }
-  return HTTP_ERROR;
+
+  Storage.remove(destPath.c_str());
+  if (!Storage.rename(partialPath.c_str(), destPath.c_str())) {
+    setLastHttpError("rename", sanitizedUrl, -1007);
+    Storage.remove(partialPath.c_str());
+    return FILE_ERROR;
+  }
+
+  if (progress != nullptr) {
+    LOG_DBG("HTTP", "Downloaded %zu bytes", downloaded);
+    traceRequest(requestId, true, "success", sanitizedUrl);
+  }
+  clearLastHttpError();
+  return OK;
 }
 
 int HttpDownloader::getLastHttpCode() { return g_lastHttpCode; }
 
 std::string HttpDownloader::getLastErrorMessage() { return g_lastErrorMessage; }
+
+
