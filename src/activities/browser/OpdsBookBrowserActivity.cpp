@@ -1483,8 +1483,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   downloadTotal = 0;
   currentFileDownloaded = 0;
   currentFileTotal = 0;
-  requestUpdate(true);
-  vTaskDelay(1);
+  requestUpdateAndWait();
   unsigned long lastUiUpdateAt = millis();
   int lastProgressPercent = -1;
   bool cancelRequested = false;
@@ -1508,6 +1507,10 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
     currentPreview = {};
     previewSelectorIndex = -1;
     previewReadyAt = 0;
+  };
+  auto downloadWithRenderPaused = [this](const std::string& remoteUrl, const std::string& localPath) {
+    RenderLock lock(*this);
+    return HttpDownloader::downloadToFile(remoteUrl, localPath, nullptr, server.username, server.password);
   };
   auto reloadBrowseFeed = [this, &returnPath, &resolvedEntry](const bool resumeSeriesDownload) {
     currentPath = returnPath;
@@ -1557,6 +1560,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
       return;
     }
 
+    RenderLock lock(*this);
     if (!downloadRemoteCoverToBmp(remoteCoverUrl, localCoverPath, server.username, server.password)) {
       skipCoverDownloadForSession = true;
       LOG_ERR("OPDS", "Series cover download failed: %s", HttpDownloader::getLastErrorMessage().c_str());
@@ -1568,8 +1572,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   bool useStoredManifest = SeriesManifestStore::loadMetadataFromSeriesDir(localSeriesDir, manifestMetadata);
   if (!useStoredManifest && !skipRemoteManifestFetchForSession && !remoteSeriesBaseUrl.empty()) {
     const std::string remoteManifestUrl = remoteSeriesBaseUrl + "/_series.json";
-    const auto manifestResult = HttpDownloader::downloadToFile(remoteManifestUrl, localManifestPath, nullptr,
-                                                               server.username, server.password);
+    const auto manifestResult = downloadWithRenderPaused(remoteManifestUrl, localManifestPath);
     if (manifestResult == HttpDownloader::OK) {
       useStoredManifest = SeriesManifestStore::loadMetadataFromSeriesDir(localSeriesDir, manifestMetadata);
       manifestStored = useStoredManifest;
@@ -1638,7 +1641,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
       downloadProgress = finalLocalChapterCount;
       downloadTotal = finalServerChapterCount;
       releaseDownloadMemory();
-      requestUpdate(true);
+      requestUpdateAndWait();
 
       size_t downloadedThisBatch = 0;
       for (const auto& pending : pendingBatch) {
@@ -1656,9 +1659,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
           return;
         }
 
-        const auto result =
-            HttpDownloader::downloadToFile(pending.chapterUrl, pending.localChapterPath, nullptr, server.username,
-                                           server.password);
+        const auto result = downloadWithRenderPaused(pending.chapterUrl, pending.localChapterPath);
         if (result == HttpDownloader::ABORTED) {
           currentFileDownloaded = 0;
           currentFileTotal = 0;
@@ -1680,7 +1681,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
         currentFileTotal = 0;
         if (shouldRefreshDownloadProgressUi(downloadProgress, downloadTotal, lastUiUpdateAt, lastProgressPercent,
                                             false)) {
-          requestUpdate(true);
+          requestUpdateAndWait();
         }
         vTaskDelay(1);
       }
@@ -1773,7 +1774,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
     downloadProgress = finalLocalChapterCount;
     downloadTotal = finalServerChapterCount;
     releaseDownloadMemory();
-    requestUpdate(true);
+    requestUpdateAndWait();
 
     size_t downloadedThisBatch = 0;
     for (const auto& pending : pendingBatch) {
@@ -1791,9 +1792,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
         return;
       }
 
-      const auto result =
-          HttpDownloader::downloadToFile(pending.chapterUrl, pending.localChapterPath, nullptr, server.username,
-                                         server.password);
+      const auto result = downloadWithRenderPaused(pending.chapterUrl, pending.localChapterPath);
       if (result == HttpDownloader::ABORTED) {
         currentFileDownloaded = 0;
         currentFileTotal = 0;
@@ -1815,7 +1814,7 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
       currentFileTotal = 0;
       if (shouldRefreshDownloadProgressUi(downloadProgress, downloadTotal, lastUiUpdateAt, lastProgressPercent,
                                           false)) {
-        requestUpdate(true);
+        requestUpdateAndWait();
       }
       vTaskDelay(1);
     }

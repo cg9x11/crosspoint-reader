@@ -27,7 +27,7 @@ constexpr int HTTP_READ_TIMEOUT_MS = 20000;
 constexpr int HTTP_RETRY_COUNT = 3;
 constexpr uint32_t HTTPS_SAME_HOST_COOLDOWN_MS = 250;
 constexpr size_t HTTP_DOWNLOAD_CHUNK_SIZE = 512;
-constexpr size_t HTTP_DOWNLOAD_FLUSH_INTERVAL = 2048;
+constexpr size_t HTTP_DOWNLOAD_FLUSH_INTERVAL = 16384;
 
 struct ParsedUrl {
   bool valid = false;
