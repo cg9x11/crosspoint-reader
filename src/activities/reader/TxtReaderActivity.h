@@ -38,6 +38,11 @@ class TxtReaderActivity final : public Activity {
   bool pendingSeriesSwitchOpenAtLastPage = false;
   std::unordered_map<int, std::string> seriesChapterPathCache;
   unsigned long lastBackgroundIndexTick = 0;
+  std::optional<size_t> pendingRestoreOffset;
+
+  bool hasLayoutSettingsChanged() const;
+  void resetForLayoutChange();
+  void restoreCurrentPageFromPendingOffset(size_t maxSteps);
 
   // Cached settings for cache validation (different fonts/margins require re-indexing)
   int cachedFontId = 0;

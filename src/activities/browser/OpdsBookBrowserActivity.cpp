@@ -751,6 +751,14 @@ void OpdsBookBrowserActivity::loop() {
     return;
   }
 
+  if (state == BrowserState::DOWNLOAD_COMPLETE) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      queueFetch(currentPath);
+    }
+    return;
+  }
+
   if (state == BrowserState::CHECK_WIFI || state == BrowserState::LOADING) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       state == BrowserState::CHECK_WIFI ? onGoHome() : navigateBack();
@@ -963,7 +971,7 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
     return;
   }
 
-  if (state == BrowserState::DOWNLOADING) {
+  if (state == BrowserState::DOWNLOADING || state == BrowserState::DOWNLOAD_COMPLETE) {
     char downloadDetail[96];
     const bool hasDownloadDetail = formatDownloadProgressLabel(downloadProgress, downloadTotal, downloadDetail,
                                                                sizeof(downloadDetail));
@@ -984,7 +992,12 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
       GUI.drawProgressBar(renderer, Rect{20, pageHeight / 2 + 8, pageWidth - 40, 20}, downloadProgress,
                           downloadTotal);
     }
-    const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
+    const bool completed = state == BrowserState::DOWNLOAD_COMPLETE;
+    const auto labels = completed ? mappedInput.mapLabels(tr(STR_BACK), tr(STR_OPEN), "", "")
+                                  : mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
+    if (completed) {
+      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 40, "Download complete");
+    }
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     ScreenDebugRecorder::setBody(statusMessage.c_str(), hasDownloadDetail ? downloadDetail : nullptr);
     ScreenDebugRecorder::setButtonHints(labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -1778,7 +1791,15 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
 
       if (useStoredManifest) {
         tryDownloadSeriesCover();
-        reloadBrowseFeed(false);
+        state = BrowserState::DOWNLOAD_COMPLETE;
+        statusMessage = resolvedEntry.title;
+        currentFileDownloaded = 0;
+        currentFileTotal = 0;
+        downloadProgress = finalLocalChapterCount;
+        downloadTotal = finalServerChapterCount;
+        LOG_DBG("OPDS", "Series download complete via manifest: local=%u/%u",
+                static_cast<unsigned>(finalLocalChapterCount), static_cast<unsigned>(finalServerChapterCount));
+        requestUpdate();
         return;
       }
     }
@@ -1912,7 +1933,11 @@ void OpdsBookBrowserActivity::downloadSeries(const OpdsEntry& entry) {
   tryDownloadSeriesCover();
   currentFileDownloaded = 0;
   currentFileTotal = 0;
-  reloadBrowseFeed(false);
+  state = BrowserState::DOWNLOAD_COMPLETE;
+  statusMessage = resolvedEntry.title;
+  LOG_DBG("OPDS", "Series download complete via feed: local=%u/%u",
+          static_cast<unsigned>(finalLocalChapterCount), static_cast<unsigned>(finalServerChapterCount));
+  requestUpdate();
 }
 
 bool OpdsBookBrowserActivity::ensureSeriesArtifacts(const OpdsEntry& seriesEntry, const std::string& feedUrl,

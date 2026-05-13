@@ -28,6 +28,7 @@
 #include "SeriesChapterSelectionActivity.h"
 #include "SeriesReadingContext.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontGlobals.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ScreenshotUtil.h"
@@ -683,6 +684,30 @@ bool EpubReaderActivity::shouldAutoSkipLeadingBlankPage() const {
          !pendingPercentJump;
 }
 
+bool EpubReaderActivity::hasLayoutSettingsChanged() const {
+  return cachedReaderFontId != SETTINGS.getReaderFontId() ||
+         cachedReaderLineCompression != SETTINGS.getReaderLineCompression() ||
+         cachedExtraParagraphSpacing != SETTINGS.extraParagraphSpacing ||
+         cachedParagraphAlignment != SETTINGS.paragraphAlignment ||
+         cachedScreenMargin != SETTINGS.screenMargin ||
+         cachedHyphenationEnabled != SETTINGS.hyphenationEnabled ||
+         cachedEmbeddedStyle != SETTINGS.embeddedStyle ||
+         cachedImageRendering != SETTINGS.imageRendering ||
+         cachedFocusReadingEnabled != SETTINGS.focusReadingEnabled;
+}
+
+void EpubReaderActivity::captureLayoutSettings() {
+  cachedReaderFontId = SETTINGS.getReaderFontId();
+  cachedReaderLineCompression = SETTINGS.getReaderLineCompression();
+  cachedExtraParagraphSpacing = SETTINGS.extraParagraphSpacing;
+  cachedParagraphAlignment = SETTINGS.paragraphAlignment;
+  cachedScreenMargin = SETTINGS.screenMargin;
+  cachedHyphenationEnabled = SETTINGS.hyphenationEnabled;
+  cachedEmbeddedStyle = SETTINGS.embeddedStyle;
+  cachedImageRendering = SETTINGS.imageRendering;
+  cachedFocusReadingEnabled = SETTINGS.focusReadingEnabled;
+}
+
 bool EpubReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta, const bool openChapterAtLastPage) {
   if (!epub || !seriesContext.has_value()) {
     return false;
@@ -729,6 +754,17 @@ bool EpubReaderActivity::tryNavigateAdjacentSeriesChapter(const int chapterDelta
 
 // TODO: Failure handling
 void EpubReaderActivity::render(RenderLock&& lock) {
+  ensureSdFontLoaded();
+  if (section && hasLayoutSettingsChanged()) {
+    cachedSpineIndex = currentSpineIndex;
+    cachedChapterTotalPageCount = section->pageCount;
+    nextPageNumber = section->currentPage;
+    section.reset();
+  }
+  if (!section) {
+    captureLayoutSettings();
+  }
+
   if (!epub) {
     return;
   }

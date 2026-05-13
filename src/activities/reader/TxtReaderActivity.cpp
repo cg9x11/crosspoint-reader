@@ -7,8 +7,11 @@
 #include <Serialization.h>
 #include <Utf8.h>
 
+#include <algorithm>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "SdCardFontGlobals.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
@@ -76,6 +79,57 @@ RecentBook buildRecentBookEntry(const Txt& txt, const std::optional<SeriesReadin
   return recent;
 }
 }  // namespace
+
+bool TxtReaderActivity::hasLayoutSettingsChanged() const {
+  return initialized &&
+         (cachedFontId != SETTINGS.getReaderFontId() ||
+          cachedScreenMargin != SETTINGS.screenMargin ||
+          cachedParagraphAlignment != SETTINGS.paragraphAlignment);
+}
+
+void TxtReaderActivity::resetForLayoutChange() {
+  if (!pendingRestoreOffset.has_value() && !pageOffsets.empty()) {
+    const int safePage = std::max(0, std::min(currentPage, static_cast<int>(pageOffsets.size()) - 1));
+    pendingRestoreOffset = pageOffsets[safePage];
+  }
+
+  initialized = false;
+  currentPage = 0;
+  totalPages = 1;
+  pageOffsets.clear();
+  currentPageLines.clear();
+  pageOffsets.push_back(0);
+  pageIndexComplete = false;
+  pageIndexCacheSaved = false;
+  lastBackgroundIndexTick = 0;
+}
+
+void TxtReaderActivity::restoreCurrentPageFromPendingOffset(size_t maxSteps) {
+  if (!pendingRestoreOffset.has_value() || !txt || pageOffsets.empty()) {
+    return;
+  }
+
+  const size_t targetOffset = *pendingRestoreOffset;
+  size_t steps = 0;
+  while (!pageIndexComplete && steps < maxSteps && pageOffsets.back() < targetOffset) {
+    const int currentIndexedPage = static_cast<int>(pageOffsets.size()) - 1;
+    if (!ensurePageIndexed(currentIndexedPage + 1)) {
+      break;
+    }
+    ++steps;
+  }
+
+  auto it = std::upper_bound(pageOffsets.begin(), pageOffsets.end(), targetOffset);
+  if (it == pageOffsets.begin()) {
+    currentPage = 0;
+  } else {
+    currentPage = static_cast<int>(std::distance(pageOffsets.begin(), it) - 1);
+  }
+
+  if (pageIndexComplete || pageOffsets.back() >= targetOffset) {
+    pendingRestoreOffset.reset();
+  }
+}
 
 void TxtReaderActivity::onEnter() {
   Activity::onEnter();
@@ -240,8 +294,13 @@ void TxtReaderActivity::loop() {
 }
 
 void TxtReaderActivity::initializeReader() {
+  ensureSdFontLoaded();
   if (initialized) {
     return;
+  }
+
+  if (pageOffsets.empty()) {
+    pageOffsets.push_back(0);
   }
 
   // Store current settings for cache validation
@@ -343,15 +402,19 @@ void TxtReaderActivity::continueBackgroundIndexing() {
   lastBackgroundIndexTick = now;
 
   const int startPages = totalPages;
-  const int targetPage = totalPages + 7;
-  ensurePageIndexed(targetPage);
+  if (pendingRestoreOffset.has_value()) {
+    restoreCurrentPageFromPendingOffset(8);
+  } else {
+    const int targetPage = totalPages + 7;
+    ensurePageIndexed(targetPage);
+  }
 
   if (pageIndexComplete && !pageIndexCacheSaved) {
     savePageIndexCache();
     pageIndexCacheSaved = true;
   }
 
-  if (pageIndexComplete || totalPages != startPages) {
+  if (pendingRestoreOffset.has_value() || pageIndexComplete || totalPages != startPages) {
     requestUpdate();
   }
 }
@@ -493,10 +556,17 @@ void TxtReaderActivity::render(RenderLock&&) {
     return;
   }
 
+  ensureSdFontLoaded();
+  if (hasLayoutSettingsChanged()) {
+    resetForLayoutChange();
+  }
+
   // Initialize reader if not done
   if (!initialized) {
     initializeReader();
   }
+
+  restoreCurrentPageFromPendingOffset(8);
 
   if (pageOffsets.empty()) {
     renderer.clearScreen();

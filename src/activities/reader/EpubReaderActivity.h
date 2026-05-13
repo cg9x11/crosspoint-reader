@@ -22,6 +22,15 @@ class EpubReaderActivity final : public Activity {
   int pagesUntilFullRefresh = 0;
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
+  int cachedReaderFontId = 0;
+  uint8_t cachedReaderLineCompression = 0;
+  uint8_t cachedExtraParagraphSpacing = 0;
+  uint8_t cachedParagraphAlignment = 0;
+  uint8_t cachedScreenMargin = 0;
+  bool cachedHyphenationEnabled = false;
+  bool cachedEmbeddedStyle = false;
+  uint8_t cachedImageRendering = 0;
+  bool cachedFocusReadingEnabled = false;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   // Signals that the next render should reposition within the newly loaded section
@@ -64,6 +73,8 @@ class EpubReaderActivity final : public Activity {
   int getCurrentSeriesChapterIndex() const;
   void persistSeriesReadingState() const;
   bool shouldAutoSkipLeadingBlankPage() const;
+  bool hasLayoutSettingsChanged() const;
+  void captureLayoutSettings();
 
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
