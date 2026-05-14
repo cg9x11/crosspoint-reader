@@ -98,7 +98,7 @@
   }
 
   function escapeHtml(value) {
-    return String(value ? "")
+    return String(value ?? "")
       .replaceAll("&", "&")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
@@ -113,7 +113,7 @@
   }
 
   function mojibakeScore(value) {
-    return (String(value ? "").match(MOJIBAKE_PATTERN) || []).length;
+    return (String(value ?? "").match(MOJIBAKE_PATTERN) || []).length;
   }
 
   function decodeMojibakeOnce(value) {
@@ -121,12 +121,12 @@
       const bytes = Uint8Array.from(Array.from(String(value), (char) => char.charCodeAt(0) & 0xff));
       return new TextDecoder("utf-8").decode(bytes);
     } catch {
-      return String(value ? "");
+      return String(value ?? "");
     }
   }
 
   function repairMojibakeText(value) {
-    let current = String(value ? "");
+    let current = String(value ?? "");
     if (!looksMojibake(current)) {
       return current;
     }
@@ -279,7 +279,7 @@
   }
 
   function truncate(value, length) {
-    const text = String(value ? "").replace(/\s+/g, " ").trim();
+    const text = String(value ?? "").replace(/\s+/g, " ").trim();
     if (!text || text.length <= length) {
       return text;
     }
@@ -287,12 +287,12 @@
   }
 
   function getBrowseQuery() {
-    return String(state.searchQuery ? "").trim();
+    return String(state.searchQuery ?? "").trim();
   }
 
   function hashSeed(value) {
     let hash = 0;
-    const text = String(value ? "");
+    const text = String(value ?? "");
     for (let index = 0; index < text.length; index += 1) {
       hash = (hash << 5) - hash + text.charCodeAt(index);
       hash |= 0;
@@ -306,7 +306,7 @@
   }
 
   function sourceInitials(name) {
-    const parts = String(name ? "")
+    const parts = String(name ?? "")
       .trim()
       .split(/\s+/)
       .filter(Boolean);
@@ -419,7 +419,7 @@
   }
 
   function statusLabel(status) {
-    const key = String(status ? "").toLowerCase();
+    const key = String(status ?? "").toLowerCase();
     const labels = {
       completed: "Hoàn thành",
       complete: "Hoàn thành",
@@ -433,7 +433,7 @@
   }
 
   function syncStatusLabel(status) {
-    const key = String(status ? "").toLowerCase();
+    const key = String(status ?? "").toLowerCase();
     const labels = {
       ready: "Sẵn sàng",
       syncing: "Đang đồng bộ",
@@ -985,7 +985,7 @@
       return "";
     }
 
-    const chapterLabel = `Chương ${String(chapter.chapterIndex ? 0).padStart(3, "0")}`;
+    const chapterLabel = `Chương ${String(chapter.chapterIndex ?? 0).padStart(3, "0")}`;
     const title = truncate(stripHtml(chapter.title || ""), 56);
     return title ? `${chapterLabel} • ${title}` : chapterLabel;
   }
@@ -1248,7 +1248,7 @@
 
   function submitBrowseSearch() {
     const input = $id("browse-search");
-    state.searchQuery = input?.value ? "";
+    state.searchQuery = input?.value ?? "";
     syncBrowseSearchUi();
     void refreshBrowseContent({ append: false });
   }
@@ -1555,7 +1555,7 @@
   }
 
   function looksTechnicalSourceLabel(value) {
-    const text = String(value ? "").trim();
+    const text = String(value ?? "").trim();
     if (!text) {
       return true;
     }
@@ -2300,7 +2300,7 @@
         : "";
       row.className = `chapter-row${downloaded ? " downloaded" : ""}${isChapterFailed(chapter.status) ? " failed" : ""}`;
       row.innerHTML = `
-        <span class="ch-index">${String(chapter.chapterIndex ? 0).padStart(3, "0")}</span>
+        <span class="ch-index">${String(chapter.chapterIndex ?? 0).padStart(3, "0")}</span>
         <div class="ch-main">
           <span class="ch-title">${chapterTitle}</span>
           ${chapterMeta}
@@ -2940,7 +2940,7 @@
     });
 
     $id("save-setting-btn")?.addEventListener("click", async () => {
-      const value = $id("setting-edit-value")?.value ? "";
+      const value = $id("setting-edit-value")?.value ?? "";
       await apiJson("/api/settings", {
         method: "PATCH",
         body: {
