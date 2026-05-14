@@ -112,6 +112,10 @@
     return typeof value === "string" && MOJIBAKE_PATTERN.test(value);
   }
 
+  function mojibakeScore(value) {
+    return (String(value ?? "").match(MOJIBAKE_PATTERN) || []).length;
+  }
+
   function decodeMojibakeOnce(value) {
     try {
       const bytes = Uint8Array.from(Array.from(String(value), (char) => char.charCodeAt(0) & 0xff));
@@ -128,8 +132,13 @@
     }
 
     for (let pass = 0; pass < 3; pass += 1) {
-      const decoded = decodeMojibakeOnce(current).replace(/�/g, current.includes("�") ? "�" : "");
-      if (!decoded || decoded === current) {
+      const decoded = decodeMojibakeOnce(current);
+      if (!decoded || decoded === current || decoded.includes("�")) {
+        break;
+      }
+      const currentScore = mojibakeScore(current);
+      const decodedScore = mojibakeScore(decoded);
+      if (decodedScore >= currentScore || decoded.length + 1 < current.length) {
         break;
       }
       current = decoded;
