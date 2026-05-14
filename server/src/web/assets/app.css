@@ -1718,6 +1718,47 @@ input:checked + .toggle-track::before {
   line-height: 1.5;
 }
 
+.upload-progress-shell {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+}
+
+.upload-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.upload-progress-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.upload-progress-track {
+  margin-top: 8px;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-4);
+}
+
+.upload-progress-bar {
+  width: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #6ea8ff);
+  transition: width 0.18s ease;
+}
+
+.upload-progress-status {
+  margin-bottom: 0;
+}
+
 .modal-footer {
   display: flex;
   flex-wrap: wrap;

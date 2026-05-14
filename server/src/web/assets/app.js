@@ -526,6 +526,64 @@
     return payload;
   }
 
+  function apiFormUpload(url, formData, { method = "POST", headers = {}, onProgress } = {}) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(method, url, true);
+      xhr.setRequestHeader("Accept", "application/json");
+      Object.entries(headers || {}).forEach(([key, value]) => {
+        xhr.setRequestHeader(key, value);
+      });
+
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable || typeof onProgress !== "function") {
+          return;
+        }
+        onProgress({
+          loaded: event.loaded,
+          total: event.total,
+          percent: Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)))
+        });
+      };
+
+      xhr.onerror = () => reject(new Error("Upload failed."));
+      xhr.onload = () => {
+        const contentType = xhr.getResponseHeader("content-type") || "";
+        const payload = contentType.includes("application/json")
+          ? JSON.parse(xhr.responseText || "null")
+          : xhr.responseText;
+
+        if (xhr.status < 200 || xhr.status >= 300) {
+          const message =
+            payload && typeof payload === "object"
+              ? payload.message || payload.error || xhr.statusText || "Upload failed."
+              : String(payload || xhr.statusText || "Upload failed.");
+          reject(buildApiError(message, { status: xhr.status, statusText: xhr.statusText }, payload));
+          return;
+        }
+
+        resolve(payload);
+      };
+
+      xhr.send(formData);
+    });
+  }
+
+  function setUploadProgressState(prefix, message = "", percent = null) {
+    const status = $id(`${prefix}-upload-status`);
+    const bar = $id(`${prefix}-upload-progress-bar`);
+    const value = $id(`${prefix}-upload-progress-value`);
+    if (status) {
+      status.textContent = message;
+    }
+    if (bar) {
+      bar.style.width = `${Math.max(0, Math.min(100, Number(percent) || 0))}%`;
+    }
+    if (value) {
+      value.textContent = percent === null ? "" : `${percent}%`;
+    }
+  }
+
   async function loadLibrary(force = false) {
     if (state.auth.mustChangePassword) {
       return state.libraryItems;
@@ -3351,6 +3409,14 @@
         <label class="form-label">File</label>
         <input class="form-input" id="library-upload-file" type="file" accept=".epub,.zip">
         <p class="form-hint">Hỗ trợ <code>.epub</code> hoặc <code>.zip</code> chứa các chapter <code>.txt</code>.</p>
+        <div class="upload-progress-shell">
+          <div class="upload-progress-meta">
+            <span class="form-label" style="margin:0;">Tiến độ upload</span>
+            <span class="upload-progress-value" id="library-upload-progress-value"></span>
+          </div>
+          <div class="upload-progress-track"><div class="upload-progress-bar" id="library-upload-progress-bar"></div></div>
+          <p class="form-hint upload-progress-status" id="library-upload-status">Chưa chọn file.</p>
+        </div>
         <label class="form-label" style="margin-top:12px;">Tên truyện</label>
         <input class="form-input" id="library-upload-title" placeholder="Để trống để lấy từ file">
         <label class="form-label" style="margin-top:12px;">Tác giả</label>
@@ -3373,8 +3439,17 @@
       }
 
       const submitButton = $id("library-upload-submit");
+      const closeButton = $id("dynamic-modal-close");
       submitButton.disabled = true;
       submitButton.textContent = "Dang upload...";
+      if (closeButton) {
+        closeButton.disabled = true;
+      }
+      setUploadProgressState(
+        "library",
+        `Đang upload ${file.name} (${formatFileSize(file.size || 0)})`,
+        0
+      );
 
       try {
         const formData = new FormData();
@@ -3392,11 +3467,16 @@
           formData.append("description", description);
         }
 
-        const payload = await apiForm("/api/library/uploads/novel", formData);
+        const payload = await apiFormUpload("/api/library/uploads/novel", formData, {
+          onProgress: ({ percent }) => {
+            setUploadProgressState("library", `Đang upload ${file.name}`, percent);
+          }
+        });
+        setUploadProgressState("library", "Upload xong. Đang nạp lại thư viện...", 100);
         state.libraryLoaded = false;
         await loadLibrary(true);
         closeModal("dynamic-modal");
-        showToast("✓", "Đã upload truyện", payload.item?.title || file.name);
+        showToast("✓", "Đã upload truyện", `${payload.item?.title || file.name} · ${formatCount(payload.item?.chapters?.length || 0)} chapter`);
         if (payload.item?.id) {
           navigateTo(libraryDetailPath(payload.item.id));
         } else {
@@ -3407,6 +3487,9 @@
       } finally {
         submitButton.disabled = false;
         submitButton.textContent = "Upload";
+        if (closeButton) {
+          closeButton.disabled = false;
+        }
       }
     });
   }
@@ -3423,6 +3506,14 @@
         <label class="form-label">File</label>
         <input class="form-input" id="library-chapter-upload-file" type="file" accept=".txt,.zip">
         <p class="form-hint">Hỗ trợ 1 file <code>.txt</code> hoặc <code>.zip</code> chứa nhiều chapter <code>.txt</code>.</p>
+        <div class="upload-progress-shell">
+          <div class="upload-progress-meta">
+            <span class="form-label" style="margin:0;">Tiến độ upload</span>
+            <span class="upload-progress-value" id="chapter-upload-progress-value"></span>
+          </div>
+          <div class="upload-progress-track"><div class="upload-progress-bar" id="chapter-upload-progress-bar"></div></div>
+          <p class="form-hint upload-progress-status" id="chapter-upload-status">Chưa chọn file.</p>
+        </div>
         <label class="form-label" style="margin-top:12px;">Chapter bắt đầu</label>
         <input class="form-input" id="library-chapter-start-index" type="number" min="1" placeholder="Mặc định nối tiếp chapter cuối">
       `,
@@ -3441,8 +3532,17 @@
       }
 
       const submitButton = $id("library-chapter-upload-submit");
+      const closeButton = $id("dynamic-modal-close");
       submitButton.disabled = true;
       submitButton.textContent = "Dang upload...";
+      if (closeButton) {
+        closeButton.disabled = true;
+      }
+      setUploadProgressState(
+        "chapter",
+        `Đang upload ${file.name} (${formatFileSize(file.size || 0)})`,
+        0
+      );
 
       try {
         const formData = new FormData();
@@ -3451,17 +3551,25 @@
         if (startIndex) {
           formData.append("startIndex", startIndex);
         }
-        const payload = await apiForm(`/api/library/novels/${encodeURIComponent(libraryItem.id)}/uploads/chapters`, formData);
+        const payload = await apiFormUpload(`/api/library/novels/${encodeURIComponent(libraryItem.id)}/uploads/chapters`, formData, {
+          onProgress: ({ percent }) => {
+            setUploadProgressState("chapter", `Đang upload ${file.name}`, percent);
+          }
+        });
+        setUploadProgressState("chapter", "Upload xong. Đang nạp lại truyện...", 100);
         state.libraryLoaded = false;
         await loadLibrary(true);
         closeModal("dynamic-modal");
-        showToast("✓", "Đã upload chapter", payload.item?.title || libraryItem.title);
+        showToast("✓", "Đã upload chapter", `${payload.item?.title || libraryItem.title} · ${formatCount(payload.item?.totalChapters || 0)} chapter`);
         await refreshActiveDetailView();
       } catch (error) {
         showToast("!", "Upload chapter thất bại", error.message);
       } finally {
         submitButton.disabled = false;
         submitButton.textContent = "Upload";
+        if (closeButton) {
+          closeButton.disabled = false;
+        }
       }
     });
   }
