@@ -1238,8 +1238,8 @@
     if (input) {
       input.value = state.searchQuery;
       input.placeholder = activeSource
-        ? `TÃ¬m truyá»‡n trÃªn ${activeSource.name}â€¦`
-        : "TÃ¬m truyá»‡n, tÃ¡c giáº£â€¦";
+        ? `Tìm truyện trên ${activeSource.name}…`
+        : "Tìm truyện, tác giả…";
     }
     if (clearButton) {
       clearButton.style.display = state.searchQuery ? "block" : "none";
@@ -2001,22 +2001,22 @@
 
   function renderDetailLoading() {
     const detailTitleLink = $id("detail-title-link");
-    detailTitleLink.textContent = "Äang táº£iâ€¦";
+    detailTitleLink.textContent = "Đang tải…";
     detailTitleLink.removeAttribute("href");
     $id("detail-author").textContent = "";
     $id("detail-origin-link").classList.add("is-hidden");
     $id("detail-badges").innerHTML = "";
-    $id("detail-summary").textContent = "Äang láº¥y thÃ´ng tin truyá»‡n vÃ  danh sÃ¡ch chÆ°Æ¡ng.";
+    $id("detail-summary").textContent = "Đang lấy thông tin truyện và danh sách chương.";
     $id("stat-chapters").textContent = "â€”";
     $id("stat-status").textContent = "â€”";
     $id("stat-source").textContent = "â€”";
     if ($id("btn-add-library")) {
       $id("btn-add-library").disabled = false;
-      $id("btn-add-library").textContent = "+ ThÃªm vÃ o thÆ° viá»‡n";
+      $id("btn-add-library").textContent = "+ Thêm vào thư viện";
     }
     if ($id("btn-download-all")) {
       $id("btn-download-all").disabled = false;
-      $id("btn-download-all").textContent = "â†» Äá»“ng bá»™ láº¡i";
+      $id("btn-download-all").textContent = "↻ Đồng bộ lại";
     }
     if ($id("btn-rebuild-library")) {
       $id("btn-rebuild-library").disabled = false;
@@ -2024,10 +2024,10 @@
     }
     if ($id("btn-export-epub")) {
       $id("btn-export-epub").disabled = false;
-      $id("btn-export-epub").textContent = "â‡© Xuáº¥t EPUB tá»•ng há»£p";
+      $id("btn-export-epub").textContent = "⇩ Xuất EPUB tổng hợp";
     }
     $id("chapter-list").innerHTML = `
-      <div class="chapter-row"><span class="ch-title">Äang táº£i chÆ°Æ¡ngâ€¦</span></div>
+      <div class="chapter-row"><span class="ch-title">Đang tải chương…</span></div>
     `;
   }
 
@@ -2243,13 +2243,13 @@
     summary.textContent =
       stripHtml(detail.description) ||
       (sourceBlocked
-        ? detail.chapterWarning || "Nguá»“n Ä‘ang cháº·n truy cáº­p tá»« server nÃªn chá»‰ hiá»ƒn thá»‹ Ä‘Æ°á»£c dá»¯ liá»‡u preview."
-        : "Truyá»‡n chÆ°a cÃ³ mÃ´ táº£ tá»« nguá»“n. Báº¡n váº«n cÃ³ thá»ƒ thÃªm vÃ o thÆ° viá»‡n vÃ  Ä‘á»“ng bá»™ chÆ°Æ¡ng.");
+        ? detail.chapterWarning || "Nguồn đang chặn truy cập từ server nên chỉ hiển thị được dữ liệu preview."
+        : "Truyện chưa có mô tả từ nguồn. Bạn vẫn có thể thêm vào thư viện và đồng bộ chương.");
     summary.classList.toggle("expanded", false);
 
     $id("stat-chapters").textContent = formatCount(detail.chapterCount || detail.chapters?.length || 0);
     $id("stat-status").textContent = statusLabel(detail.status);
-    $id("stat-source").textContent = sourceRecord?.name || detail.sourceId || "KhÃ´ng rÃµ";
+    $id("stat-source").textContent = sourceRecord?.name || detail.sourceId || "Không rõ";
 
     addButton.style.display = detail.libraryItem ? "none" : "block";
     syncButton.style.display = detail.libraryItem ? "block" : "none";
@@ -4217,19 +4217,19 @@
             <span class="translation-chip">${escapeHtml(detail.provider)}</span>
             <span class="translation-chip">${escapeHtml(detail.model)}</span>
             <span class="translation-chip">${escapeHtml(detail.targetLanguage)}</span>
-            ${detail.isActiveAuto ? '<span class="translation-chip">auto chap má»›i</span>' : ''}
-            ${detail.isDefaultEdition ? '<span class="translation-chip">edition máº·c Ä‘á»‹nh</span>' : ''}
+            ${detail.isActiveAuto ? '<span class="translation-chip">auto chap mới</span>' : ''}
+            ${detail.isDefaultEdition ? '<span class="translation-chip">edition mặc định</span>' : ''}
           </div>
           <div class="translation-toolbar">
-            <button class="btn-primary" type="button" id="translation-run-project">Dá»‹ch / cáº­p nháº­t</button>
+            <button class="btn-primary" type="button" id="translation-run-project">Dịch / cập nhật</button>
             <button class="btn-ghost" type="button" id="translation-rebuild-project">Rebuild</button>
-            <button class="btn-ghost" type="button" id="translation-edit-config">Sá»­a cáº¥u hÃ¬nh</button>
+            <button class="btn-ghost" type="button" id="translation-edit-config">Sửa cấu hình</button>
             <button class="btn-ghost" type="button" id="translation-edit-glossary">Glossary</button>
             <button class="btn-ghost" type="button" id="translation-runtime-settings">Runtime</button>
             <button class="btn-ghost" type="button" id="translation-export-epub">Export EPUB</button>
             <button class="btn-ghost" type="button" id="translation-export-txt">Export TXT</button>
           </div>
-          <p class="translation-muted">Glossary active: v${escapeHtml(activeGlossary?.version || 1)} Â· ${escapeHtml((activeGlossary?.entries || []).length)} entries</p>
+          <p class="translation-muted">Glossary active: v${escapeHtml(activeGlossary?.version || 1)} · ${escapeHtml((activeGlossary?.entries || []).length)} entries</p>
         </section>
         <section class="translation-section">
           <h3>Chapters</h3>
@@ -4239,26 +4239,26 @@
                 <strong>${escapeHtml(item.chapter?.title || '')}</strong>
                 <div class="translation-toolbar">
                   <span class="translation-chip">${escapeHtml(item.status || 'pending')}</span>
-                  ${item.hasManualEdits ? '<span class="translation-chip">Ä‘Ã£ sá»­a tay</span>' : ''}
-                  ${item.newGeneratedAvailable ? '<span class="translation-chip">cÃ³ báº£n generated má»›i</span>' : ''}
+                  ${item.hasManualEdits ? '<span class="translation-chip">đã sửa tay</span>' : ''}
+                  ${item.newGeneratedAvailable ? '<span class="translation-chip">có bản generated mới</span>' : ''}
                 </div>
                 <div class="translation-toolbar">
-                  <button class="btn-ghost" type="button" data-translation-open-chapter="${escapeHtml(item.id)}">Má»Ÿ editor</button>
-                  <button class="btn-ghost" type="button" data-translation-retranslate-chapter="${escapeHtml(item.id)}">Dá»‹ch láº¡i</button>
+                  <button class="btn-ghost" type="button" data-translation-open-chapter="${escapeHtml(item.id)}">Mở editor</button>
+                  <button class="btn-ghost" type="button" data-translation-retranslate-chapter="${escapeHtml(item.id)}">Dịch lại</button>
                 </div>
               </article>
-            `).join('') || '<p class="translation-muted">ChÆ°a cÃ³ chapter dá»‹ch.</p>'}
+            `).join('') || '<p class="translation-muted">Chưa có chapter dịch.</p>'}
           </div>
         </section>
       </div>
     `;
     $id('translation-run-project')?.addEventListener('click', async () => {
       await apiJson(`/api/translations/projects/${encodeURIComponent(detail.id)}/start`, { method: 'POST', body: { triggerType: 'manual' } });
-      showToast('â†»', 'ÄÃ£ xáº¿p hÃ ng dá»‹ch', detail.name);
+      showToast('↻', 'Đã xếp hàng dịch', detail.name);
     });
     $id('translation-rebuild-project')?.addEventListener('click', async () => {
       await apiJson(`/api/translations/projects/${encodeURIComponent(detail.id)}/rebuild`, { method: 'POST' });
-      showToast('â†»', 'ÄÃ£ xáº¿p hÃ ng rebuild', detail.name);
+      showToast('↻', 'Đã xếp hàng rebuild', detail.name);
     });
     $id('translation-edit-glossary')?.addEventListener('click', () => void openGlossaryEditor(detail.id));
     $id('translation-runtime-settings')?.addEventListener('click', () => void openRuntimeSettingsModal());
