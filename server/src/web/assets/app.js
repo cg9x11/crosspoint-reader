@@ -1921,7 +1921,7 @@
           )}</div>
         </div>
         <div class="source-actions">
-          <button class="source-browse-btn" type="button">${item.enabled && item.runtimeSupported ? "Duyá»‡t" : "Chi tiáº¿t"}</button>
+          <button class="source-browse-btn" type="button">${item.enabled && item.runtimeSupported ? "Duyệt" : "Chi tiết"}</button>
           <label class="toggle-switch">
             <input type="checkbox" ${item.enabled ? "checked" : ""}>
             <span class="toggle-track"></span>
@@ -1991,7 +1991,7 @@
       }
       const manageButton = manageCard.querySelector("button");
       if (manageButton) {
-        manageButton.textContent = "Quáº£n lÃ½ nguá»“n";
+        manageButton.textContent = "Quản lý nguồn";
       }
       manageButton?.addEventListener("click", () => navigateTo("/extensions"));
       manageCard.addEventListener("click", () => navigateTo("/extensions"));
@@ -2408,7 +2408,7 @@
     ];
 
     if (isInstalled && item.enabled && item.runtimeSupported && !hiddenByPolicy) {
-      footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-browse-source">Duyá»‡t</button>`);
+      footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-browse-source">Duyệt</button>`);
     } else if (hiddenByPolicy) {
       footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-show-source">Hiá»‡n nguá»“n</button>`);
     } else if (!isInstalled) {
@@ -2755,7 +2755,7 @@
       if (hiddenByPolicy) {
         detailButton.textContent = "Hiá»‡n nguá»“n";
       }
-      detailButton.textContent = item.enabled && item.runtimeSupported ? "Duyá»‡t" : "Chi tiáº¿t";
+      detailButton.textContent = item.enabled && item.runtimeSupported ? "Duyệt" : "Chi tiết";
       if (hiddenByPolicy) {
         detailButton.textContent = "Hiá»‡n nguá»“n";
       }
