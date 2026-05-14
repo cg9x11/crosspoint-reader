@@ -2477,9 +2477,9 @@
       </div>
       <p class="server-hint">PhiÃªn bootstrap Ä‘ang khÃ³a API quáº£n trá»‹ cho tá»›i khi cáº­p nháº­t tÃ i khoáº£n admin.</p>
     `;
-    statsCard.innerHTML = `<p class="form-hint" style="margin:0;">ÄÄƒng nháº­p láº§n Ä‘áº§u pháº£i Ä‘á»•i máº­t kháº©u trÆ°á»›c khi dÃ¹ng thÆ° viá»‡n, nguá»“n vÃ  extension.</p>`;
-    logCard.innerHTML = `<p class="form-hint" style="margin:0;">Sau khi Ä‘á»•i máº­t kháº©u, UI sáº½ táº£i láº¡i toÃ n bá»™ dá»¯ liá»‡u server.</p>`;
-    connectCard.innerHTML = `<p class="form-hint" style="margin:0;">TÃ i khoáº£n hiá»‡n táº¡i: ${escapeHtml(
+    statsCard.innerHTML = `<p class="form-hint" style="margin:0;">Đăng nhập lần đầu phải đổi mật khẩu trước khi dùng thư viện, nguồn và extension.</p>`;
+    logCard.innerHTML = `<p class="form-hint" style="margin:0;">Sau khi đổi mật khẩu, UI sẽ tải lại toàn bộ dữ liệu server.</p>`;
+    connectCard.innerHTML = `<p class="form-hint" style="margin:0;">Tài khoản hiện tại: ${escapeHtml(
       state.auth.username || state.auth.user || "admin"
     )}</p>`;
   }
@@ -2507,7 +2507,7 @@
       </div>
       <div class="status-indicator ${ready.status === "ready" ? "" : "offline"}">
         <div class="status-pulse"></div>
-        <span class="status-text">${ready.status === "ready" ? "Äang cháº¡y" : "ChÆ°a sáºµn sÃ ng"}</span>
+        <span class="status-text">${ready.status === "ready" ? "Đang chạy" : "Chưa sẵn sàng"}</span>
       </div>
       <div class="server-url-row">
         <code class="server-url" id="server-url">${escapeHtml((system.baseUrl || location.origin) + "/opds")}</code>
@@ -2519,7 +2519,7 @@
         </button>
       </div>
       <p class="server-hint">
-        DB ${ready.checks?.database ? "ok" : "fail"} â€¢ Redis ${ready.checks?.redis ? "ok" : "fail"} â€¢ Storage ${
+        DB ${ready.checks?.database ? "ok" : "fail"} • Redis ${ready.checks?.redis ? "ok" : "fail"} • Storage ${
           ready.checks?.storage ? "ok" : "fail"
         }
       </p>
@@ -2528,9 +2528,9 @@
       const value = (system.baseUrl || location.origin) + "/opds";
       try {
         await navigator.clipboard.writeText(value);
-        showToast("âœ“", "ÄÃ£ copy URL OPDS", value);
+        showToast("✓", "Đã copy URL OPDS", value);
       } catch {
-        showToast("!", "KhÃ´ng copy Ä‘Æ°á»£c URL", value);
+        showToast("!", "Không copy được URL", value);
       }
     });
 
@@ -2539,25 +2539,25 @@
       <div class="server-stats-grid">
         <div class="server-stat">
           <span class="s-val">${formatCount(libraryItems.length)}</span>
-          <span class="s-lbl">Truyá»‡n</span>
+          <span class="s-lbl">Truyện</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(totalPublished)}</span>
-          <span class="s-lbl">ChÆ°Æ¡ng</span>
+          <span class="s-lbl">Chương</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(enabledSourceCount)}</span>
-          <span class="s-lbl">Nguá»“n</span>
+          <span class="s-lbl">Nguồn</span>
         </div>
       </div>
     `;
 
     const logCard = $("#page-server .log-card");
-    logCard.innerHTML = `<h3 class="card-title">TÃ¡c vá»¥ gáº§n Ä‘Ã¢y</h3><div class="log-list" id="server-task-list"></div>`;
+    logCard.innerHTML = `<h3 class="card-title">Tác vụ gần đây</h3><div class="log-list" id="server-task-list"></div>`;
     const taskList = logCard.querySelector("#server-task-list");
     const jobs = state.tasks.slice(0, 10);
     if (!jobs.length) {
-      setMessageInBlock(taskList, "ChÆ°a cÃ³ job", "HÃ ng Ä‘á»£i hiá»‡n chÆ°a cÃ³ tÃ¡c vá»¥ Ä‘á»“ng bá»™ nÃ o.");
+      setMessageInBlock(taskList, "Chưa có job", "Hàng đợi hiện chưa có tác vụ đồng bộ nào.");
     } else {
       jobs.forEach((job) => {
         const row = document.createElement("div");
@@ -2565,13 +2565,13 @@
         row.className = `log-row log-row-actionable${job.lastError ? " has-error" : ""}`;
         row.tabIndex = 0;
         row.setAttribute("role", "button");
-        row.setAttribute("aria-label", `Má»Ÿ chi tiáº¿t ${job.title || String(job.id)}`);
+        row.setAttribute("aria-label", `Mở chi tiết ${job.title || String(job.id)}`);
         row.innerHTML = `
           <div class="log-dot${taskStateTone(job.state) === "error" ? " error" : ""}"></div>
           <div class="log-content">
             <div class="log-title">${escapeHtml(job.title || String(job.id))}</div>
             <div class="log-time">${escapeHtml(
-              `${taskStateLabel(job.state)} â€¢ ${buildTaskSummary(job)} â€¢ ${formatRelative(job.lastActivityAt || job.createdAt)}`
+              `${taskStateLabel(job.state)} • ${buildTaskSummary(job)} • ${formatRelative(job.lastActivityAt || job.createdAt)}`
             )}</div>
             ${
               job.lastError
@@ -2890,8 +2890,8 @@
     const statusCard = $("#page-server .status-card");
     statusCard.innerHTML = `
       <div class="server-card-header">
-        <span class="card-label">TÃ i khoáº£n</span>
-        <button class="source-browse-btn" type="button" id="logout-btn">ÄÄƒng xuáº¥t</button>
+        <span class="card-label">Tài khoản</span>
+        <button class="source-browse-btn" type="button" id="logout-btn">Đăng xuất</button>
       </div>
       <div class="status-indicator ${state.auth.mustChangePassword ? "offline" : ""}">
         <div class="status-pulse"></div>
@@ -2900,12 +2900,12 @@
       <p class="server-hint">
         ${escapeHtml(
           state.auth.bootstrapMode
-            ? "Äang á»Ÿ cháº¿ Ä‘á»™ bootstrap. HÃ£y Ä‘á»•i tÃ i khoáº£n máº·c Ä‘á»‹nh ngay."
-            : "TÃ i khoáº£n quáº£n trá»‹ Ä‘ang hoáº¡t Ä‘á»™ng á»•n Ä‘á»‹nh."
+            ? "Đang ở chế độ bootstrap. Hãy đổi tài khoản mặc định ngay."
+            : "Tài khoản quản trị đang hoạt động ổn định."
         )}
       </p>
       <div style="display:flex;gap:8px;margin-top:12px;">
-        <button class="btn-primary" type="button" id="change-password-btn" style="flex:1;">Äá»•i máº­t kháº©u</button>
+        <button class="btn-primary" type="button" id="change-password-btn" style="flex:1;">Đổi mật khẩu</button>
       </div>
     `;
     statusCard.querySelector("#logout-btn")?.addEventListener("click", () => void logout());
@@ -2916,11 +2916,11 @@
       <div class="server-stats-grid">
         <div class="server-stat">
           <span class="s-val">${escapeHtml(system.role || "app")}</span>
-          <span class="s-lbl">Vai trÃ²</span>
+          <span class="s-lbl">Vai trò</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(enabledSourceCount)}</span>
-          <span class="s-lbl">Nguá»“n</span>
+          <span class="s-lbl">Nguồn</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(totalQueueConcurrency)}</span>
@@ -2930,10 +2930,10 @@
     `;
 
     const logCard = $("#page-server .log-card");
-    logCard.innerHTML = `<h3 class="card-title">Thiáº¿t láº­p á»©ng dá»¥ng</h3><div class="log-list" id="setting-list"></div>`;
+    logCard.innerHTML = `<h3 class="card-title">Thiết lập ứng dụng</h3><div class="log-list" id="setting-list"></div>`;
     const settingList = logCard.querySelector("#setting-list");
     if (!state.settings.length) {
-      setMessageInBlock(settingList, "ChÆ°a cÃ³ AppSetting", "Server sáº½ tá»± táº¡o khi cÃ³ cáº¥u hÃ¬nh runtime cáº§n lÆ°u.");
+      setMessageInBlock(settingList, "Chưa có AppSetting", "Server sẽ tự tạo khi có cấu hình runtime cần lưu.");
     } else {
       state.settings.forEach((item) => {
         const row = document.createElement("div");
@@ -2942,9 +2942,9 @@
           <div class="log-dot"></div>
           <div class="log-content">
             <div class="log-title">${escapeHtml(item.key)}</div>
-            <div class="log-time">${escapeHtml(truncate(item.value || "", 72) || "(trá»‘ng)")}</div>
+          <div class="log-time">${escapeHtml(truncate(item.value || "", 72) || "(trống)")}</div>
           </div>
-          <button class="source-browse-btn" type="button">Sá»­a</button>
+          <button class="source-browse-btn" type="button">Sửa</button>
         `;
         row.querySelector("button")?.addEventListener("click", () => openSettingEditor(item));
         settingList.appendChild(row);
@@ -2952,22 +2952,22 @@
     }
 
     const connectCard = $("#page-server .connect-card");
-    connectCard.innerHTML = `<h3 class="card-title">Storage & chÃ­nh sÃ¡ch nguá»“n</h3><div class="log-list" id="runtime-list"></div>`;
+    connectCard.innerHTML = `<h3 class="card-title">Storage & chính sách nguồn</h3><div class="log-list" id="runtime-list"></div>`;
     const runtimeList = connectCard.querySelector("#runtime-list");
     const rows = [
       ["APP_BASE_URL", system.baseUrl || location.origin],
-      ["STORAGE_ROOT", storage.root || storage.directories?.root || "KhÃ´ng rÃµ"],
+      ["STORAGE_ROOT", storage.root || storage.directories?.root || "Không rõ"],
       [
-        "NGUá»’N ÄANG HIá»†N",
-        visibleInstalledNames().length ? visibleInstalledNames().join(", ") : "ChÆ°a cÃ³ nguá»“n production"
+        "NGUỒN ĐANG HIỆN",
+        visibleInstalledNames().length ? visibleInstalledNames().join(", ") : "Chưa có nguồn production"
       ],
       [
         "ALLOWLIST",
-        formatSourcePolicyNames(system.sourcePolicy?.enabledAllowlist || [], "KhÃ´ng giá»›i háº¡n")
+        formatSourcePolicyNames(system.sourcePolicy?.enabledAllowlist || [], "Không giới hạn")
       ],
       [
         "PRIORITY",
-        formatSourcePolicyNames(system.sourcePolicy?.priorityIds || [], "KhÃ´ng Ä‘áº·t Æ°u tiÃªn")
+        formatSourcePolicyNames(system.sourcePolicy?.priorityIds || [], "Không đặt ưu tiên")
       ]
     ];
 
