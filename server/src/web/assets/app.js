@@ -106,6 +106,76 @@
       .replaceAll("'", "&#39;");
   }
 
+  const MOJIBAKE_PATTERN = /[ÃÂÄÅÆÇÐÑØÞßáºá»â€‹€™œžŸ]/;
+
+  function looksMojibake(value) {
+    return typeof value === "string" && MOJIBAKE_PATTERN.test(value);
+  }
+
+  function decodeMojibakeOnce(value) {
+    try {
+      const bytes = Uint8Array.from(Array.from(String(value), (char) => char.charCodeAt(0) & 0xff));
+      return new TextDecoder("utf-8").decode(bytes);
+    } catch {
+      return String(value ?? "");
+    }
+  }
+
+  function repairMojibakeText(value) {
+    let current = String(value ?? "");
+    if (!looksMojibake(current)) {
+      return current;
+    }
+
+    for (let pass = 0; pass < 3; pass += 1) {
+      const decoded = decodeMojibakeOnce(current).replace(/�/g, current.includes("�") ? "�" : "");
+      if (!decoded || decoded === current) {
+        break;
+      }
+      current = decoded;
+      if (!looksMojibake(current)) {
+        break;
+      }
+    }
+
+    return current;
+  }
+
+  function repairNodeText(root) {
+    if (!root) {
+      return;
+    }
+
+    const textWalker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    let textNode = textWalker.nextNode();
+    while (textNode) {
+      textNodes.push(textNode);
+      textNode = textWalker.nextNode();
+    }
+
+    textNodes.forEach((node) => {
+      const repaired = repairMojibakeText(node.textContent || "");
+      if (repaired !== node.textContent) {
+        node.textContent = repaired;
+      }
+    });
+
+    const attrNames = ["title", "placeholder", "aria-label", "aria-description", "value"];
+    root.querySelectorAll?.("*").forEach((element) => {
+      attrNames.forEach((name) => {
+        if (!element.hasAttribute(name)) {
+          return;
+        }
+        const current = element.getAttribute(name) || "";
+        const repaired = repairMojibakeText(current);
+        if (repaired !== current) {
+          element.setAttribute(name, repaired);
+        }
+      });
+    });
+  }
+
   function buildRouteLoadingCopy(route) {
     if (route.page === "library") {
       return {
@@ -140,8 +210,8 @@
 
     if (route.page === "translations") {
       return {
-        title: "Äang táº£i báº£n dá»‹ch",
-        subtitle: "Chuáº©n bá»‹ project dá»‹ch, glossary, version vÃ  export..."
+        title: "Đang tải bản dịch",
+        subtitle: "Chuẩn bị project dịch, glossary, version và export..."
       };
     }
 
@@ -1338,6 +1408,7 @@
     const modal = $id(id);
     if (modal) {
       modal.style.display = "flex";
+      repairNodeText(modal);
     }
   }
 
@@ -1368,6 +1439,7 @@
     $id("toast-icon").textContent = icon;
     $id("toast-title").textContent = title;
     $id("toast-sub").textContent = subtitle;
+    repairNodeText(toast);
     toast.style.display = "flex";
 
     if (toastTimer) {
@@ -1389,6 +1461,7 @@
     const closeButton = $id("dynamic-modal-close");
     closeButton.style.display = dismissible ? "flex" : "none";
     $id("dynamic-modal").dataset.dismissible = dismissible ? "true" : "false";
+    repairNodeText($id("dynamic-modal"));
     openModal("dynamic-modal");
   }
 
@@ -3768,8 +3841,8 @@
   function openChangePasswordModal(force = false) {
     const username = state.auth.user || state.auth.username || "admin";
     $id("change-password-hint").textContent = force
-      ? "PhiÃªn bootstrap chá»‰ cho phÃ©p truy cáº­p sau khi báº¡n Ä‘á»•i tÃªn Ä‘Äƒng nháº­p hoáº·c máº­t kháº©u máº·c Ä‘á»‹nh."
-      : "Báº¡n cÃ³ thá»ƒ Ä‘á»•i username vÃ  máº­t kháº©u quáº£n trá»‹ ngay trong giao diá»‡n nÃ y.";
+      ? "Phiên bootstrap chỉ cho phép truy cập sau khi bạn đổi tên đăng nhập hoặc mật khẩu mặc định."
+      : "Bạn có thể đổi username và mật khẩu quản trị ngay trong giao diện này.";
     $id("change-password-username").value = username;
     $id("change-password-current").value = "";
     $id("change-password-next").value = "";
@@ -3799,19 +3872,19 @@
     };
 
     if (!username) {
-      fail("Vui lÃ²ng nháº­p tÃªn Ä‘Äƒng nháº­p má»›i.");
+      fail("Vui lòng nhập tên đăng nhập mới.");
       return;
     }
     if (!currentPassword) {
-      fail("Vui lÃ²ng nháº­p máº­t kháº©u hiá»‡n táº¡i.");
+      fail("Vui lòng nhập mật khẩu hiện tại.");
       return;
     }
     if (!newPassword) {
-      fail("Vui lÃ²ng nháº­p máº­t kháº©u má»›i.");
+      fail("Vui lòng nhập mật khẩu mới.");
       return;
     }
     if (newPassword !== confirmPassword) {
-      fail("Máº­t kháº©u má»›i vÃ  pháº§n nháº­p láº¡i chÆ°a khá»›p.");
+      fail("Mật khẩu mới và phần nhập lại chưa khớp.");
       return;
     }
 
@@ -4552,13 +4625,13 @@
 
       if (!username) {
         error.hidden = false;
-        error.textContent = "Vui lÃ²ng nháº­p tÃªn Ä‘Äƒng nháº­p.";
+        error.textContent = "Vui lòng nhập tên đăng nhập.";
         usernameInput.focus();
         return;
       }
       if (!password) {
         error.hidden = false;
-        error.textContent = "Vui lÃ²ng nháº­p máº­t kháº©u.";
+        error.textContent = "Vui lòng nhập mật khẩu.";
         passwordInput.focus();
         return;
       }
@@ -4604,6 +4677,7 @@
       renderLockedServerState();
       hideRouteLoadingOverlay(state.routeLoadingToken, true);
       openChangePasswordModal(true);
+      repairNodeText(document.body);
       return;
     }
 
@@ -4794,6 +4868,7 @@
       return;
       }
     } finally {
+      repairNodeText(document.body);
       hideRouteLoadingOverlay(token);
     }
   }
@@ -4804,6 +4879,7 @@
       return;
     }
     void initAppPage();
+    repairNodeText(document.body);
   });
 })();
 
