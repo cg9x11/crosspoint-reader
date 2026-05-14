@@ -1630,12 +1630,12 @@
       item.syncStatus === "error" ? "error" : isLibraryFullyDownloaded(item) ? "ready" : "pending";
     const syncChipLabel =
       item.syncStatus === "error"
-        ? "Lá»—i táº£i"
+        ? "Lỗi tải"
         : isLibraryFullyDownloaded(item)
-          ? "ÄÃ£ táº£i Ä‘á»§"
+          ? "Đã tải đủ"
           : hasDownloadedChapters(item)
-            ? "Äang táº£i dá»Ÿ"
-            : "ChÆ°a táº£i";
+            ? "Đang tải dở"
+            : "Chưa tải";
     const preferredCoverUrl = firstText(buildLibraryCoverUrl(item), item.coverUrl);
     const coverMarkup = preferredCoverUrl
       ? `<img class="novel-card-cover" src="${escapeHtml(preferredCoverUrl)}" alt="${escapeHtml(
@@ -1962,32 +1962,32 @@
       manageCard.innerHTML = `
         <div class="source-icon-wrap">EX</div>
         <div class="source-info">
-          <div class="source-name">Extensions nguá»“n</div>
+          <div class="source-name">Extensions nguồn</div>
           <div class="source-meta">
             <span class="source-domain">${escapeHtml(
-              `${items.filter((item) => item.enabled).length} Ä‘ang báº­t â€¢ ${hiddenInstalledCount} áº©n â€¢ ${state.catalogExtensions.length} catalog`
+              `${items.filter((item) => item.enabled).length} đang bật • ${hiddenInstalledCount} ẩn • ${state.catalogExtensions.length} catalog`
             )}</span>
           </div>
           <div class="source-desc">${escapeHtml(
             hiddenInstalledCount > 0
-              ? "Má»Ÿ Ä‘á»ƒ xem nguá»“n áº©n bá»Ÿi policy production, sync registry vÃ  cÃ i hoáº·c gá»¡ extension."
-              : "Má»Ÿ Ä‘á»ƒ sync registry, duyá»‡t catalog vÃ  quáº£n lÃ½ extension nguá»“n."
+              ? "Mở để xem nguồn ẩn bởi policy production, sync registry và cài hoặc gỡ extension."
+              : "Mở để sync registry, duyệt catalog và quản lý extension nguồn."
           )}</div>
         </div>
         <div class="source-actions">
-          <button class="source-browse-btn" type="button">Má»Ÿ Extensions</button>
+          <button class="source-browse-btn" type="button">Mở Extensions</button>
         </div>
       `;
       const manageMeta = manageCard.querySelector(".source-domain");
       if (manageMeta) {
-        manageMeta.textContent = `${items.filter((item) => item.enabled).length} Ä‘ang báº­t â€¢ ${hiddenInstalledCount} áº©n bá»Ÿi policy`;
+        manageMeta.textContent = `${items.filter((item) => item.enabled).length} đang bật • ${hiddenInstalledCount} ẩn bởi policy`;
       }
       const manageDesc = manageCard.querySelector(".source-desc");
       if (manageDesc) {
         manageDesc.textContent =
           hiddenInstalledCount > 0
-            ? "Má»Ÿ Ä‘á»ƒ sync registry, xem nguá»“n Ä‘ang bá»‹ áº©n vÃ  cÃ i hoáº·c gá»¡ extension."
-            : "Má»Ÿ Ä‘á»ƒ sync registry, duyá»‡t catalog vÃ  cáº¥u hÃ¬nh nguá»“n Ä‘ang cÃ i.";
+            ? "Mở để sync registry, xem nguồn đang bị ẩn và cài hoặc gỡ extension."
+            : "Mở để sync registry, duyệt catalog và cấu hình nguồn đang cài.";
       }
       const manageButton = manageCard.querySelector("button");
       if (manageButton) {
@@ -2412,14 +2412,14 @@
     } else if (hiddenByPolicy) {
       footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-show-source">Hiá»‡n nguá»“n</button>`);
     } else if (!isInstalled) {
-      footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-install-source">CÃ i & báº­t</button>`);
+      footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-install-source">Cài & bật</button>`);
     }
 
     if (isInstalled && !item.bundled && !isSystemSource(item)) {
       footerButtons.splice(
         1,
         0,
-        `<button class="btn-ghost" type="button" id="dynamic-remove-source">Gá»¡</button>`
+        `<button class="btn-ghost" type="button" id="dynamic-remove-source">Gỡ</button>`
       );
     }
 
@@ -2777,7 +2777,7 @@
         const removeButton = document.createElement("button");
         removeButton.className = "source-browse-btn";
         removeButton.type = "button";
-        removeButton.textContent = "Gá»¡";
+        removeButton.textContent = "Gỡ";
         removeButton.addEventListener("click", (event) => {
           event.stopPropagation();
           confirmRemoveExtension(item.id, item.name || item.id);
@@ -2823,13 +2823,13 @@
         <button class="source-browse-btn" type="button" id="refresh-registries-btn">Refresh</button>
       </div>
       <div class="log-list" id="registry-list"></div>
-      <p class="server-hint">Æ¯u tiÃªn dÃ¹ng ext-vbook vÃ  vbook-extensions. CÃ³ thá»ƒ thÃªm manifest hoáº·c registry riÃªng tá»« má»¥c Nguá»“n.</p>
+      <p class="server-hint">Ưu tiên dùng ext-vbook và vbook-extensions. Có thể thêm manifest hoặc registry riêng từ mục Nguồn.</p>
     `;
     statusCard.querySelector("#refresh-registries-btn")?.addEventListener("click", () => void refreshRegistries());
 
     const registryList = statusCard.querySelector("#registry-list");
     if (!registries.length) {
-      setMessageInBlock(registryList, "ChÆ°a cÃ³ registry", "ThÃªm manifest hoáº·c repository Ä‘á»ƒ láº¥y catalog extension.");
+      setMessageInBlock(registryList, "Chưa có registry", "Thêm manifest hoặc repository để lấy catalog extension.");
     } else {
       registries.forEach((registry) => {
         const row = document.createElement("div");
@@ -2839,7 +2839,7 @@
           <div class="log-content">
             <div class="log-title">${escapeHtml(registry.name)}</div>
             <div class="log-time">${escapeHtml(
-              `${registry.status} â€¢ ${registry.extensionCount} ext â€¢ ${formatRelative(registry.lastSyncedAt)}`
+              `${registry.status} • ${registry.extensionCount} ext • ${formatRelative(registry.lastSyncedAt)}`
             )}</div>
           </div>
           <button class="source-browse-btn" type="button">Sync</button>
@@ -2849,7 +2849,7 @@
           const removeButton = document.createElement("button");
           removeButton.className = "source-browse-btn";
           removeButton.type = "button";
-          removeButton.textContent = "XÃ³a";
+          removeButton.textContent = "Xóa";
           removeButton.addEventListener("click", () => confirmRemoveRegistry(registry.id, registry.name));
           row.appendChild(removeButton);
         }
@@ -2862,11 +2862,11 @@
       <div class="server-stats-grid">
         <div class="server-stat">
           <span class="s-val">${formatCount(visibleInstalled.length)}</span>
-          <span class="s-lbl">Äang hiá»‡n</span>
+          <span class="s-lbl">Đang hiện</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(hiddenInstalled.length)}</span>
-          <span class="s-lbl">áº¨n bá»Ÿi policy</span>
+          <span class="s-lbl">Ẩn bởi policy</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(catalog.length)}</span>
@@ -2877,13 +2877,13 @@
 
     const logCard = $("#page-server .log-card");
     logCard.innerHTML = `
-      <h3 class="card-title">Nguá»“n Ä‘Ã£ cÃ i</h3>
+      <h3 class="card-title">Nguồn đã cài</h3>
       <div class="sources-list" id="server-installed-list" style="padding:0;gap:10px;"></div>
       ${
         hiddenInstalled.length
           ? `
             <div class="server-subsection">
-              <h3 class="card-title">Nguá»“n áº©n bá»Ÿi policy</h3>
+              <h3 class="card-title">Nguồn ẩn bởi policy</h3>
               <div class="sources-list" id="server-hidden-installed-list" style="padding:0;gap:10px;"></div>
             </div>
           `
@@ -2892,7 +2892,7 @@
     `;
     const installedList = logCard.querySelector("#server-installed-list");
     if (!visibleInstalled.length) {
-      setMessageInBlock(installedList, "ChÆ°a cÃ i extension", "Refresh registry rá»“i chá»n extension cáº§n cÃ i.");
+      setMessageInBlock(installedList, "Chưa cài extension", "Refresh registry rồi chọn extension cần cài.");
     } else {
       visibleInstalled.forEach((item) => installedList.appendChild(createExtensionCard(item)));
     }
@@ -2906,7 +2906,7 @@
 
     const connectCard = $("#page-server .connect-card");
     connectCard.innerHTML = `
-      <h3 class="card-title">Catalog kháº£ dá»¥ng</h3>
+      <h3 class="card-title">Catalog khả dụng</h3>
       <div class="sources-list" id="server-catalog-list" style="padding:0;gap:10px;"></div>
     `;
     const catalogList = connectCard.querySelector("#server-catalog-list");
