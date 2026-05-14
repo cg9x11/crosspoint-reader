@@ -21,7 +21,12 @@ import {
   updateNovelAggregateState
 } from "../library/service.js";
 import { ensureDir, fileExists, readJsonFile, sha256Hex, writeFileAtomic, writeJsonFileAtomic } from "../lib/filesystem.js";
-import { sanitizeHtmlFragment, stripHtmlToReadableText, stripLeadingSourceFilename } from "../lib/sanitize.js";
+import {
+  sanitizeHtmlFragment,
+  stripHtmlToReadableText,
+  stripLeadingChapterTitle,
+  stripLeadingSourceFilename
+} from "../lib/sanitize.js";
 import { getSourceHandler, listSources } from "../plugins/service.js";
 import type { ChapterBuildJobData, ChapterFetchJobData, NovelSyncJobData } from "../queues/jobs.js";
 import type { AppQueues } from "../queues/index.js";
@@ -90,6 +95,51 @@ function isTransientDatabaseTimeout(error: unknown) {
     message.includes("database is locked") ||
     message.includes("busy")
   );
+}
+
+function normalizeChapterTitle(title?: string | null) {
+  return String(title || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function looksGenericChapterTitle(title?: string | null) {
+  const normalized = normalizeChapterTitle(title).toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  return (
+    normalized === "chapter" ||
+    normalized === "chuong" ||
+    normalized === "chương" ||
+    normalized.endsWith(".html") ||
+    normalized.endsWith(".xhtml") ||
+    normalized.endsWith(".txt")
+  );
+}
+
+function chooseStoredChapterTitle(existingTitle?: string | null, fetchedTitle?: string | null) {
+  const existing = normalizeChapterTitle(existingTitle);
+  const fetched = normalizeChapterTitle(fetchedTitle);
+
+  if (!fetched) {
+    return existing;
+  }
+
+  if (!existing) {
+    return fetched;
+  }
+
+  if (looksGenericChapterTitle(fetched) && !looksGenericChapterTitle(existing)) {
+    return existing;
+  }
+
+  if (fetched.length < existing.length / 2 && !looksGenericChapterTitle(existing)) {
+    return existing;
+  }
+
+  return fetched;
 }
 
 async function runWithDatabaseRetry<T>(
@@ -835,7 +885,7 @@ export async function processChapterFetchJob(
       await context.prisma.chapter.update({
         where: { id: chapter.id },
         data: {
-          title: content.title || chapter.title,
+          title: chooseStoredChapterTitle(chapter.title, content.title) || chapter.title,
           status: "queued_build",
           lastError: null
         }
@@ -922,7 +972,12 @@ export async function processChapterBuildJob(
     const targetPath = getPublishedChapterPath(context.storagePaths, chapter.novelId, chapter.chapterIndex);
 
     await ensureDir(path.dirname(tempPath));
-    const chapterText = stripLeadingSourceFilename(stripHtmlToReadableText(`<h1>${chapter.title}</h1>\n${html}`));
+    const chapterTitle = normalizeChapterTitle(chapter.title) || `Chương ${chapter.chapterIndex}`;
+    const chapterBody = stripLeadingChapterTitle(
+      stripLeadingSourceFilename(stripHtmlToReadableText(html)),
+      chapterTitle
+    );
+    const chapterText = `${chapterTitle}\n\n${chapterBody.trim()}`.trimEnd();
     const chapterBuffer = Buffer.from(`${chapterText}\n`, "utf8");
     await writeFileAtomic(tempPath, chapterBuffer);
 

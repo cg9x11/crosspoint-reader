@@ -84,3 +84,24 @@ export function stripLeadingSourceFilename(text: string) {
 
   return lines.join("\n");
 }
+
+export function stripLeadingChapterTitle(text: string, title?: string | null) {
+  const normalizedTitle = String(title || "").trim();
+  if (!normalizedTitle) {
+    return String(text || "");
+  }
+
+  const lines = String(text || "").split(/\r?\n/);
+  while (lines.length && !lines[0]?.trim()) {
+    lines.shift();
+  }
+
+  if (lines[0]?.trim() === normalizedTitle) {
+    lines.shift();
+    while (lines.length && !lines[0]?.trim()) {
+      lines.shift();
+    }
+  }
+
+  return lines.join("\n");
+}
