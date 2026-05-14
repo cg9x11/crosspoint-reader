@@ -2742,7 +2742,7 @@
       const installButton = document.createElement("button");
       installButton.className = "source-browse-btn";
       installButton.type = "button";
-      installButton.textContent = "CÃ i & báº­t";
+      installButton.textContent = "Cài & bật";
       installButton.addEventListener("click", async (event) => {
         event.stopPropagation();
         await installAndEnableExtension(item.id);
@@ -2753,11 +2753,11 @@
       detailButton.className = "source-browse-btn";
       detailButton.type = "button";
       if (hiddenByPolicy) {
-        detailButton.textContent = "Hiá»‡n nguá»“n";
+        detailButton.textContent = "Hiện nguồn";
       }
       detailButton.textContent = item.enabled && item.runtimeSupported ? "Duyệt" : "Chi tiết";
       if (hiddenByPolicy) {
-        detailButton.textContent = "Hiá»‡n nguá»“n";
+        detailButton.textContent = "Hiện nguồn";
       }
       detailButton.addEventListener("click", (event) => {
         event.stopPropagation();
