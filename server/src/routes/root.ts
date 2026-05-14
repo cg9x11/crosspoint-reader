@@ -100,6 +100,14 @@ export async function registerRootRoutes(app: FastifyInstance) {
 
   app.get("/library", renderProtectedPage);
   app.get("/library/:novelId", renderProtectedPage);
+  app.get("/browse", async (request, reply) => {
+    if (requireSession(request, reply)) {
+      return reply;
+    }
+
+    reply.redirect("/sources");
+    return reply;
+  });
   app.get("/sources", renderProtectedPage);
   app.get("/sources/:sourceId", renderProtectedPage);
   app.get("/translations", renderProtectedPage);
@@ -108,5 +116,4 @@ export async function registerRootRoutes(app: FastifyInstance) {
   app.get("/extensions", renderProtectedPage);
   app.get("/settings", renderProtectedPage);
 }
-
 
