@@ -98,7 +98,7 @@
   }
 
   function escapeHtml(value) {
-    return String(value ?? "")
+    return String(value ? "")
       .replaceAll("&", "&")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
@@ -113,7 +113,7 @@
   }
 
   function mojibakeScore(value) {
-    return (String(value ?? "").match(MOJIBAKE_PATTERN) || []).length;
+    return (String(value ? "").match(MOJIBAKE_PATTERN) || []).length;
   }
 
   function decodeMojibakeOnce(value) {
@@ -121,12 +121,12 @@
       const bytes = Uint8Array.from(Array.from(String(value), (char) => char.charCodeAt(0) & 0xff));
       return new TextDecoder("utf-8").decode(bytes);
     } catch {
-      return String(value ?? "");
+      return String(value ? "");
     }
   }
 
   function repairMojibakeText(value) {
-    let current = String(value ?? "");
+    let current = String(value ? "");
     if (!looksMojibake(current)) {
       return current;
     }
@@ -279,7 +279,7 @@
   }
 
   function truncate(value, length) {
-    const text = String(value ?? "").replace(/\s+/g, " ").trim();
+    const text = String(value ? "").replace(/\s+/g, " ").trim();
     if (!text || text.length <= length) {
       return text;
     }
@@ -287,12 +287,12 @@
   }
 
   function getBrowseQuery() {
-    return String(state.searchQuery ?? "").trim();
+    return String(state.searchQuery ? "").trim();
   }
 
   function hashSeed(value) {
     let hash = 0;
-    const text = String(value ?? "");
+    const text = String(value ? "");
     for (let index = 0; index < text.length; index += 1) {
       hash = (hash << 5) - hash + text.charCodeAt(index);
       hash |= 0;
@@ -306,7 +306,7 @@
   }
 
   function sourceInitials(name) {
-    const parts = String(name ?? "")
+    const parts = String(name ? "")
       .trim()
       .split(/\s+/)
       .filter(Boolean);
@@ -419,7 +419,7 @@
   }
 
   function statusLabel(status) {
-    const key = String(status ?? "").toLowerCase();
+    const key = String(status ? "").toLowerCase();
     const labels = {
       completed: "Hoàn thành",
       complete: "Hoàn thành",
@@ -433,7 +433,7 @@
   }
 
   function syncStatusLabel(status) {
-    const key = String(status ?? "").toLowerCase();
+    const key = String(status ? "").toLowerCase();
     const labels = {
       ready: "Sẵn sàng",
       syncing: "Đang đồng bộ",
@@ -985,7 +985,7 @@
       return "";
     }
 
-    const chapterLabel = `Chương ${String(chapter.chapterIndex ?? 0).padStart(3, "0")}`;
+    const chapterLabel = `Chương ${String(chapter.chapterIndex ? 0).padStart(3, "0")}`;
     const title = truncate(stripHtml(chapter.title || ""), 56);
     return title ? `${chapterLabel} • ${title}` : chapterLabel;
   }
@@ -1248,7 +1248,7 @@
 
   function submitBrowseSearch() {
     const input = $id("browse-search");
-    state.searchQuery = input?.value ?? "";
+    state.searchQuery = input?.value ? "";
     syncBrowseSearchUi();
     void refreshBrowseContent({ append: false });
   }
@@ -1555,7 +1555,7 @@
   }
 
   function looksTechnicalSourceLabel(value) {
-    const text = String(value ?? "").trim();
+    const text = String(value ? "").trim();
     if (!text) {
       return true;
     }
@@ -2229,7 +2229,7 @@
     if (sourceBlocked) {
       const warningBadge = document.createElement("span");
       warningBadge.className = "badge badge-cat";
-      warningBadge.textContent = "Nguá»“n Ä‘ang cháº·n server";
+      warningBadge.textContent = "Nguồn đang chặn server";
       badges.appendChild(warningBadge);
     }
 
@@ -2288,7 +2288,7 @@
     visibleChapters.forEach((chapter) => {
       const row = document.createElement("div");
       const downloaded = chapter.status === "published";
-      const chapterTitle = escapeHtml(chapter.title || "ChÆ°Æ¡ng");
+      const chapterTitle = escapeHtml(chapter.title || "Chương");
       const chapterMeta = chapter.lastError
         ? `<span class="ch-meta">${escapeHtml(truncate(chapter.lastError, 88))}</span>`
         : "";
@@ -2300,7 +2300,7 @@
         : "";
       row.className = `chapter-row${downloaded ? " downloaded" : ""}${isChapterFailed(chapter.status) ? " failed" : ""}`;
       row.innerHTML = `
-        <span class="ch-index">${String(chapter.chapterIndex ?? 0).padStart(3, "0")}</span>
+        <span class="ch-index">${String(chapter.chapterIndex ? 0).padStart(3, "0")}</span>
         <div class="ch-main">
           <span class="ch-title">${chapterTitle}</span>
           ${chapterMeta}
@@ -2338,7 +2338,7 @@
       const row = document.createElement("div");
       row.className = "chapter-row";
       row.innerHTML = `<span class="ch-title">${escapeHtml(
-        detail.chapterWarning || "ChÆ°a cÃ³ dá»¯ liá»‡u chÆ°Æ¡ng tá»« nguá»“n hoáº·c thÆ° viá»‡n."
+        detail.chapterWarning || "Chưa có dữ liệu chương từ nguồn hoặc thư viện."
       )}</span>`;
       chapterList.appendChild(row);
     } else if (chapters.length > limitedChapters.length) {
@@ -2348,7 +2348,7 @@
       row.style.color = "var(--ink-3)";
       row.style.fontSize = "12px";
       row.style.fontFamily = "var(--font-mono)";
-      row.textContent = `... vÃ  ${chapters.length - limitedChapters.length} chÆ°Æ¡ng khÃ¡c`;
+      row.textContent = `... và ${chapters.length - limitedChapters.length} chương khác`;
       chapterList.appendChild(row);
     }
 
@@ -2376,7 +2376,7 @@
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
           <path d="M2 4h12M4 8h8M6 12h4"></path>
         </svg>
-        ${state.chapterSort === "desc" ? "Má»›i nháº¥t" : "CÅ© nháº¥t"}
+        ${state.chapterSort === "desc" ? "Mới nhất" : "Cũ nhất"}
       `;
     }
 
@@ -2391,12 +2391,12 @@
 
   function openExtensionInfoModal(item, isInstalled) {
     const capabilities = [
-      ["Home", item.capabilities?.supportsHome ?? item.supportsHome],
-      ["Search", item.capabilities?.supportsSearch ?? item.supportsSearch],
-      ["Genre", item.capabilities?.supportsGenre ?? item.supportsGenre],
-      ["Paging", item.capabilities?.supportsPagination ?? item.supportsPagination],
-      ["Detail", item.capabilities?.supportsDetailDescription ?? item.supportsDetailDescription],
-      ["Browser", item.capabilities?.supportsBrowserAutomation ?? item.supportsBrowserAutomation]
+      ["Home", item.capabilities?.supportsHome ? item.supportsHome],
+      ["Search", item.capabilities?.supportsSearch ? item.supportsSearch],
+      ["Genre", item.capabilities?.supportsGenre ? item.supportsGenre],
+      ["Paging", item.capabilities?.supportsPagination ? item.supportsPagination],
+      ["Detail", item.capabilities?.supportsDetailDescription ? item.supportsDetailDescription],
+      ["Browser", item.capabilities?.supportsBrowserAutomation ? item.supportsBrowserAutomation]
     ]
       .filter((entry) => Boolean(entry[1]))
       .map((entry) => `<span class="badge badge-cat">${escapeHtml(entry[0])}</span>`)
@@ -2433,7 +2433,7 @@
         }
         <div style="display:flex;flex-direction:column;gap:12px;">
           <div>
-            <span class="form-label">Tráº¡ng thÃ¡i</span>
+            <span class="form-label">Trạng thái</span>
             <p class="form-hint" style="margin:0;">
               ${escapeHtml(
                 isInstalled
@@ -2443,7 +2443,7 @@
             </p>
           </div>
           <div>
-            <span class="form-label">Nguá»“n / domain</span>
+            <span class="form-label">Nguồn / domain</span>
             <p class="form-hint" style="margin:0;">${escapeHtml(
               item.sourceUrl ? sourceDomain(item.sourceUrl) : item.registryName || item.runtimeKind || "local"
             )}</p>
@@ -2940,7 +2940,7 @@
     });
 
     $id("save-setting-btn")?.addEventListener("click", async () => {
-      const value = $id("setting-edit-value")?.value ?? "";
+      const value = $id("setting-edit-value")?.value ? "";
       await apiJson("/api/settings", {
         method: "PATCH",
         body: {
@@ -3693,7 +3693,7 @@
       }
 
       showDynamicModal({
-        title: preview.title || `ChÆ°Æ¡ng ${preview.chapterIndex || ""}`.trim(),
+        title: preview.title || `Chương ${preview.chapterIndex || ""}`.trim(),
         bodyHtml: `
           <div class="chapter-preview-shell">
             <div class="detail-badges" style="margin-bottom:10px;">
@@ -3708,7 +3708,7 @@
               <div><span class="form-label">Truyá»‡n</span><p class="form-hint">${escapeHtml(
                 preview.novelTitle || libraryItem.title || ""
               )}</p></div>
-              <div><span class="form-label">ChÆ°Æ¡ng</span><p class="form-hint">${escapeHtml(
+              <div><span class="form-label">Chương</span><p class="form-hint">${escapeHtml(
                 String(preview.chapterIndex || "")
               )}</p></div>
               ${
@@ -4891,7 +4891,6 @@
     repairNodeText(document.body);
   });
 })();
-
 
 
 
