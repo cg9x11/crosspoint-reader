@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { buildBookEpub } from "../../epub/builder.js";
 import { readEpubCoverBuffer } from "../../library/cover-assets.js";
+import { appendChaptersFromUpload, importNovelFromUpload } from "../../library/import.js";
 import {
   deleteLibraryNovel,
   getChapterHtmlPath,
@@ -232,6 +233,32 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
     };
   });
 
+  app.post("/api/library/uploads/novel", async (request, reply) => {
+    const file = await request.file();
+    if (!file) {
+      reply.code(400);
+      return { ok: false, error: "UPLOAD_FILE_REQUIRED", message: "Chọn file EPUB hoặc ZIP chứa chapter TXT." };
+    }
+    const fields = file.fields as Record<string, { value: string }>;
+    const title = fields.title?.value?.trim() || null;
+    const author = fields.author?.value?.trim() || null;
+    const description = fields.description?.value?.trim() || null;
+    const buffer = await file.toBuffer();
+    const lowerName = file.filename.toLowerCase();
+    if (!lowerName.endsWith(".epub") && !lowerName.endsWith(".zip")) {
+      reply.code(400);
+      return { ok: false, error: "UPLOAD_FILE_TYPE_UNSUPPORTED", message: "Chỉ hỗ trợ .epub hoặc .zip." };
+    }
+    const item = await importNovelFromUpload(app.prisma, app.storagePaths, {
+      fileName: file.filename,
+      buffer,
+      title,
+      author,
+      description
+    });
+    return { ok: true, item: await getLibraryNovel(app.prisma, item.id) };
+  });
+
   app.get("/api/library/novels/:novelId", async (request, reply) => {
     const params = z.object({ novelId: z.string().min(1) }).parse(request.params);
     const item = await getLibraryNovel(app.prisma, params.novelId);
@@ -372,6 +399,30 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
   app.post("/api/library/novels/:novelId/rebuild", async (request) => {
     const params = z.object({ novelId: z.string().min(1) }).parse(request.params);
     return rebuildNovelPipeline(app.queues, app.prisma, app.storagePaths, params.novelId);
+  });
+
+  app.post("/api/library/novels/:novelId/uploads/chapters", async (request, reply) => {
+    const params = z.object({ novelId: z.string().min(1) }).parse(request.params);
+    const file = await request.file();
+    if (!file) {
+      reply.code(400);
+      return { ok: false, error: "UPLOAD_FILE_REQUIRED", message: "Chọn file TXT hoặc ZIP chapter." };
+    }
+    const fields = file.fields as Record<string, { value: string }>;
+    const startIndexRaw = Number(fields.startIndex?.value || 0);
+    const buffer = await file.toBuffer();
+    const lowerName = file.filename.toLowerCase();
+    if (!lowerName.endsWith(".txt") && !lowerName.endsWith(".zip")) {
+      reply.code(400);
+      return { ok: false, error: "UPLOAD_FILE_TYPE_UNSUPPORTED", message: "Chỉ hỗ trợ .txt hoặc .zip cho upload chapter." };
+    }
+    const item = await appendChaptersFromUpload(app.prisma, app.storagePaths, {
+      novelId: params.novelId,
+      fileName: file.filename,
+      buffer,
+      startIndex: Number.isFinite(startIndexRaw) && startIndexRaw > 0 ? startIndexRaw : null
+    });
+    return { ok: true, item };
   });
 
   app.post("/api/library/novels/:novelId/chapters/:chapterId/retry", async (request) => {

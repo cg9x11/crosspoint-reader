@@ -365,6 +365,12 @@ ul { list-style: none; }
   height: var(--header-h);
 }
 
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .page-title {
   font-family: var(--font-serif);
   font-size: 26px;

@@ -1,5 +1,6 @@
 ﻿import Fastify from "fastify";
 import cookie from "@fastify/cookie";
+import multipart from "@fastify/multipart";
 
 import type { PrismaClient } from "./lib/prisma.js";
 import type { Redis } from "ioredis";
@@ -27,6 +28,12 @@ export async function buildApp({ config, prisma, redis, storagePaths }: BuildApp
   const queues = createQueues(config, redis);
 
   await app.register(cookie);
+  await app.register(multipart, {
+    limits: {
+      files: 1,
+      fileSize: 256 * 1024 * 1024
+    }
+  });
 
   app.decorate("appConfig", config);
   app.decorate("prisma", prisma);

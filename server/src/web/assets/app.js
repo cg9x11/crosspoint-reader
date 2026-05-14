@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 (() => {
   const boot = window.__CPR_BOOT__ || {};
@@ -24,9 +24,9 @@
     ["www.ln.hako.re", "docln.sbs"]
   ]);
   const SERVER_SECTIONS = [
-    { id: "tasks", label: "Tác vụ", path: "/tasks" },
+    { id: "tasks", label: "TÃ¡c vá»¥", path: "/tasks" },
     { id: "extensions", label: "Extensions", path: "/extensions" },
-    { id: "settings", label: "Cài đặt", path: "/settings" }
+    { id: "settings", label: "CÃ i Ä‘áº·t", path: "/settings" }
   ];
   const FALLBACK_AUTH = {
     authenticated: false,
@@ -140,8 +140,8 @@
 
     if (route.page === "translations") {
       return {
-        title: "Đang tải bản dịch",
-        subtitle: "Chuẩn bị project dịch, glossary, version và export..."
+        title: "Äang táº£i báº£n dá»‹ch",
+        subtitle: "Chuáº©n bá»‹ project dá»‹ch, glossary, version vÃ  export..."
       };
     }
 
@@ -204,7 +204,7 @@
     if (!text || text.length <= length) {
       return text;
     }
-    return `${text.slice(0, Math.max(0, length - 1)).trimEnd()}…`;
+    return `${text.slice(0, Math.max(0, length - 1)).trimEnd()}â€¦`;
   }
 
   function getBrowseQuery() {
@@ -293,7 +293,7 @@
         .replace(/[-_]+/g, " ")
         .replace(/\b\w/g, (character) => character.toUpperCase());
     } catch {
-      return String(rawUrl || "Không rõ");
+      return String(rawUrl || "KhÃ´ng rÃµ");
     }
   }
 
@@ -342,27 +342,27 @@
   function statusLabel(status) {
     const key = String(status ?? "").toLowerCase();
     const labels = {
-      completed: "Hoàn thành",
-      complete: "Hoàn thành",
-      ongoing: "Đang ra",
-      updating: "Đang cập nhật",
-      finished: "Hoàn thành",
-      active: "Đang hoạt động",
-      idle: "Chờ"
+      completed: "HoÃ n thÃ nh",
+      complete: "HoÃ n thÃ nh",
+      ongoing: "Äang ra",
+      updating: "Äang cáº­p nháº­t",
+      finished: "HoÃ n thÃ nh",
+      active: "Äang hoáº¡t Ä‘á»™ng",
+      idle: "Chá»"
     };
-    return labels[key] || (status ? String(status) : "Chưa rõ");
+    return labels[key] || (status ? String(status) : "ChÆ°a rÃµ");
   }
 
   function syncStatusLabel(status) {
     const key = String(status ?? "").toLowerCase();
     const labels = {
-      ready: "Sẵn sàng",
-      syncing: "Đang đồng bộ",
-      error: "Lỗi",
-      idle: "Chưa đồng bộ",
-      pending: "Đang chờ"
+      ready: "Sáºµn sÃ ng",
+      syncing: "Äang Ä‘á»“ng bá»™",
+      error: "Lá»—i",
+      idle: "ChÆ°a Ä‘á»“ng bá»™",
+      pending: "Äang chá»"
     };
-    return labels[key] || (status ? String(status) : "Chưa rõ");
+    return labels[key] || (status ? String(status) : "ChÆ°a rÃµ");
   }
 
   function formatCount(value) {
@@ -394,7 +394,7 @@
 
   function formatRelative(value) {
     if (!value) {
-      return "Chưa có";
+      return "ChÆ°a cÃ³";
     }
 
     const date = new Date(value);
@@ -407,7 +407,7 @@
     const rtf = new Intl.RelativeTimeFormat("vi", { numeric: "auto" });
 
     if (Math.abs(diffMinutes) < 1) {
-      return "Vừa xong";
+      return "Vá»«a xong";
     }
     if (Math.abs(diffMinutes) < 60) {
       return rtf.format(diffMinutes, "minute");
@@ -471,8 +471,8 @@
     if (!response.ok) {
       const message =
         payload && typeof payload === "object"
-          ? payload.message || payload.error || response.statusText || "Yêu cầu thất bại."
-          : String(payload || response.statusText || "Yêu cầu thất bại.");
+          ? payload.message || payload.error || response.statusText || "YÃªu cáº§u tháº¥t báº¡i."
+          : String(payload || response.statusText || "YÃªu cáº§u tháº¥t báº¡i.");
 
       if (response.status === 401 && boot.page !== "login") {
         redirectToLogin();
@@ -483,6 +483,44 @@
       }
 
       throw buildError(message, response.status, payload?.error || null, payload);
+    }
+
+    return payload;
+  }
+
+  async function apiForm(url, formData, options = {}) {
+    const headers = {
+      Accept: "application/json",
+      ...(options.headers || {})
+    };
+    const request = {
+      method: options.method || "POST",
+      headers,
+      body: formData
+    };
+
+    const response = await fetch(url, request);
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json")
+      ? await response.json().catch(() => null)
+      : await response.text().catch(() => "");
+
+    if (!response.ok) {
+      const message =
+        payload && typeof payload === "object"
+          ? payload.message || payload.error || response.statusText || "Upload failed."
+          : String(payload || response.statusText || "Upload failed.");
+
+      if (response.status === 401 && boot.page !== "login") {
+        redirectToLogin();
+      }
+      if (response.status === 403 && payload?.error === "PASSWORD_CHANGE_REQUIRED") {
+        state.pendingPasswordPath = `${location.pathname}${location.search}`;
+        state.auth.mustChangePassword = true;
+        openChangePasswordModal(true);
+      }
+
+      throw buildApiError(message, response, payload);
     }
 
     return payload;
@@ -716,15 +754,15 @@
 
   function taskStateLabel(stateValue) {
     if (stateValue === "running") {
-      return "Đang chạy";
+      return "Äang cháº¡y";
     }
     if (stateValue === "queued") {
-      return "Đang xếp hàng";
+      return "Äang xáº¿p hÃ ng";
     }
     if (stateValue === "stopped") {
-      return "Đã dừng";
+      return "ÄÃ£ dá»«ng";
     }
-    return "Hoàn tất";
+    return "HoÃ n táº¥t";
   }
 
   function taskStateTone(stateValue) {
@@ -743,33 +781,33 @@
       return "Rebuild local";
     }
     if (value === "export") {
-      return "Xuất EPUB";
+      return "Xuáº¥t EPUB";
     }
     if (value === "manual") {
-      return "Đồng bộ tay";
+      return "Äá»“ng bá»™ tay";
     }
     if (value === "retry") {
-      return "Chạy lại";
+      return "Cháº¡y láº¡i";
     }
     if (value === "cron") {
-      return "Đồng bộ lịch";
+      return "Äá»“ng bá»™ lá»‹ch";
     }
     if (value === "add") {
-      return "Thêm vào thư viện";
+      return "ThÃªm vÃ o thÆ° viá»‡n";
     }
-    return "Tác vụ";
+    return "TÃ¡c vá»¥";
   }
 
   function formatChapterProgress(downloadedChapters, totalChapters) {
     const downloaded = Number(downloadedChapters) || 0;
     const total = Number(totalChapters) || 0;
     if (total > 0) {
-      return `${formatCount(downloaded)}/${formatCount(total)} chương`;
+      return `${formatCount(downloaded)}/${formatCount(total)} chÆ°Æ¡ng`;
     }
     if (downloaded > 0) {
-      return `${formatCount(downloaded)} chương đã tải`;
+      return `${formatCount(downloaded)} chÆ°Æ¡ng Ä‘Ã£ táº£i`;
     }
-    return "Chưa tải chương";
+    return "ChÆ°a táº£i chÆ°Æ¡ng";
   }
 
   function buildTaskSummary(task) {
@@ -779,30 +817,30 @@
         `${formatCount(task.rebuildCompletedChapters)}/${formatCount(task.rebuildTargetChapters)} chap built`
       );
       if (Number(task.rebuildRemainingChapters) > 0) {
-        parts.push(`còn ${formatCount(task.rebuildRemainingChapters)}`);
+        parts.push(`cÃ²n ${formatCount(task.rebuildRemainingChapters)}`);
       }
     } else if (task?.triggerType === "export" && Number(task.exportTargetChapters) > 0) {
       parts.push(
         `${formatCount(task.exportCompletedChapters)}/${formatCount(task.exportTargetChapters)} chap exported`
       );
       if (Number(task.exportRemainingChapters) > 0) {
-        parts.push(`còn ${formatCount(task.exportRemainingChapters)}`);
+        parts.push(`cÃ²n ${formatCount(task.exportRemainingChapters)}`);
       }
     } else {
       parts.push(formatChapterProgress(task.downloadedChapters, task.totalChapters));
       if (task.remainingChapters > 0) {
-        parts.push(`còn ${formatCount(task.remainingChapters)}`);
+        parts.push(`cÃ²n ${formatCount(task.remainingChapters)}`);
       }
     }
     if (task.failedChapters > 0) {
-      parts.push(`lỗi ${formatCount(task.failedChapters)}`);
+      parts.push(`lá»—i ${formatCount(task.failedChapters)}`);
     }
     if (task.activeJobs > 0) {
-      parts.push(`${formatCount(task.activeJobs)} đang chạy`);
+      parts.push(`${formatCount(task.activeJobs)} Ä‘ang cháº¡y`);
     } else if (task.waitingJobs > 0) {
-      parts.push(`${formatCount(task.waitingJobs)} đang chờ`);
+      parts.push(`${formatCount(task.waitingJobs)} Ä‘ang chá»`);
     }
-    return parts.join(" • ");
+    return parts.join(" â€¢ ");
   }
 
   function formatTaskChapterLabel(chapter) {
@@ -810,40 +848,40 @@
       return "";
     }
 
-    const chapterLabel = `Chương ${String(chapter.chapterIndex ?? 0).padStart(3, "0")}`;
+    const chapterLabel = `ChÆ°Æ¡ng ${String(chapter.chapterIndex ?? 0).padStart(3, "0")}`;
     const title = truncate(stripHtml(chapter.title || ""), 56);
-    return title ? `${chapterLabel} • ${title}` : chapterLabel;
+    return title ? `${chapterLabel} â€¢ ${title}` : chapterLabel;
   }
 
   function buildTaskErrorMeta(task) {
     const parts = [];
     const chapterLabel = formatTaskChapterLabel(task?.lastErrorChapter);
     if (task?.lastErrorSource === "chapter_fetch") {
-      parts.push("Lỗi tải chương");
+      parts.push("Lá»—i táº£i chÆ°Æ¡ng");
       if (chapterLabel) {
         parts.push(chapterLabel);
       }
     } else if (task?.lastErrorSource === "chapter_build") {
-      parts.push(task?.triggerType === "rebuild" ? "Lỗi rebuild local" : "Lỗi dựng file local");
+      parts.push(task?.triggerType === "rebuild" ? "Lá»—i rebuild local" : "Lá»—i dá»±ng file local");
       if (chapterLabel) {
         parts.push(chapterLabel);
       }
     } else if (task?.lastErrorSource === "sync_run") {
-      parts.push("Lỗi đồng bộ nguồn");
+      parts.push("Lá»—i Ä‘á»“ng bá»™ nguá»“n");
     } else if (task?.lastErrorSource === "novel") {
-      parts.push("Lỗi tác vụ");
+      parts.push("Lá»—i tÃ¡c vá»¥");
     } else if (chapterLabel) {
       parts.push(chapterLabel);
     }
 
     const retryCount = Number(task?.lastErrorChapter?.retryCount) || 0;
     if (retryCount > 0) {
-      parts.push(`đã thử ${formatCount(retryCount)} lần`);
+      parts.push(`Ä‘Ã£ thá»­ ${formatCount(retryCount)} láº§n`);
     }
     if (task?.lastErrorAt) {
       parts.push(formatRelative(task.lastErrorAt));
     }
-    return parts.join(" • ");
+    return parts.join(" â€¢ ");
   }
 
   function findKnownSourceById(sourceId) {
@@ -874,7 +912,7 @@
   function createCoverPlaceholderHtml(seed, title) {
     return `
       <div class="cover-placeholder" style="background:${coverGradient(seed)};">
-        <span class="cover-placeholder-text">${escapeHtml(title || "Không có bìa")}</span>
+        <span class="cover-placeholder-text">${escapeHtml(title || "KhÃ´ng cÃ³ bÃ¬a")}</span>
       </div>
     `;
   }
@@ -1063,8 +1101,8 @@
     if (input) {
       input.value = state.searchQuery;
       input.placeholder = activeSource
-        ? `Tìm truyện trên ${activeSource.name}…`
-        : "Tìm truyện, tác giả…";
+        ? `TÃ¬m truyá»‡n trÃªn ${activeSource.name}â€¦`
+        : "TÃ¬m truyá»‡n, tÃ¡c giáº£â€¦";
     }
     if (clearButton) {
       clearButton.style.display = state.searchQuery ? "block" : "none";
@@ -1113,6 +1151,7 @@
 
   function ensureDynamicShell() {
     ensureServerSectionBar();
+    ensureLibraryUploadUi();
 
     if (!$id("dynamic-modal")) {
       document.body.insertAdjacentHTML(
@@ -1144,7 +1183,7 @@
           <div class="modal-overlay" id="change-password-modal" style="display:none">
             <div class="modal">
               <div class="modal-header">
-                <h3 class="modal-title">Đổi mật khẩu quản trị</h3>
+                <h3 class="modal-title">Äá»•i máº­t kháº©u quáº£n trá»‹</h3>
                 <button class="modal-close" type="button" id="change-password-close" data-close="change-password-modal">
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
                     <line x1="3" y1="3" x2="13" y2="13"></line>
@@ -1156,19 +1195,19 @@
                 <p class="form-hint" id="change-password-hint" style="margin:0 0 16px;"></p>
                 <form id="change-password-form" novalidate>
                   <div style="margin-bottom:14px;">
-                    <label class="form-label" for="change-password-username">Tên đăng nhập</label>
+                    <label class="form-label" for="change-password-username">TÃªn Ä‘Äƒng nháº­p</label>
                     <input class="form-input" id="change-password-username" name="username" type="text" autocomplete="username">
                   </div>
                   <div style="margin-bottom:14px;">
-                    <label class="form-label" for="change-password-current">Mật khẩu hiện tại</label>
+                    <label class="form-label" for="change-password-current">Máº­t kháº©u hiá»‡n táº¡i</label>
                     <input class="form-input" id="change-password-current" name="currentPassword" type="password" autocomplete="current-password">
                   </div>
                   <div style="margin-bottom:14px;">
-                    <label class="form-label" for="change-password-next">Mật khẩu mới</label>
+                    <label class="form-label" for="change-password-next">Máº­t kháº©u má»›i</label>
                     <input class="form-input" id="change-password-next" name="newPassword" type="password" autocomplete="new-password">
                   </div>
                   <div>
-                    <label class="form-label" for="change-password-confirm">Nhập lại mật khẩu mới</label>
+                    <label class="form-label" for="change-password-confirm">Nháº­p láº¡i máº­t kháº©u má»›i</label>
                     <input class="form-input" id="change-password-confirm" name="confirmPassword" type="password" autocomplete="new-password">
                   </div>
                   <p
@@ -1181,13 +1220,59 @@
                 </form>
               </div>
               <div class="modal-footer">
-                <button class="btn-ghost" type="button" id="change-password-cancel" data-close="change-password-modal">Để sau</button>
-                <button class="btn-primary" type="submit" form="change-password-form" id="change-password-submit">Lưu thay đổi</button>
+                <button class="btn-ghost" type="button" id="change-password-cancel" data-close="change-password-modal">Äá»ƒ sau</button>
+                <button class="btn-primary" type="submit" form="change-password-form" id="change-password-submit">LÆ°u thay Ä‘á»•i</button>
               </div>
             </div>
           </div>
         `
       );
+    }
+  }
+
+  function ensureLibraryUploadUi() {
+    const libraryHeader = document.querySelector("#page-library .page-header-inner");
+    if (libraryHeader && !$id("library-sync-btn")) {
+      const existingIconButton = libraryHeader.querySelector(".icon-btn");
+      const actions = document.createElement("div");
+      actions.className = "page-header-actions";
+      actions.innerHTML = `
+        <button class="icon-btn" id="library-upload-btn" title="Upload truyện" type="button">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M10 13V4" stroke-linecap="round"></path>
+            <path d="M6.5 7.5L10 4l3.5 3.5" stroke-linecap="round" stroke-linejoin="round"></path>
+            <path d="M4 14.5v.5A1.5 1.5 0 005.5 16.5h9A1.5 1.5 0 0016 15v-.5" stroke-linecap="round"></path>
+          </svg>
+        </button>
+        <button class="icon-btn" id="library-sync-btn" title="Sync tất cả" type="button">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M3 10a7 7 0 0113.5-2.5M17 10a7 7 0 01-13.5 2.5"></path>
+            <path d="M15 5l1.5 2.5L14 8.5M5 15l-1.5-2.5L6 11.5" stroke-linecap="round"></path>
+          </svg>
+        </button>
+      `;
+
+      if (existingIconButton) {
+        existingIconButton.replaceWith(actions);
+      } else {
+        libraryHeader.appendChild(actions);
+      }
+    }
+
+    const detailActions = $id("detail-actions");
+    if (detailActions && !$id("btn-upload-chapters")) {
+      const button = document.createElement("button");
+      button.className = "btn-secondary btn-full";
+      button.id = "btn-upload-chapters";
+      button.type = "button";
+      button.style.display = "none";
+      button.textContent = "+ Upload chapter";
+      const removeButton = $id("btn-remove-library");
+      if (removeButton?.parentElement === detailActions) {
+        detailActions.insertBefore(button, removeButton);
+      } else {
+        detailActions.appendChild(button);
+      }
     }
   }
 
@@ -1254,7 +1339,7 @@
       title,
       bodyHtml: `<p class="form-hint" style="margin:0;">${escapeHtml(message)}</p>`,
       footerHtml: `
-        <button class="btn-ghost" type="button" data-close="dynamic-modal">Hủy</button>
+        <button class="btn-ghost" type="button" data-close="dynamic-modal">Há»§y</button>
         <button class="${confirmTone === "ghost" ? "btn-ghost" : "btn-primary"}" type="button" id="confirm-modal-submit">
           ${escapeHtml(confirmLabel)}
         </button>
@@ -1380,7 +1465,7 @@
     } else if (sourceLabel) {
       parts.push(sourceLabel);
     }
-    return parts.join(" • ");
+    return parts.join(" â€¢ ");
   }
 
   function createNovelCard(item, options = {}) {
@@ -1405,12 +1490,12 @@
       item.syncStatus === "error" ? "error" : isLibraryFullyDownloaded(item) ? "ready" : "pending";
     const syncChipLabel =
       item.syncStatus === "error"
-        ? "Lỗi tải"
+        ? "Lá»—i táº£i"
         : isLibraryFullyDownloaded(item)
-          ? "Đã tải đủ"
+          ? "ÄÃ£ táº£i Ä‘á»§"
           : hasDownloadedChapters(item)
-            ? "Đang tải dở"
-            : "Chưa tải";
+            ? "Äang táº£i dá»Ÿ"
+            : "ChÆ°a táº£i";
     const preferredCoverUrl = firstText(buildLibraryCoverUrl(item), item.coverUrl);
     const coverMarkup = preferredCoverUrl
       ? `<img class="novel-card-cover" src="${escapeHtml(preferredCoverUrl)}" alt="${escapeHtml(
@@ -1432,7 +1517,7 @@
             : ""
         }
       </div>
-      <div class="novel-card-title">${escapeHtml(item.title || "Không có tiêu đề")}</div>
+      <div class="novel-card-title">${escapeHtml(item.title || "KhÃ´ng cÃ³ tiÃªu Ä‘á»")}</div>
       <div class="novel-card-sub">${escapeHtml(buildNovelSubtitle(item) || truncate(sourceDomain(item.sourceUrl), 36))}</div>
       <div class="novel-card-meta">
         <span class="novel-card-progress-label">${escapeHtml(progressLabel)}</span>
@@ -1514,7 +1599,7 @@
       const button = document.createElement("button");
       button.className = "cat-btn active";
       button.type = "button";
-      button.textContent = "Kết quả";
+      button.textContent = "Káº¿t quáº£";
       bar.appendChild(button);
       return;
     }
@@ -1560,17 +1645,17 @@
     if (state.browseError) {
       setMessageInGrid(
         grid,
-        "Không tải được dữ liệu",
+        "KhÃ´ng táº£i Ä‘Æ°á»£c dá»¯ liá»‡u",
         state.browseError,
-        "Tải lại",
+        "Táº£i láº¡i",
         () => void refreshBrowseContent({ append: false })
       );
     } else if (state.browseWarning && !items.length) {
       setMessageInGrid(
         grid,
-        "Nguồn đang chặn truy cập",
+        "Nguá»“n Ä‘ang cháº·n truy cáº­p",
         state.browseWarning,
-        browseQuery ? "Xóa tìm kiếm" : "Tải lại",
+        browseQuery ? "XÃ³a tÃ¬m kiáº¿m" : "Táº£i láº¡i",
         browseQuery
           ? () => {
               resetBrowseState();
@@ -1582,25 +1667,25 @@
     } else if (!state.enabledSources.length) {
       setMessageInGrid(
         grid,
-        "Chưa có nguồn đang bật",
-        "Vào mục Nguồn để bật Hako, TruyenFull hoặc cài thêm extension.",
-        "Mở Nguồn",
+        "ChÆ°a cÃ³ nguá»“n Ä‘ang báº­t",
+        "VÃ o má»¥c Nguá»“n Ä‘á»ƒ báº­t Hako, TruyenFull hoáº·c cÃ i thÃªm extension.",
+        "Má»Ÿ Nguá»“n",
         () => navigateTo("/sources")
       );
     } else if (!items.length && !browseQuery && !(state.browseHome?.sections?.length || 0)) {
       setMessageInGrid(
         grid,
-        "Nguồn chưa có home",
-        "Nguồn này không trả về trang chủ. Hãy dùng ô tìm kiếm để duyệt truyện.",
-        "Tập trung ô tìm kiếm",
+        "Nguá»“n chÆ°a cÃ³ home",
+        "Nguá»“n nÃ y khÃ´ng tráº£ vá» trang chá»§. HÃ£y dÃ¹ng Ã´ tÃ¬m kiáº¿m Ä‘á»ƒ duyá»‡t truyá»‡n.",
+        "Táº­p trung Ã´ tÃ¬m kiáº¿m",
         () => $id("browse-search")?.focus()
       );
     } else if (!items.length) {
       setMessageInGrid(
         grid,
-        "Không có truyện phù hợp",
-        browseQuery ? "Thử từ khóa khác hoặc xóa bộ lọc tìm kiếm." : "Mục này hiện chưa có dữ liệu.",
-        browseQuery ? "Xóa tìm kiếm" : "",
+        "KhÃ´ng cÃ³ truyá»‡n phÃ¹ há»£p",
+        browseQuery ? "Thá»­ tá»« khÃ³a khÃ¡c hoáº·c xÃ³a bá»™ lá»c tÃ¬m kiáº¿m." : "Má»¥c nÃ y hiá»‡n chÆ°a cÃ³ dá»¯ liá»‡u.",
+        browseQuery ? "XÃ³a tÃ¬m kiáº¿m" : "",
         browseQuery
           ? () => {
               resetBrowseState();
@@ -1640,7 +1725,7 @@
     if (!list) {
       return;
     }
-    setMessageInBlock(list, "Đang tải nguồn", "Đồng bộ danh sách extension và nguồn đang bật.");
+    setMessageInBlock(list, "Äang táº£i nguá»“n", "Äá»“ng bá»™ danh sÃ¡ch extension vÃ  nguá»“n Ä‘ang báº­t.");
   }
 
   function renderSources() {
@@ -1654,9 +1739,9 @@
     if (!items.length && state.installedExtensions.length) {
       setMessageInBlock(
         list,
-        "Chưa có nguồn phù hợp với policy hiện tại",
-        "Máy chủ đang ẩn toàn bộ nguồn không nằm trong allowlist production. Mở Extensions hoặc Cài đặt để kiểm tra policy.",
-        "Mở Extensions",
+        "ChÆ°a cÃ³ nguá»“n phÃ¹ há»£p vá»›i policy hiá»‡n táº¡i",
+        "MÃ¡y chá»§ Ä‘ang áº©n toÃ n bá»™ nguá»“n khÃ´ng náº±m trong allowlist production. Má»Ÿ Extensions hoáº·c CÃ i Ä‘áº·t Ä‘á»ƒ kiá»ƒm tra policy.",
+        "Má»Ÿ Extensions",
         () => navigateTo("/extensions")
       );
       return;
@@ -1664,9 +1749,9 @@
     if (!items.length) {
       setMessageInBlock(
         list,
-        "Chưa có extension",
-        "Thêm manifest hoặc refresh registry để cài nguồn mới.",
-        "Thêm nguồn",
+        "ChÆ°a cÃ³ extension",
+        "ThÃªm manifest hoáº·c refresh registry Ä‘á»ƒ cÃ i nguá»“n má»›i.",
+        "ThÃªm nguá»“n",
         () => openModal("add-source-modal")
       );
       return;
@@ -1689,14 +1774,14 @@
             truncate(
               item.description ||
                 (item.enabled
-                  ? "Nguồn đang sẵn sàng để duyệt home, tìm kiếm và đồng bộ vào thư viện."
-                  : "Nguồn đã cài nhưng đang tắt. Bật lại để duyệt home và tải truyện."),
+                  ? "Nguá»“n Ä‘ang sáºµn sÃ ng Ä‘á»ƒ duyá»‡t home, tÃ¬m kiáº¿m vÃ  Ä‘á»“ng bá»™ vÃ o thÆ° viá»‡n."
+                  : "Nguá»“n Ä‘Ã£ cÃ i nhÆ°ng Ä‘ang táº¯t. Báº­t láº¡i Ä‘á»ƒ duyá»‡t home vÃ  táº£i truyá»‡n."),
               120
             )
           )}</div>
         </div>
         <div class="source-actions">
-          <button class="source-browse-btn" type="button">${item.enabled && item.runtimeSupported ? "Duyệt" : "Chi tiết"}</button>
+          <button class="source-browse-btn" type="button">${item.enabled && item.runtimeSupported ? "Duyá»‡t" : "Chi tiáº¿t"}</button>
           <label class="toggle-switch">
             <input type="checkbox" ${item.enabled ? "checked" : ""}>
             <span class="toggle-track"></span>
@@ -1710,7 +1795,7 @@
         event.stopPropagation();
         if (false) {
           void showSourceInPolicy(item.id).catch((error) => {
-            showToast("!", "Không hiển thị được nguồn", error.message);
+            showToast("!", "KhÃ´ng hiá»ƒn thá»‹ Ä‘Æ°á»£c nguá»“n", error.message);
           });
         } else if (item.enabled && item.runtimeSupported) {
           openSourceBrowse(item.id);
@@ -1737,36 +1822,36 @@
       manageCard.innerHTML = `
         <div class="source-icon-wrap">EX</div>
         <div class="source-info">
-          <div class="source-name">Extensions nguồn</div>
+          <div class="source-name">Extensions nguá»“n</div>
           <div class="source-meta">
             <span class="source-domain">${escapeHtml(
-              `${items.filter((item) => item.enabled).length} đang bật • ${hiddenInstalledCount} ẩn • ${state.catalogExtensions.length} catalog`
+              `${items.filter((item) => item.enabled).length} Ä‘ang báº­t â€¢ ${hiddenInstalledCount} áº©n â€¢ ${state.catalogExtensions.length} catalog`
             )}</span>
           </div>
           <div class="source-desc">${escapeHtml(
             hiddenInstalledCount > 0
-              ? "Mở để xem nguồn ẩn bởi policy production, sync registry và cài hoặc gỡ extension."
-              : "Mở để sync registry, duyệt catalog và quản lý extension nguồn."
+              ? "Má»Ÿ Ä‘á»ƒ xem nguá»“n áº©n bá»Ÿi policy production, sync registry vÃ  cÃ i hoáº·c gá»¡ extension."
+              : "Má»Ÿ Ä‘á»ƒ sync registry, duyá»‡t catalog vÃ  quáº£n lÃ½ extension nguá»“n."
           )}</div>
         </div>
         <div class="source-actions">
-          <button class="source-browse-btn" type="button">Mở Extensions</button>
+          <button class="source-browse-btn" type="button">Má»Ÿ Extensions</button>
         </div>
       `;
       const manageMeta = manageCard.querySelector(".source-domain");
       if (manageMeta) {
-        manageMeta.textContent = `${items.filter((item) => item.enabled).length} đang bật • ${hiddenInstalledCount} ẩn bởi policy`;
+        manageMeta.textContent = `${items.filter((item) => item.enabled).length} Ä‘ang báº­t â€¢ ${hiddenInstalledCount} áº©n bá»Ÿi policy`;
       }
       const manageDesc = manageCard.querySelector(".source-desc");
       if (manageDesc) {
         manageDesc.textContent =
           hiddenInstalledCount > 0
-            ? "Mở để sync registry, xem nguồn đang bị ẩn và cài hoặc gỡ extension."
-            : "Mở để sync registry, duyệt catalog và cấu hình nguồn đang cài.";
+            ? "Má»Ÿ Ä‘á»ƒ sync registry, xem nguá»“n Ä‘ang bá»‹ áº©n vÃ  cÃ i hoáº·c gá»¡ extension."
+            : "Má»Ÿ Ä‘á»ƒ sync registry, duyá»‡t catalog vÃ  cáº¥u hÃ¬nh nguá»“n Ä‘ang cÃ i.";
       }
       const manageButton = manageCard.querySelector("button");
       if (manageButton) {
-        manageButton.textContent = "Quản lý nguồn";
+        manageButton.textContent = "Quáº£n lÃ½ nguá»“n";
       }
       manageButton?.addEventListener("click", () => navigateTo("/extensions"));
       manageCard.addEventListener("click", () => navigateTo("/extensions"));
@@ -1776,33 +1861,33 @@
 
   function renderDetailLoading() {
     const detailTitleLink = $id("detail-title-link");
-    detailTitleLink.textContent = "Đang tải…";
+    detailTitleLink.textContent = "Äang táº£iâ€¦";
     detailTitleLink.removeAttribute("href");
     $id("detail-author").textContent = "";
     $id("detail-origin-link").classList.add("is-hidden");
     $id("detail-badges").innerHTML = "";
-    $id("detail-summary").textContent = "Đang lấy thông tin truyện và danh sách chương.";
-    $id("stat-chapters").textContent = "—";
-    $id("stat-status").textContent = "—";
-    $id("stat-source").textContent = "—";
+    $id("detail-summary").textContent = "Äang láº¥y thÃ´ng tin truyá»‡n vÃ  danh sÃ¡ch chÆ°Æ¡ng.";
+    $id("stat-chapters").textContent = "â€”";
+    $id("stat-status").textContent = "â€”";
+    $id("stat-source").textContent = "â€”";
     if ($id("btn-add-library")) {
       $id("btn-add-library").disabled = false;
-      $id("btn-add-library").textContent = "+ Thêm vào thư viện";
+      $id("btn-add-library").textContent = "+ ThÃªm vÃ o thÆ° viá»‡n";
     }
     if ($id("btn-download-all")) {
       $id("btn-download-all").disabled = false;
-      $id("btn-download-all").textContent = "↻ Đồng bộ lại";
+      $id("btn-download-all").textContent = "â†» Äá»“ng bá»™ láº¡i";
     }
     if ($id("btn-rebuild-library")) {
       $id("btn-rebuild-library").disabled = false;
-      $id("btn-rebuild-library").textContent = "↻ Rebuild local files";
+      $id("btn-rebuild-library").textContent = "â†» Rebuild local files";
     }
     if ($id("btn-export-epub")) {
       $id("btn-export-epub").disabled = false;
-      $id("btn-export-epub").textContent = "⇩ Xuất EPUB tổng hợp";
+      $id("btn-export-epub").textContent = "â‡© Xuáº¥t EPUB tá»•ng há»£p";
     }
     $id("chapter-list").innerHTML = `
-      <div class="chapter-row"><span class="ch-title">Đang tải chương…</span></div>
+      <div class="chapter-row"><span class="ch-title">Äang táº£i chÆ°Æ¡ngâ€¦</span></div>
     `;
   }
 
@@ -1859,8 +1944,8 @@
     container.innerHTML = `
       <div class="detail-editions-header">
         <div>
-          <h3 class="section-title" style="margin:0;">Bản đọc / bản tải</h3>
-          <p class="form-hint" style="margin:4px 0 0;">Chọn bản mặc định cho OPDS, mở project dịch, hoặc tải riêng từng bản.</p>
+          <h3 class="section-title" style="margin:0;">Báº£n Ä‘á»c / báº£n táº£i</h3>
+          <p class="form-hint" style="margin:4px 0 0;">Chá»n báº£n máº·c Ä‘á»‹nh cho OPDS, má»Ÿ project dá»‹ch, hoáº·c táº£i riÃªng tá»«ng báº£n.</p>
         </div>
       </div>
       <div class="detail-editions-grid">
@@ -1871,26 +1956,26 @@
                 <div class="detail-edition-meta">
                   <div class="detail-edition-title">${escapeHtml(item.label || item.id)}</div>
                   <div class="source-meta">
-                    <span class="translation-chip">${escapeHtml(item.kind === "translation" ? `Dịch · ${item.language || "?"}` : "Gốc")}</span>
-                    ${item.isDefault ? '<span class="translation-chip">Mặc định OPDS</span>' : ""}
+                    <span class="translation-chip">${escapeHtml(item.kind === "translation" ? `Dá»‹ch Â· ${item.language || "?"}` : "Gá»‘c")}</span>
+                    ${item.isDefault ? '<span class="translation-chip">Máº·c Ä‘á»‹nh OPDS</span>' : ""}
                     ${item.status ? `<span class="translation-chip">${escapeHtml(item.status)}</span>` : ""}
                   </div>
                 </div>
                 <div class="detail-edition-actions">
                   ${
                     item.kind === "translation"
-                      ? `<button class="btn-secondary" type="button" data-open-translation-project="${escapeHtml(item.projectId || item.id)}">Mở project</button>`
+                      ? `<button class="btn-secondary" type="button" data-open-translation-project="${escapeHtml(item.projectId || item.id)}">Má»Ÿ project</button>`
                       : ""
                   }
                   ${
                     item.kind === "translation"
                       ? `<button class="btn-ghost" type="button" data-download-edition-epub="${escapeHtml(item.id)}">EPUB</button><button class="btn-ghost" type="button" data-download-edition-txt="${escapeHtml(item.id)}">TXT</button>`
-                      : `<button class="btn-ghost" type="button" data-open-original-opds="${escapeHtml(item.id)}">Link OPDS gốc</button>`
+                      : `<button class="btn-ghost" type="button" data-open-original-opds="${escapeHtml(item.id)}">Link OPDS gá»‘c</button>`
                   }
                   ${
                     item.isDefault
                       ? ""
-                      : `<button class="btn-primary" type="button" data-set-default-edition="${escapeHtml(item.id)}" data-set-default-kind="${escapeHtml(item.kind)}">Đặt mặc định</button>`
+                      : `<button class="btn-primary" type="button" data-set-default-edition="${escapeHtml(item.id)}" data-set-default-kind="${escapeHtml(item.kind)}">Äáº·t máº·c Ä‘á»‹nh</button>`
                   }
                 </div>
               </div>
@@ -1929,7 +2014,7 @@
         });
         await loadNovelEditions(novelId, true);
         renderDetailEditions(novelId);
-        showToast('✓', 'Đã đổi edition mặc định', 'OPDS sẽ dùng bản này');
+        showToast('âœ“', 'ÄÃ£ Ä‘á»•i edition máº·c Ä‘á»‹nh', 'OPDS sáº½ dÃ¹ng báº£n nÃ y');
       });
     });
   }
@@ -1954,6 +2039,7 @@
     const syncButton = $id("btn-download-all");
     const rebuildButton = $id("btn-rebuild-library");
     const exportButton = $id("btn-export-epub");
+    const uploadChaptersButton = $id("btn-upload-chapters");
     const removeLibraryButton = $id("btn-remove-library");
     const openLibraryButton = $id("btn-in-library");
     const sourceBlocked = Boolean(detail.upstreamBlocked);
@@ -2003,7 +2089,7 @@
     if (sourceBlocked) {
       const warningBadge = document.createElement("span");
       warningBadge.className = "badge badge-cat";
-      warningBadge.textContent = "Nguồn đang chặn server";
+      warningBadge.textContent = "Nguá»“n Ä‘ang cháº·n server";
       badges.appendChild(warningBadge);
     }
 
@@ -2017,35 +2103,38 @@
     summary.textContent =
       stripHtml(detail.description) ||
       (sourceBlocked
-        ? detail.chapterWarning || "Nguồn đang chặn truy cập từ server nên chỉ hiển thị được dữ liệu preview."
-        : "Truyện chưa có mô tả từ nguồn. Bạn vẫn có thể thêm vào thư viện và đồng bộ chương.");
+        ? detail.chapterWarning || "Nguá»“n Ä‘ang cháº·n truy cáº­p tá»« server nÃªn chá»‰ hiá»ƒn thá»‹ Ä‘Æ°á»£c dá»¯ liá»‡u preview."
+        : "Truyá»‡n chÆ°a cÃ³ mÃ´ táº£ tá»« nguá»“n. Báº¡n váº«n cÃ³ thá»ƒ thÃªm vÃ o thÆ° viá»‡n vÃ  Ä‘á»“ng bá»™ chÆ°Æ¡ng.");
     summary.classList.toggle("expanded", false);
 
     $id("stat-chapters").textContent = formatCount(detail.chapterCount || detail.chapters?.length || 0);
     $id("stat-status").textContent = statusLabel(detail.status);
-    $id("stat-source").textContent = sourceRecord?.name || detail.sourceId || "Không rõ";
+    $id("stat-source").textContent = sourceRecord?.name || detail.sourceId || "KhÃ´ng rÃµ";
 
     addButton.style.display = detail.libraryItem ? "none" : "block";
     syncButton.style.display = detail.libraryItem ? "block" : "none";
     rebuildButton.style.display = detail.libraryItem ? "block" : "none";
     exportButton.style.display = detail.libraryItem ? "block" : "none";
+    uploadChaptersButton.style.display = detail.libraryItem ? "block" : "none";
     removeLibraryButton.style.display = detail.libraryItem ? "block" : "none";
     openLibraryButton.style.display = detail.libraryItem && detail.kind !== "library" ? "block" : "none";
     addButton.disabled = sourceBlocked;
     syncButton.disabled = sourceBlocked;
     rebuildButton.disabled = !detail.libraryItem;
     exportButton.disabled = !detail.libraryItem || !Number(detail.libraryItem?.downloadedChapters);
+    uploadChaptersButton.disabled = !detail.libraryItem;
 
     syncButton.textContent =
       sourceBlocked
-        ? "Nguồn đang chặn"
+        ? "Nguá»“n Ä‘ang cháº·n"
         : detail.libraryItem?.syncStatus === "error"
-          ? "↻ Thử lại đồng bộ"
-          : "↻ Đồng bộ lại";
-    rebuildButton.textContent = "↻ Rebuild local files";
-    exportButton.textContent = "⇩ Xuất EPUB tổng hợp";
-    addButton.textContent = sourceBlocked ? "Nguồn đang chặn" : "+ Thêm vào thư viện";
-    openLibraryButton.textContent = detail.kind === "library" ? "✓ Đã trong thư viện" : "✓ Mở trong thư viện";
+          ? "â†» Thá»­ láº¡i Ä‘á»“ng bá»™"
+          : "â†» Äá»“ng bá»™ láº¡i";
+    rebuildButton.textContent = "â†» Rebuild local files";
+    exportButton.textContent = "â‡© Xuáº¥t EPUB tá»•ng há»£p";
+    uploadChaptersButton.textContent = "+ Upload chapter";
+    addButton.textContent = sourceBlocked ? "Nguá»“n Ä‘ang cháº·n" : "+ ThÃªm vÃ o thÆ° viá»‡n";
+    openLibraryButton.textContent = detail.kind === "library" ? "âœ“ ÄÃ£ trong thÆ° viá»‡n" : "âœ“ Má»Ÿ trong thÆ° viá»‡n";
 
     const chapters = [...(detail.chapters || [])];
     if (state.chapterSort === "desc") {
@@ -2059,7 +2148,7 @@
     visibleChapters.forEach((chapter) => {
       const row = document.createElement("div");
       const downloaded = chapter.status === "published";
-      const chapterTitle = escapeHtml(chapter.title || "Chương");
+      const chapterTitle = escapeHtml(chapter.title || "ChÆ°Æ¡ng");
       const chapterMeta = chapter.lastError
         ? `<span class="ch-meta">${escapeHtml(truncate(chapter.lastError, 88))}</span>`
         : "";
@@ -2067,7 +2156,7 @@
         ? `<button class="chapter-view-btn" type="button">Xem</button>`
         : "";
       const retryButton = isChapterRetryable(chapter)
-        ? `<button class="chapter-retry-btn" type="button">Tải lại</button>`
+        ? `<button class="chapter-retry-btn" type="button">Táº£i láº¡i</button>`
         : "";
       row.className = `chapter-row${downloaded ? " downloaded" : ""}${isChapterFailed(chapter.status) ? " failed" : ""}`;
       row.innerHTML = `
@@ -2109,7 +2198,7 @@
       const row = document.createElement("div");
       row.className = "chapter-row";
       row.innerHTML = `<span class="ch-title">${escapeHtml(
-        detail.chapterWarning || "Chưa có dữ liệu chương từ nguồn hoặc thư viện."
+        detail.chapterWarning || "ChÆ°a cÃ³ dá»¯ liá»‡u chÆ°Æ¡ng tá»« nguá»“n hoáº·c thÆ° viá»‡n."
       )}</span>`;
       chapterList.appendChild(row);
     } else if (chapters.length > limitedChapters.length) {
@@ -2119,7 +2208,7 @@
       row.style.color = "var(--ink-3)";
       row.style.fontSize = "12px";
       row.style.fontFamily = "var(--font-mono)";
-      row.textContent = `... và ${chapters.length - limitedChapters.length} chương khác`;
+      row.textContent = `... vÃ  ${chapters.length - limitedChapters.length} chÆ°Æ¡ng khÃ¡c`;
       chapterList.appendChild(row);
     }
 
@@ -2128,9 +2217,9 @@
       const button = document.createElement("button");
       button.className = "chapter-more-btn";
       button.type = "button";
-      button.textContent = `Xem thêm ${Math.min(150, chapters.length - visibleChapters.length)} / ${
+      button.textContent = `Xem thÃªm ${Math.min(150, chapters.length - visibleChapters.length)} / ${
         chapters.length - visibleChapters.length
-      } chương`;
+      } chÆ°Æ¡ng`;
       button.addEventListener("click", () => {
         state.detailChapterLimit += 150;
         if (state.detailPayload) {
@@ -2147,7 +2236,7 @@
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
           <path d="M2 4h12M4 8h8M6 12h4"></path>
         </svg>
-        ${state.chapterSort === "desc" ? "Mới nhất" : "Cũ nhất"}
+        ${state.chapterSort === "desc" ? "Má»›i nháº¥t" : "CÅ© nháº¥t"}
       `;
     }
 
@@ -2175,22 +2264,22 @@
     const hiddenByPolicy = isInstalled && isSourceHiddenByPolicy(item.id);
 
     const footerButtons = [
-      `<button class="btn-ghost" type="button" data-close="dynamic-modal">Đóng</button>`
+      `<button class="btn-ghost" type="button" data-close="dynamic-modal">ÄÃ³ng</button>`
     ];
 
     if (isInstalled && item.enabled && item.runtimeSupported && !hiddenByPolicy) {
-      footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-browse-source">Duyệt</button>`);
+      footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-browse-source">Duyá»‡t</button>`);
     } else if (hiddenByPolicy) {
-      footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-show-source">Hiện nguồn</button>`);
+      footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-show-source">Hiá»‡n nguá»“n</button>`);
     } else if (!isInstalled) {
-      footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-install-source">Cài & bật</button>`);
+      footerButtons.push(`<button class="btn-primary" type="button" id="dynamic-install-source">CÃ i & báº­t</button>`);
     }
 
     if (isInstalled && !item.bundled && !isSystemSource(item)) {
       footerButtons.splice(
         1,
         0,
-        `<button class="btn-ghost" type="button" id="dynamic-remove-source">Gỡ</button>`
+        `<button class="btn-ghost" type="button" id="dynamic-remove-source">Gá»¡</button>`
       );
     }
 
@@ -2204,17 +2293,17 @@
         }
         <div style="display:flex;flex-direction:column;gap:12px;">
           <div>
-            <span class="form-label">Trạng thái</span>
+            <span class="form-label">Tráº¡ng thÃ¡i</span>
             <p class="form-hint" style="margin:0;">
               ${escapeHtml(
                 isInstalled
-                  ? `${item.enabled ? "Đang bật" : "Đang tắt"} • ${item.runtimeSupported ? "runtime ổn" : "runtime lỗi"}`
-                  : `Chưa cài • registry ${item.registryName || "không rõ"}`
+                  ? `${item.enabled ? "Äang báº­t" : "Äang táº¯t"} â€¢ ${item.runtimeSupported ? "runtime á»•n" : "runtime lá»—i"}`
+                  : `ChÆ°a cÃ i â€¢ registry ${item.registryName || "khÃ´ng rÃµ"}`
               )}
             </p>
           </div>
           <div>
-            <span class="form-label">Nguồn / domain</span>
+            <span class="form-label">Nguá»“n / domain</span>
             <p class="form-hint" style="margin:0;">${escapeHtml(
               item.sourceUrl ? sourceDomain(item.sourceUrl) : item.registryName || item.runtimeKind || "local"
             )}</p>
@@ -2226,14 +2315,14 @@
           <div>
             <span class="form-label">Capabilities</span>
             <div class="detail-badges" style="margin-top:6px;">
-              ${capabilities || `<span class="form-hint" style="margin:0;">Không có capability đặc biệt.</span>`}
+              ${capabilities || `<span class="form-hint" style="margin:0;">KhÃ´ng cÃ³ capability Ä‘áº·c biá»‡t.</span>`}
             </div>
           </div>
           ${
             item.lastError
               ? `
                 <div>
-                  <span class="form-label">Lỗi gần nhất</span>
+                  <span class="form-label">Lá»—i gáº§n nháº¥t</span>
                   <p class="form-hint" style="margin:0;color:#d86b6b;">${escapeHtml(item.lastError)}</p>
                 </div>
               `
@@ -2254,7 +2343,7 @@
         await showSourceInPolicy(item.id);
         closeModal("dynamic-modal");
       } catch (error) {
-        showToast("!", error.message, "Không hiển thị được nguồn.");
+        showToast("!", error.message, "KhÃ´ng hiá»ƒn thá»‹ Ä‘Æ°á»£c nguá»“n.");
       }
     });
 
@@ -2263,7 +2352,7 @@
         await installAndEnableExtension(item.id);
         closeModal("dynamic-modal");
       } catch (error) {
-        showToast("!", error.message, "Không thể cài extension.");
+        showToast("!", error.message, "KhÃ´ng thá»ƒ cÃ i extension.");
       }
     });
 
@@ -2275,9 +2364,9 @@
 
   function confirmRemoveExtension(extensionId, name) {
     showConfirmModal({
-      title: "Gỡ extension",
-      message: `Gỡ ${name} khỏi server? Dữ liệu thư viện đã thêm vẫn được giữ lại.`,
-      confirmLabel: "Gỡ extension",
+      title: "Gá»¡ extension",
+      message: `Gá»¡ ${name} khá»i server? Dá»¯ liá»‡u thÆ° viá»‡n Ä‘Ã£ thÃªm váº«n Ä‘Æ°á»£c giá»¯ láº¡i.`,
+      confirmLabel: "Gá»¡ extension",
       onConfirm: async () => {
         await apiJson(`/api/extensions/${encodeURIComponent(extensionId)}`, {
           method: "DELETE"
@@ -2293,7 +2382,7 @@
         if (state.activeSourceId === extensionId) {
           state.activeSourceId = state.enabledSources[0]?.id || null;
         }
-        showToast("✓", "Đã gỡ extension", name);
+        showToast("âœ“", "ÄÃ£ gá»¡ extension", name);
       }
     });
   }
@@ -2308,7 +2397,7 @@
     ];
     cards.forEach((card) => {
       if (card) {
-        card.innerHTML = `<p class="form-hint" style="margin:0;">Đang tải dữ liệu server…</p>`;
+        card.innerHTML = `<p class="form-hint" style="margin:0;">Äang táº£i dá»¯ liá»‡u serverâ€¦</p>`;
       }
     });
   }
@@ -2322,17 +2411,17 @@
 
     statusCard.innerHTML = `
       <div class="server-card-header">
-        <span class="card-label">Bảo mật</span>
+        <span class="card-label">Báº£o máº­t</span>
       </div>
       <div class="status-indicator offline">
         <div class="status-pulse"></div>
-        <span class="status-text">Cần đổi mật khẩu</span>
+        <span class="status-text">Cáº§n Ä‘á»•i máº­t kháº©u</span>
       </div>
-      <p class="server-hint">Phiên bootstrap đang khóa API quản trị cho tới khi cập nhật tài khoản admin.</p>
+      <p class="server-hint">PhiÃªn bootstrap Ä‘ang khÃ³a API quáº£n trá»‹ cho tá»›i khi cáº­p nháº­t tÃ i khoáº£n admin.</p>
     `;
-    statsCard.innerHTML = `<p class="form-hint" style="margin:0;">Đăng nhập lần đầu phải đổi mật khẩu trước khi dùng thư viện, nguồn và extension.</p>`;
-    logCard.innerHTML = `<p class="form-hint" style="margin:0;">Sau khi đổi mật khẩu, UI sẽ tải lại toàn bộ dữ liệu server.</p>`;
-    connectCard.innerHTML = `<p class="form-hint" style="margin:0;">Tài khoản hiện tại: ${escapeHtml(
+    statsCard.innerHTML = `<p class="form-hint" style="margin:0;">ÄÄƒng nháº­p láº§n Ä‘áº§u pháº£i Ä‘á»•i máº­t kháº©u trÆ°á»›c khi dÃ¹ng thÆ° viá»‡n, nguá»“n vÃ  extension.</p>`;
+    logCard.innerHTML = `<p class="form-hint" style="margin:0;">Sau khi Ä‘á»•i máº­t kháº©u, UI sáº½ táº£i láº¡i toÃ n bá»™ dá»¯ liá»‡u server.</p>`;
+    connectCard.innerHTML = `<p class="form-hint" style="margin:0;">TÃ i khoáº£n hiá»‡n táº¡i: ${escapeHtml(
       state.auth.username || state.auth.user || "admin"
     )}</p>`;
   }
@@ -2360,7 +2449,7 @@
       </div>
       <div class="status-indicator ${ready.status === "ready" ? "" : "offline"}">
         <div class="status-pulse"></div>
-        <span class="status-text">${ready.status === "ready" ? "Đang chạy" : "Chưa sẵn sàng"}</span>
+        <span class="status-text">${ready.status === "ready" ? "Äang cháº¡y" : "ChÆ°a sáºµn sÃ ng"}</span>
       </div>
       <div class="server-url-row">
         <code class="server-url" id="server-url">${escapeHtml((system.baseUrl || location.origin) + "/opds")}</code>
@@ -2372,7 +2461,7 @@
         </button>
       </div>
       <p class="server-hint">
-        DB ${ready.checks?.database ? "ok" : "fail"} • Redis ${ready.checks?.redis ? "ok" : "fail"} • Storage ${
+        DB ${ready.checks?.database ? "ok" : "fail"} â€¢ Redis ${ready.checks?.redis ? "ok" : "fail"} â€¢ Storage ${
           ready.checks?.storage ? "ok" : "fail"
         }
       </p>
@@ -2381,9 +2470,9 @@
       const value = (system.baseUrl || location.origin) + "/opds";
       try {
         await navigator.clipboard.writeText(value);
-        showToast("✓", "Đã copy URL OPDS", value);
+        showToast("âœ“", "ÄÃ£ copy URL OPDS", value);
       } catch {
-        showToast("!", "Không copy được URL", value);
+        showToast("!", "KhÃ´ng copy Ä‘Æ°á»£c URL", value);
       }
     });
 
@@ -2392,25 +2481,25 @@
       <div class="server-stats-grid">
         <div class="server-stat">
           <span class="s-val">${formatCount(libraryItems.length)}</span>
-          <span class="s-lbl">Truyện</span>
+          <span class="s-lbl">Truyá»‡n</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(totalPublished)}</span>
-          <span class="s-lbl">Chương</span>
+          <span class="s-lbl">ChÆ°Æ¡ng</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(enabledSourceCount)}</span>
-          <span class="s-lbl">Nguồn</span>
+          <span class="s-lbl">Nguá»“n</span>
         </div>
       </div>
     `;
 
     const logCard = $("#page-server .log-card");
-    logCard.innerHTML = `<h3 class="card-title">Tác vụ gần đây</h3><div class="log-list" id="server-task-list"></div>`;
+    logCard.innerHTML = `<h3 class="card-title">TÃ¡c vá»¥ gáº§n Ä‘Ã¢y</h3><div class="log-list" id="server-task-list"></div>`;
     const taskList = logCard.querySelector("#server-task-list");
     const jobs = state.tasks.slice(0, 10);
     if (!jobs.length) {
-      setMessageInBlock(taskList, "Chưa có job", "Hàng đợi hiện chưa có tác vụ đồng bộ nào.");
+      setMessageInBlock(taskList, "ChÆ°a cÃ³ job", "HÃ ng Ä‘á»£i hiá»‡n chÆ°a cÃ³ tÃ¡c vá»¥ Ä‘á»“ng bá»™ nÃ o.");
     } else {
       jobs.forEach((job) => {
         const row = document.createElement("div");
@@ -2418,13 +2507,13 @@
         row.className = `log-row log-row-actionable${job.lastError ? " has-error" : ""}`;
         row.tabIndex = 0;
         row.setAttribute("role", "button");
-        row.setAttribute("aria-label", `Mở chi tiết ${job.title || String(job.id)}`);
+        row.setAttribute("aria-label", `Má»Ÿ chi tiáº¿t ${job.title || String(job.id)}`);
         row.innerHTML = `
           <div class="log-dot${taskStateTone(job.state) === "error" ? " error" : ""}"></div>
           <div class="log-content">
             <div class="log-title">${escapeHtml(job.title || String(job.id))}</div>
             <div class="log-time">${escapeHtml(
-              `${taskStateLabel(job.state)} • ${buildTaskSummary(job)} • ${formatRelative(job.lastActivityAt || job.createdAt)}`
+              `${taskStateLabel(job.state)} â€¢ ${buildTaskSummary(job)} â€¢ ${formatRelative(job.lastActivityAt || job.createdAt)}`
             )}</div>
             ${
               job.lastError
@@ -2436,7 +2525,7 @@
             }
           </div>
           <div class="log-actions">
-            ${job.retryable ? `<button class="source-browse-btn" type="button">Thử lại</button>` : ""}
+            ${job.retryable ? `<button class="source-browse-btn" type="button">Thá»­ láº¡i</button>` : ""}
           </div>
         `;
         const openDetail = () => navigateTo(libraryDetailPath(job.novelId || job.id));
@@ -2478,7 +2567,7 @@
         <div class="device-info">
           <span class="device-name">${escapeHtml(system.roleLabel || system.role || "app")}</span>
           <span class="device-last">${escapeHtml(
-            truncate(system.roleDescription || state.storage?.root || "Không rõ storage root", 72)
+            truncate(system.roleDescription || state.storage?.root || "KhÃ´ng rÃµ storage root", 72)
           )}</span>
         </div>
         <span class="device-dot ${ready.status === "ready" ? "online" : ""}"></span>
@@ -2513,7 +2602,7 @@
       const installButton = document.createElement("button");
       installButton.className = "source-browse-btn";
       installButton.type = "button";
-      installButton.textContent = "Cài & bật";
+      installButton.textContent = "CÃ i & báº­t";
       installButton.addEventListener("click", async (event) => {
         event.stopPropagation();
         await installAndEnableExtension(item.id);
@@ -2524,17 +2613,17 @@
       detailButton.className = "source-browse-btn";
       detailButton.type = "button";
       if (hiddenByPolicy) {
-        detailButton.textContent = "Hiện nguồn";
+        detailButton.textContent = "Hiá»‡n nguá»“n";
       }
-      detailButton.textContent = item.enabled && item.runtimeSupported ? "Duyệt" : "Chi tiết";
+      detailButton.textContent = item.enabled && item.runtimeSupported ? "Duyá»‡t" : "Chi tiáº¿t";
       if (hiddenByPolicy) {
-        detailButton.textContent = "Hiện nguồn";
+        detailButton.textContent = "Hiá»‡n nguá»“n";
       }
       detailButton.addEventListener("click", (event) => {
         event.stopPropagation();
         if (hiddenByPolicy) {
           void showSourceInPolicy(item.id).catch((error) => {
-            showToast("!", "Không hiển thị được nguồn", error.message);
+            showToast("!", "KhÃ´ng hiá»ƒn thá»‹ Ä‘Æ°á»£c nguá»“n", error.message);
           });
         } else if (item.enabled && item.runtimeSupported) {
           openSourceBrowse(item.id);
@@ -2548,7 +2637,7 @@
         const removeButton = document.createElement("button");
         removeButton.className = "source-browse-btn";
         removeButton.type = "button";
-        removeButton.textContent = "Gỡ";
+        removeButton.textContent = "Gá»¡";
         removeButton.addEventListener("click", (event) => {
           event.stopPropagation();
           confirmRemoveExtension(item.id, item.name || item.id);
@@ -2594,13 +2683,13 @@
         <button class="source-browse-btn" type="button" id="refresh-registries-btn">Refresh</button>
       </div>
       <div class="log-list" id="registry-list"></div>
-      <p class="server-hint">Ưu tiên dùng ext-vbook và vbook-extensions. Có thể thêm manifest hoặc registry riêng từ mục Nguồn.</p>
+      <p class="server-hint">Æ¯u tiÃªn dÃ¹ng ext-vbook vÃ  vbook-extensions. CÃ³ thá»ƒ thÃªm manifest hoáº·c registry riÃªng tá»« má»¥c Nguá»“n.</p>
     `;
     statusCard.querySelector("#refresh-registries-btn")?.addEventListener("click", () => void refreshRegistries());
 
     const registryList = statusCard.querySelector("#registry-list");
     if (!registries.length) {
-      setMessageInBlock(registryList, "Chưa có registry", "Thêm manifest hoặc repository để lấy catalog extension.");
+      setMessageInBlock(registryList, "ChÆ°a cÃ³ registry", "ThÃªm manifest hoáº·c repository Ä‘á»ƒ láº¥y catalog extension.");
     } else {
       registries.forEach((registry) => {
         const row = document.createElement("div");
@@ -2610,7 +2699,7 @@
           <div class="log-content">
             <div class="log-title">${escapeHtml(registry.name)}</div>
             <div class="log-time">${escapeHtml(
-              `${registry.status} • ${registry.extensionCount} ext • ${formatRelative(registry.lastSyncedAt)}`
+              `${registry.status} â€¢ ${registry.extensionCount} ext â€¢ ${formatRelative(registry.lastSyncedAt)}`
             )}</div>
           </div>
           <button class="source-browse-btn" type="button">Sync</button>
@@ -2620,7 +2709,7 @@
           const removeButton = document.createElement("button");
           removeButton.className = "source-browse-btn";
           removeButton.type = "button";
-          removeButton.textContent = "Xóa";
+          removeButton.textContent = "XÃ³a";
           removeButton.addEventListener("click", () => confirmRemoveRegistry(registry.id, registry.name));
           row.appendChild(removeButton);
         }
@@ -2633,11 +2722,11 @@
       <div class="server-stats-grid">
         <div class="server-stat">
           <span class="s-val">${formatCount(visibleInstalled.length)}</span>
-          <span class="s-lbl">Đang hiện</span>
+          <span class="s-lbl">Äang hiá»‡n</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(hiddenInstalled.length)}</span>
-          <span class="s-lbl">Ẩn bởi policy</span>
+          <span class="s-lbl">áº¨n bá»Ÿi policy</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(catalog.length)}</span>
@@ -2648,13 +2737,13 @@
 
     const logCard = $("#page-server .log-card");
     logCard.innerHTML = `
-      <h3 class="card-title">Nguồn đã cài</h3>
+      <h3 class="card-title">Nguá»“n Ä‘Ã£ cÃ i</h3>
       <div class="sources-list" id="server-installed-list" style="padding:0;gap:10px;"></div>
       ${
         hiddenInstalled.length
           ? `
             <div class="server-subsection">
-              <h3 class="card-title">Nguồn ẩn bởi policy</h3>
+              <h3 class="card-title">Nguá»“n áº©n bá»Ÿi policy</h3>
               <div class="sources-list" id="server-hidden-installed-list" style="padding:0;gap:10px;"></div>
             </div>
           `
@@ -2663,7 +2752,7 @@
     `;
     const installedList = logCard.querySelector("#server-installed-list");
     if (!visibleInstalled.length) {
-      setMessageInBlock(installedList, "Chưa cài extension", "Refresh registry rồi chọn extension cần cài.");
+      setMessageInBlock(installedList, "ChÆ°a cÃ i extension", "Refresh registry rá»“i chá»n extension cáº§n cÃ i.");
     } else {
       visibleInstalled.forEach((item) => installedList.appendChild(createExtensionCard(item)));
     }
@@ -2677,12 +2766,12 @@
 
     const connectCard = $("#page-server .connect-card");
     connectCard.innerHTML = `
-      <h3 class="card-title">Catalog khả dụng</h3>
+      <h3 class="card-title">Catalog kháº£ dá»¥ng</h3>
       <div class="sources-list" id="server-catalog-list" style="padding:0;gap:10px;"></div>
     `;
     const catalogList = connectCard.querySelector("#server-catalog-list");
     if (!catalog.length) {
-      setMessageInBlock(catalogList, "Catalog trống", "Refresh registry để tải danh sách extension mới.");
+      setMessageInBlock(catalogList, "Catalog trá»‘ng", "Refresh registry Ä‘á»ƒ táº£i danh sÃ¡ch extension má»›i.");
     } else {
       catalog.slice(0, 12).forEach((item) => catalogList.appendChild(createExtensionCard(item, { catalog: true })));
     }
@@ -2690,7 +2779,7 @@
 
   function openSettingEditor(item) {
     showDynamicModal({
-      title: "Cập nhật thiết lập",
+      title: "Cáº­p nháº­t thiáº¿t láº­p",
       bodyHtml: `
         <div style="display:flex;flex-direction:column;gap:14px;">
           <div>
@@ -2701,12 +2790,12 @@
             <label class="form-label" for="setting-edit-value">Value</label>
             <input class="form-input" id="setting-edit-value" type="text" value="${escapeHtml(item.value || "")}">
           </div>
-          <p class="form-hint" style="margin:0;">Thiết lập này được lưu vào DB của server và áp dụng ngay cho UI/backend đọc từ AppSetting.</p>
+          <p class="form-hint" style="margin:0;">Thiáº¿t láº­p nÃ y Ä‘Æ°á»£c lÆ°u vÃ o DB cá»§a server vÃ  Ã¡p dá»¥ng ngay cho UI/backend Ä‘á»c tá»« AppSetting.</p>
         </div>
       `,
       footerHtml: `
-        <button class="btn-ghost" type="button" data-close="dynamic-modal">Hủy</button>
-        <button class="btn-primary" type="button" id="save-setting-btn">Lưu</button>
+        <button class="btn-ghost" type="button" data-close="dynamic-modal">Há»§y</button>
+        <button class="btn-primary" type="button" id="save-setting-btn">LÆ°u</button>
       `
     });
 
@@ -2724,7 +2813,7 @@
       state.settingsLoaded = false;
       await loadSettingsBundle(true);
       renderServerSettingsSection();
-      showToast("✓", "Đã cập nhật thiết lập", item.key);
+      showToast("âœ“", "ÄÃ£ cáº­p nháº­t thiáº¿t láº­p", item.key);
     });
   }
 
@@ -2743,8 +2832,8 @@
     const statusCard = $("#page-server .status-card");
     statusCard.innerHTML = `
       <div class="server-card-header">
-        <span class="card-label">Tài khoản</span>
-        <button class="source-browse-btn" type="button" id="logout-btn">Đăng xuất</button>
+        <span class="card-label">TÃ i khoáº£n</span>
+        <button class="source-browse-btn" type="button" id="logout-btn">ÄÄƒng xuáº¥t</button>
       </div>
       <div class="status-indicator ${state.auth.mustChangePassword ? "offline" : ""}">
         <div class="status-pulse"></div>
@@ -2753,12 +2842,12 @@
       <p class="server-hint">
         ${escapeHtml(
           state.auth.bootstrapMode
-            ? "Đang ở chế độ bootstrap. Hãy đổi tài khoản mặc định ngay."
-            : "Tài khoản quản trị đang hoạt động ổn định."
+            ? "Äang á»Ÿ cháº¿ Ä‘á»™ bootstrap. HÃ£y Ä‘á»•i tÃ i khoáº£n máº·c Ä‘á»‹nh ngay."
+            : "TÃ i khoáº£n quáº£n trá»‹ Ä‘ang hoáº¡t Ä‘á»™ng á»•n Ä‘á»‹nh."
         )}
       </p>
       <div style="display:flex;gap:8px;margin-top:12px;">
-        <button class="btn-primary" type="button" id="change-password-btn" style="flex:1;">Đổi mật khẩu</button>
+        <button class="btn-primary" type="button" id="change-password-btn" style="flex:1;">Äá»•i máº­t kháº©u</button>
       </div>
     `;
     statusCard.querySelector("#logout-btn")?.addEventListener("click", () => void logout());
@@ -2769,11 +2858,11 @@
       <div class="server-stats-grid">
         <div class="server-stat">
           <span class="s-val">${escapeHtml(system.role || "app")}</span>
-          <span class="s-lbl">Vai trò</span>
+          <span class="s-lbl">Vai trÃ²</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(enabledSourceCount)}</span>
-          <span class="s-lbl">Nguồn</span>
+          <span class="s-lbl">Nguá»“n</span>
         </div>
         <div class="server-stat">
           <span class="s-val">${formatCount(totalQueueConcurrency)}</span>
@@ -2783,10 +2872,10 @@
     `;
 
     const logCard = $("#page-server .log-card");
-    logCard.innerHTML = `<h3 class="card-title">Thiết lập ứng dụng</h3><div class="log-list" id="setting-list"></div>`;
+    logCard.innerHTML = `<h3 class="card-title">Thiáº¿t láº­p á»©ng dá»¥ng</h3><div class="log-list" id="setting-list"></div>`;
     const settingList = logCard.querySelector("#setting-list");
     if (!state.settings.length) {
-      setMessageInBlock(settingList, "Chưa có AppSetting", "Server sẽ tự tạo khi có cấu hình runtime cần lưu.");
+      setMessageInBlock(settingList, "ChÆ°a cÃ³ AppSetting", "Server sáº½ tá»± táº¡o khi cÃ³ cáº¥u hÃ¬nh runtime cáº§n lÆ°u.");
     } else {
       state.settings.forEach((item) => {
         const row = document.createElement("div");
@@ -2795,9 +2884,9 @@
           <div class="log-dot"></div>
           <div class="log-content">
             <div class="log-title">${escapeHtml(item.key)}</div>
-            <div class="log-time">${escapeHtml(truncate(item.value || "", 72) || "(trống)")}</div>
+            <div class="log-time">${escapeHtml(truncate(item.value || "", 72) || "(trá»‘ng)")}</div>
           </div>
-          <button class="source-browse-btn" type="button">Sửa</button>
+          <button class="source-browse-btn" type="button">Sá»­a</button>
         `;
         row.querySelector("button")?.addEventListener("click", () => openSettingEditor(item));
         settingList.appendChild(row);
@@ -2805,22 +2894,22 @@
     }
 
     const connectCard = $("#page-server .connect-card");
-    connectCard.innerHTML = `<h3 class="card-title">Storage & chính sách nguồn</h3><div class="log-list" id="runtime-list"></div>`;
+    connectCard.innerHTML = `<h3 class="card-title">Storage & chÃ­nh sÃ¡ch nguá»“n</h3><div class="log-list" id="runtime-list"></div>`;
     const runtimeList = connectCard.querySelector("#runtime-list");
     const rows = [
       ["APP_BASE_URL", system.baseUrl || location.origin],
-      ["STORAGE_ROOT", storage.root || storage.directories?.root || "Không rõ"],
+      ["STORAGE_ROOT", storage.root || storage.directories?.root || "KhÃ´ng rÃµ"],
       [
-        "NGUỒN ĐANG HIỆN",
-        visibleInstalledNames().length ? visibleInstalledNames().join(", ") : "Chưa có nguồn production"
+        "NGUá»’N ÄANG HIá»†N",
+        visibleInstalledNames().length ? visibleInstalledNames().join(", ") : "ChÆ°a cÃ³ nguá»“n production"
       ],
       [
         "ALLOWLIST",
-        formatSourcePolicyNames(system.sourcePolicy?.enabledAllowlist || [], "Không giới hạn")
+        formatSourcePolicyNames(system.sourcePolicy?.enabledAllowlist || [], "KhÃ´ng giá»›i háº¡n")
       ],
       [
         "PRIORITY",
-        formatSourcePolicyNames(system.sourcePolicy?.priorityIds || [], "Không đặt ưu tiên")
+        formatSourcePolicyNames(system.sourcePolicy?.priorityIds || [], "KhÃ´ng Ä‘áº·t Æ°u tiÃªn")
       ]
     ];
 
@@ -2901,19 +2990,22 @@
       state.browseError = error.message;
       state.browseWarning = "";
       renderBrowse();
-      showToast("!", "Không tải được dữ liệu nguồn", error.message);
+      showToast("!", "KhÃ´ng táº£i Ä‘Æ°á»£c dá»¯ liá»‡u nguá»“n", error.message);
     }
   }
 
   async function loadLibraryDetail(novelId) {
     const novel = await apiJson(`/api/library/novels/${encodeURIComponent(novelId)}`);
     let enriched = null;
-    try {
-      enriched = await apiJson(
-        `/api/sources/${encodeURIComponent(novel.sourceId)}/detail?url=${encodeURIComponent(novel.sourceUrl)}`
-      );
-    } catch {
-      enriched = null;
+    const isLocalUpload = novel.sourceId === "local-upload" || String(novel.sourceUrl || "").startsWith("upload:");
+    if (!isLocalUpload) {
+      try {
+        enriched = await apiJson(
+          `/api/sources/${encodeURIComponent(novel.sourceId)}/detail?url=${encodeURIComponent(novel.sourceUrl)}`
+        );
+      } catch {
+        enriched = null;
+      }
     }
 
     return {
@@ -2962,7 +3054,7 @@
       isSourceUpstreamBlockedError(chapterError);
 
     if (!detailPayload && !chapterPayload && !upstreamBlocked) {
-      throw detailError || chapterError || new Error("Không tải được chi tiết truyện.");
+      throw detailError || chapterError || new Error("KhÃ´ng táº£i Ä‘Æ°á»£c chi tiáº¿t truyá»‡n.");
     }
 
     const sourceUrl =
@@ -3042,11 +3134,11 @@
   async function syncAllLibrary() {
     await loadLibrary();
     if (!state.libraryItems.length) {
-      showToast("!", "Thư viện đang trống", "Không có truyện để đồng bộ.");
+      showToast("!", "ThÆ° viá»‡n Ä‘ang trá»‘ng", "KhÃ´ng cÃ³ truyá»‡n Ä‘á»ƒ Ä‘á»“ng bá»™.");
       return;
     }
 
-    showToast("↻", "Đang xếp hàng đồng bộ", `${state.libraryItems.length} truyện`);
+    showToast("â†»", "Äang xáº¿p hÃ ng Ä‘á»“ng bá»™", `${state.libraryItems.length} truyá»‡n`);
     for (const item of state.libraryItems) {
       try {
         await apiJson(`/api/library/novels/${encodeURIComponent(item.id)}/sync`, {
@@ -3060,7 +3152,7 @@
     state.libraryLoaded = false;
     state.tasksLoaded = false;
     await Promise.all([loadLibrary(true), loadTasks(true).catch(() => [])]);
-    showToast("✓", "Đã đẩy vào hàng đợi", `${state.libraryItems.length} truyện`);
+    showToast("âœ“", "ÄÃ£ Ä‘áº©y vÃ o hÃ ng Ä‘á»£i", `${state.libraryItems.length} truyá»‡n`);
   }
 
   async function setSourceEnabled(sourceId, enabled) {
@@ -3086,9 +3178,9 @@
         navigateTo(defaultBrowsePath(), true);
       }
 
-      showToast("✓", enabled ? "Đã bật nguồn" : "Đã tắt nguồn", sourceId);
+      showToast("âœ“", enabled ? "ÄÃ£ báº­t nguá»“n" : "ÄÃ£ táº¯t nguá»“n", sourceId);
     } catch (error) {
-      showToast("!", "Không cập nhật được nguồn", error.message);
+      showToast("!", "KhÃ´ng cáº­p nháº­t Ä‘Æ°á»£c nguá»“n", error.message);
       renderSources();
       if (state.serverSection === "extensions") {
         renderServerExtensionsSection();
@@ -3114,7 +3206,7 @@
     }
 
     const installed = getInstalledExtensionById(extensionId);
-    showToast("✓", "Đã cài và bật nguồn", installed?.name || extensionId);
+    showToast("âœ“", "ÄÃ£ cÃ i vÃ  báº­t nguá»“n", installed?.name || extensionId);
   }
 
   async function refreshRegistries() {
@@ -3126,9 +3218,9 @@
       state.registriesLoaded = false;
       await Promise.all([loadRegistries(true), loadExtensions(true)]);
       renderServerExtensionsSection();
-      showToast("✓", "Đã refresh registries", `${state.registries.length} registry`);
+      showToast("âœ“", "ÄÃ£ refresh registries", `${state.registries.length} registry`);
     } catch (error) {
-      showToast("!", "Refresh registry thất bại", error.message);
+      showToast("!", "Refresh registry tháº¥t báº¡i", error.message);
     }
   }
 
@@ -3141,9 +3233,9 @@
       state.registriesLoaded = false;
       await Promise.all([loadRegistries(true), loadExtensions(true)]);
       renderServerExtensionsSection();
-      showToast("✓", "Đã refresh registry", registryId);
+      showToast("âœ“", "ÄÃ£ refresh registry", registryId);
     } catch (error) {
-      showToast("!", "Refresh registry thất bại", error.message);
+      showToast("!", "Refresh registry tháº¥t báº¡i", error.message);
     }
   }
 
@@ -3155,9 +3247,9 @@
       state.tasksLoaded = false;
       await loadTasks(true);
       renderServerTasksSection();
-      showToast("✓", "Đã retry job", String(jobId));
+      showToast("âœ“", "ÄÃ£ retry job", String(jobId));
     } catch (error) {
-      showToast("!", "Không retry được job", error.message);
+      showToast("!", "KhÃ´ng retry Ä‘Æ°á»£c job", error.message);
     }
   }
 
@@ -3168,8 +3260,8 @@
     if (state.detailPayload.upstreamBlocked) {
       showToast(
         "!",
-        "Nguồn đang chặn truy cập",
-        state.detailPayload.chapterWarning || "Chưa thể thêm truyện này vào thư viện từ server lúc này."
+        "Nguá»“n Ä‘ang cháº·n truy cáº­p",
+        state.detailPayload.chapterWarning || "ChÆ°a thá»ƒ thÃªm truyá»‡n nÃ y vÃ o thÆ° viá»‡n tá»« server lÃºc nÃ y."
       );
       return;
     }
@@ -3194,7 +3286,7 @@
       ...state.detailPayload,
       libraryItem: createdItem || state.detailPayload.libraryItem
     });
-    showToast("✓", "Đã thêm vào thư viện", createdItem?.title || state.detailPayload.title);
+    showToast("âœ“", "ÄÃ£ thÃªm vÃ o thÆ° viá»‡n", createdItem?.title || state.detailPayload.title);
   }
 
   async function syncCurrentDetail() {
@@ -3205,8 +3297,8 @@
     if (state.detailPayload?.upstreamBlocked) {
       showToast(
         "!",
-        "Nguồn đang chặn truy cập",
-        state.detailPayload.chapterWarning || "Hãy thử đồng bộ lại sau khi nguồn cho phép truy cập."
+        "Nguá»“n Ä‘ang cháº·n truy cáº­p",
+        state.detailPayload.chapterWarning || "HÃ£y thá»­ Ä‘á»“ng bá»™ láº¡i sau khi nguá»“n cho phÃ©p truy cáº­p."
       );
       return;
     }
@@ -3220,7 +3312,7 @@
     state.libraryLoaded = false;
     state.tasksLoaded = false;
     await Promise.all([loadLibrary(true), loadTasks(true).catch(() => []), refreshActiveDetailView()]);
-    showToast("↻", "Đã xếp hàng đồng bộ", libraryItem.title);
+    showToast("â†»", "ÄÃ£ xáº¿p hÃ ng Ä‘á»“ng bá»™", libraryItem.title);
   }
 
   async function rebuildCurrentDetail() {
@@ -3236,7 +3328,7 @@
     state.libraryLoaded = false;
     state.tasksLoaded = false;
     await Promise.all([loadLibrary(true), loadTasks(true).catch(() => []), refreshActiveDetailView()]);
-    showToast("↻", "Đã xếp hàng rebuild", libraryItem.title);
+    showToast("â†»", "ÄÃ£ xáº¿p hÃ ng rebuild", libraryItem.title);
   }
 
   function exportCurrentDetailEpub() {
@@ -3252,6 +3344,127 @@
     );
   }
 
+  function openLibraryUploadModal() {
+    showDynamicModal({
+      title: "Upload truyện",
+      bodyHtml: `
+        <label class="form-label">File</label>
+        <input class="form-input" id="library-upload-file" type="file" accept=".epub,.zip">
+        <p class="form-hint">Hỗ trợ <code>.epub</code> hoặc <code>.zip</code> chứa các chapter <code>.txt</code>.</p>
+        <label class="form-label" style="margin-top:12px;">Tên truyện</label>
+        <input class="form-input" id="library-upload-title" placeholder="Để trống để lấy từ file">
+        <label class="form-label" style="margin-top:12px;">Tác giả</label>
+        <input class="form-input" id="library-upload-author" placeholder="Tùy chọn">
+        <label class="form-label" style="margin-top:12px;">Mô tả</label>
+        <textarea class="form-input" id="library-upload-description" rows="5" placeholder="Tùy chọn"></textarea>
+      `,
+      footerHtml: `
+        <button class="btn-ghost" type="button" data-close="dynamic-modal">Hủy</button>
+        <button class="btn-primary" type="button" id="library-upload-submit">Upload</button>
+      `
+    });
+
+    $id("library-upload-submit")?.addEventListener("click", async () => {
+      const fileInput = $id("library-upload-file");
+      const file = fileInput?.files?.[0];
+      if (!file) {
+        showToast("!", "Chưa chọn file", "Chọn file EPUB hoặc ZIP trước.");
+        return;
+      }
+
+      const submitButton = $id("library-upload-submit");
+      submitButton.disabled = true;
+      submitButton.textContent = "Dang upload...";
+
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const title = $id("library-upload-title")?.value?.trim();
+        const author = $id("library-upload-author")?.value?.trim();
+        const description = $id("library-upload-description")?.value?.trim();
+        if (title) {
+          formData.append("title", title);
+        }
+        if (author) {
+          formData.append("author", author);
+        }
+        if (description) {
+          formData.append("description", description);
+        }
+
+        const payload = await apiForm("/api/library/uploads/novel", formData);
+        state.libraryLoaded = false;
+        await loadLibrary(true);
+        closeModal("dynamic-modal");
+        showToast("✓", "Đã upload truyện", payload.item?.title || file.name);
+        if (payload.item?.id) {
+          navigateTo(libraryDetailPath(payload.item.id));
+        } else {
+          renderLibrary();
+        }
+      } catch (error) {
+        showToast("!", "Upload truyện thất bại", error.message);
+      } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = "Upload";
+      }
+    });
+  }
+
+  function openAppendChaptersModal() {
+    const libraryItem = state.detailPayload?.libraryItem || getLibraryById(state.detailLibraryId);
+    if (!libraryItem?.id) {
+      return;
+    }
+
+    showDynamicModal({
+      title: "Upload chapter",
+      bodyHtml: `
+        <label class="form-label">File</label>
+        <input class="form-input" id="library-chapter-upload-file" type="file" accept=".txt,.zip">
+        <p class="form-hint">Hỗ trợ 1 file <code>.txt</code> hoặc <code>.zip</code> chứa nhiều chapter <code>.txt</code>.</p>
+        <label class="form-label" style="margin-top:12px;">Chapter bắt đầu</label>
+        <input class="form-input" id="library-chapter-start-index" type="number" min="1" placeholder="Mặc định nối tiếp chapter cuối">
+      `,
+      footerHtml: `
+        <button class="btn-ghost" type="button" data-close="dynamic-modal">Hủy</button>
+        <button class="btn-primary" type="button" id="library-chapter-upload-submit">Upload</button>
+      `
+    });
+
+    $id("library-chapter-upload-submit")?.addEventListener("click", async () => {
+      const fileInput = $id("library-chapter-upload-file");
+      const file = fileInput?.files?.[0];
+      if (!file) {
+        showToast("!", "Chưa chọn file", "Chọn file TXT hoặc ZIP trước.");
+        return;
+      }
+
+      const submitButton = $id("library-chapter-upload-submit");
+      submitButton.disabled = true;
+      submitButton.textContent = "Dang upload...";
+
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const startIndex = $id("library-chapter-start-index")?.value?.trim();
+        if (startIndex) {
+          formData.append("startIndex", startIndex);
+        }
+        const payload = await apiForm(`/api/library/novels/${encodeURIComponent(libraryItem.id)}/uploads/chapters`, formData);
+        state.libraryLoaded = false;
+        await loadLibrary(true);
+        closeModal("dynamic-modal");
+        showToast("✓", "Đã upload chapter", payload.item?.title || libraryItem.title);
+        await refreshActiveDetailView();
+      } catch (error) {
+        showToast("!", "Upload chapter thất bại", error.message);
+      } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = "Upload";
+      }
+    });
+  }
   async function refreshActiveDetailView() {
     if (!state.detailPayload) {
       return;
@@ -3280,32 +3493,32 @@
         `/api/library/novels/${encodeURIComponent(libraryItem.id)}/chapters/${encodeURIComponent(chapterId)}/preview`
       );
       const preview = payload.item || payload;
-      const footerButtons = [`<button class="btn-ghost" type="button" data-close="dynamic-modal">Đóng</button>`];
+      const footerButtons = [`<button class="btn-ghost" type="button" data-close="dynamic-modal">ÄÃ³ng</button>`];
 
       if (preview.sourceUrl) {
-        footerButtons.push(`<button class="btn-ghost" type="button" id="chapter-preview-source">Mở nguồn</button>`);
+        footerButtons.push(`<button class="btn-ghost" type="button" id="chapter-preview-source">Má»Ÿ nguá»“n</button>`);
       }
       if (preview.chapterUrl) {
-        footerButtons.push(`<button class="btn-primary" type="button" id="chapter-preview-file">Mở file local</button>`);
+        footerButtons.push(`<button class="btn-primary" type="button" id="chapter-preview-file">Má»Ÿ file local</button>`);
       }
 
       showDynamicModal({
-        title: preview.title || `Chương ${preview.chapterIndex || ""}`.trim(),
+        title: preview.title || `ChÆ°Æ¡ng ${preview.chapterIndex || ""}`.trim(),
         bodyHtml: `
           <div class="chapter-preview-shell">
             <div class="detail-badges" style="margin-bottom:10px;">
-              <span class="badge badge-cat">Đọc từ dữ liệu local</span>
+              <span class="badge badge-cat">Äá»c tá»« dá»¯ liá»‡u local</span>
               ${preview.fileSize ? `<span class="badge badge-cat">${escapeHtml(formatFileSize(preview.fileSize))}</span>` : ""}
               ${preview.publishedAt ? `<span class="badge badge-cat">${escapeHtml(formatRelative(preview.publishedAt))}</span>` : ""}
             </div>
             <p class="form-hint" style="margin:0 0 14px;">
-              Đây là bản HTML đã tải và lưu trong server. Nếu nội dung hiển thị đúng thì chapter này đã download thành công.
+              ÄÃ¢y lÃ  báº£n HTML Ä‘Ã£ táº£i vÃ  lÆ°u trong server. Náº¿u ná»™i dung hiá»ƒn thá»‹ Ä‘Ãºng thÃ¬ chapter nÃ y Ä‘Ã£ download thÃ nh cÃ´ng.
             </p>
             <div class="chapter-preview-info">
-              <div><span class="form-label">Truyện</span><p class="form-hint">${escapeHtml(
+              <div><span class="form-label">Truyá»‡n</span><p class="form-hint">${escapeHtml(
                 preview.novelTitle || libraryItem.title || ""
               )}</p></div>
-              <div><span class="form-label">Chương</span><p class="form-hint">${escapeHtml(
+              <div><span class="form-label">ChÆ°Æ¡ng</span><p class="form-hint">${escapeHtml(
                 String(preview.chapterIndex || "")
               )}</p></div>
               ${
@@ -3333,7 +3546,7 @@
           anchor.setAttribute("rel", "noopener noreferrer");
         });
     } catch (error) {
-      showToast("!", "Không mở được bản local của chương", error.message);
+      showToast("!", "KhÃ´ng má»Ÿ Ä‘Æ°á»£c báº£n local cá»§a chÆ°Æ¡ng", error.message);
     }
   }
 
@@ -3353,7 +3566,7 @@
     state.libraryLoaded = false;
     state.tasksLoaded = false;
     await Promise.all([loadLibrary(true), loadTasks(true).catch(() => []), refreshActiveDetailView()]);
-    showToast("↻", "Đã xếp hàng tải lại chương", libraryItem.title);
+    showToast("â†»", "ÄÃ£ xáº¿p hÃ ng táº£i láº¡i chÆ°Æ¡ng", libraryItem.title);
   }
 
   async function removeCurrentDetailFromLibrary() {
@@ -3363,9 +3576,9 @@
     }
 
     showConfirmModal({
-      title: "Xóa truyện khỏi thư viện",
-      message: `Xóa ${libraryItem.title} và dọn cache, EPUB đã build cùng tất cả task liên quan?`,
-      confirmLabel: "Xóa truyện",
+      title: "XÃ³a truyá»‡n khá»i thÆ° viá»‡n",
+      message: `XÃ³a ${libraryItem.title} vÃ  dá»n cache, EPUB Ä‘Ã£ build cÃ¹ng táº¥t cáº£ task liÃªn quan?`,
+      confirmLabel: "XÃ³a truyá»‡n",
       onConfirm: async () => {
         await apiJson(`/api/library/novels/${encodeURIComponent(libraryItem.id)}`, {
           method: "DELETE"
@@ -3385,7 +3598,7 @@
           await refreshActiveDetailView();
         }
 
-        showToast("✓", "Đã xóa khỏi thư viện", libraryItem.title);
+        showToast("âœ“", "ÄÃ£ xÃ³a khá»i thÆ° viá»‡n", libraryItem.title);
       }
     });
   }
@@ -3413,14 +3626,14 @@
     }
 
     const source = getInstalledExtensionById(sourceId) || getEnabledSourceById(sourceId);
-    showToast("✓", "Đã hiện nguồn", source?.name || sourceId);
+    showToast("âœ“", "ÄÃ£ hiá»‡n nguá»“n", source?.name || sourceId);
   }
 
   function confirmRemoveRegistry(registryId, name) {
     showConfirmModal({
-      title: "Xóa registry",
-      message: `Xóa registry ${name}? Catalog tương ứng sẽ bị gỡ khỏi server.`,
-      confirmLabel: "Xóa registry",
+      title: "XÃ³a registry",
+      message: `XÃ³a registry ${name}? Catalog tÆ°Æ¡ng á»©ng sáº½ bá»‹ gá»¡ khá»i server.`,
+      confirmLabel: "XÃ³a registry",
       onConfirm: async () => {
         await apiJson(`/api/extensions/registries/${encodeURIComponent(registryId)}`, {
           method: "DELETE"
@@ -3431,7 +3644,7 @@
         if (state.serverSection === "extensions") {
           renderServerExtensionsSection();
         }
-        showToast("✓", "Đã xóa registry", name);
+        showToast("âœ“", "ÄÃ£ xÃ³a registry", name);
       }
     });
   }
@@ -3447,8 +3660,8 @@
   function openChangePasswordModal(force = false) {
     const username = state.auth.user || state.auth.username || "admin";
     $id("change-password-hint").textContent = force
-      ? "Phiên bootstrap chỉ cho phép truy cập sau khi bạn đổi tên đăng nhập hoặc mật khẩu mặc định."
-      : "Bạn có thể đổi username và mật khẩu quản trị ngay trong giao diện này.";
+      ? "PhiÃªn bootstrap chá»‰ cho phÃ©p truy cáº­p sau khi báº¡n Ä‘á»•i tÃªn Ä‘Äƒng nháº­p hoáº·c máº­t kháº©u máº·c Ä‘á»‹nh."
+      : "Báº¡n cÃ³ thá»ƒ Ä‘á»•i username vÃ  máº­t kháº©u quáº£n trá»‹ ngay trong giao diá»‡n nÃ y.";
     $id("change-password-username").value = username;
     $id("change-password-current").value = "";
     $id("change-password-next").value = "";
@@ -3478,19 +3691,19 @@
     };
 
     if (!username) {
-      fail("Vui lòng nhập tên đăng nhập mới.");
+      fail("Vui lÃ²ng nháº­p tÃªn Ä‘Äƒng nháº­p má»›i.");
       return;
     }
     if (!currentPassword) {
-      fail("Vui lòng nhập mật khẩu hiện tại.");
+      fail("Vui lÃ²ng nháº­p máº­t kháº©u hiá»‡n táº¡i.");
       return;
     }
     if (!newPassword) {
-      fail("Vui lòng nhập mật khẩu mới.");
+      fail("Vui lÃ²ng nháº­p máº­t kháº©u má»›i.");
       return;
     }
     if (newPassword !== confirmPassword) {
-      fail("Mật khẩu mới và phần nhập lại chưa khớp.");
+      fail("Máº­t kháº©u má»›i vÃ  pháº§n nháº­p láº¡i chÆ°a khá»›p.");
       return;
     }
 
@@ -3515,7 +3728,7 @@
 
       blurActiveElement();
       closeModal("change-password-modal");
-      showToast("✓", "Đã đổi mật khẩu", username);
+      showToast("âœ“", "ÄÃ£ Ä‘á»•i máº­t kháº©u", username);
 
       const nextPath = state.pendingPasswordPath || "/library";
       state.pendingPasswordPath = null;
@@ -3530,7 +3743,7 @@
     const submit = $id("confirm-add-source");
     const manifestUrl = input.value.trim();
     if (!manifestUrl) {
-      showToast("!", "Thiếu URL manifest", "Nhập plugin.json hoặc repository.json.");
+      showToast("!", "Thiáº¿u URL manifest", "Nháº­p plugin.json hoáº·c repository.json.");
       input.focus();
       return;
     }
@@ -3569,9 +3782,9 @@
       renderSources();
       closeModal("add-source-modal");
       input.value = "";
-      showToast("✓", "Đã thêm registry", manifestUrl);
+      showToast("âœ“", "ÄÃ£ thÃªm registry", manifestUrl);
     } catch (error) {
-      showToast("!", "Không thêm được nguồn", error.message);
+      showToast("!", "KhÃ´ng thÃªm Ä‘Æ°á»£c nguá»“n", error.message);
     } finally {
       submit.disabled = false;
     }
@@ -3612,13 +3825,13 @@
               <span class="translation-chip">${escapeHtml(item.provider || "mock")}</span>
               <span class="translation-chip">${escapeHtml(item.model || "mock-vi")}</span>
               <span class="translation-chip">${escapeHtml(item.targetLanguage || "vi")}</span>
-              ${item.isActiveAuto ? '<span class="translation-chip">auto chap mới</span>' : ""}
-              ${item.isDefaultEdition ? '<span class="translation-chip">edition mặc định</span>' : ""}
+              ${item.isActiveAuto ? '<span class="translation-chip">auto chap má»›i</span>' : ""}
+              ${item.isDefaultEdition ? '<span class="translation-chip">edition máº·c Ä‘á»‹nh</span>' : ""}
             </div>
           </div>
           <div class="source-actions">
             <span class="source-status ${item.status === "ready" ? "enabled" : ""}">${escapeHtml(item.status || "idle")}</span>
-            <span class="translation-muted">${completed}/${downloaded} chap dịch</span>
+            <span class="translation-muted">${completed}/${downloaded} chap dá»‹ch</span>
           </div>
         </div>
       </article>
@@ -3663,10 +3876,10 @@
     const active = detail.glossaries?.find((item) => item.isActive) || detail.glossaries?.[0];
     const entries = (active?.entries || []).map((entry) => ({ ...entry }));
     showDynamicModal({
-      title: `Glossary — ${detail.name}`,
+      title: `Glossary â€” ${detail.name}`,
       bodyHtml: `
         <div class="translation-toolbar">
-          <button class="btn-primary" type="button" id="translation-add-glossary-row">Thêm dòng</button>
+          <button class="btn-primary" type="button" id="translation-add-glossary-row">ThÃªm dÃ²ng</button>
           <button class="btn-ghost" type="button" id="translation-suggest-glossary">AI suggest</button>
         </div>
         <table class="translation-table">
@@ -3677,8 +3890,8 @@
         </table>
       `,
       footerHtml: `
-        <button class="btn-ghost" type="button" data-close="dynamic-modal">Đóng</button>
-        <button class="btn-primary" type="button" id="translation-save-glossary">Lưu glossary</button>
+        <button class="btn-ghost" type="button" data-close="dynamic-modal">ÄÃ³ng</button>
+        <button class="btn-primary" type="button" id="translation-save-glossary">LÆ°u glossary</button>
       `
     });
     function bindGlossaryButtons() {
@@ -3709,14 +3922,14 @@
       await loadTranslationProjectDetail(projectId);
       renderTranslations();
       closeModal('dynamic-modal');
-      showToast('✓', 'Đã lưu glossary', detail.name);
+      showToast('âœ“', 'ÄÃ£ lÆ°u glossary', detail.name);
     });
   }
 
   async function openRuntimeSettingsModal() {
     const settings = await apiJson('/api/translations/settings');
     showDynamicModal({
-      title: 'Cấu hình runtime dịch',
+      title: 'Cáº¥u hÃ¬nh runtime dá»‹ch',
       bodyHtml: `
         <label class="form-label">Credentials JSON</label>
         <textarea class="form-input" id="translation-runtime-credentials" rows="8">${escapeHtml(JSON.stringify(settings.credentials || [], null, 2))}</textarea>
@@ -3724,8 +3937,8 @@
         <textarea class="form-input" id="translation-runtime-config" rows="8">${escapeHtml(JSON.stringify(settings.runtime || {}, null, 2))}</textarea>
       `,
       footerHtml: `
-        <button class="btn-ghost" type="button" data-close="dynamic-modal">Đóng</button>
-        <button class="btn-primary" type="button" id="translation-runtime-save">Lưu</button>
+        <button class="btn-ghost" type="button" data-close="dynamic-modal">ÄÃ³ng</button>
+        <button class="btn-primary" type="button" id="translation-runtime-save">LÆ°u</button>
       `
     });
     $id('translation-runtime-save')?.addEventListener('click', async () => {
@@ -3737,7 +3950,7 @@
         }
       });
       closeModal('dynamic-modal');
-      showToast('✓', 'Đã lưu runtime', 'Cấu hình dịch đã cập nhật');
+      showToast('âœ“', 'ÄÃ£ lÆ°u runtime', 'Cáº¥u hÃ¬nh dá»‹ch Ä‘Ã£ cáº­p nháº­t');
     });
   }
 
@@ -3745,12 +3958,12 @@
     await loadLibrary();
     const options = state.libraryItems.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join('');
     showDynamicModal({
-      title: 'Tạo project dịch',
+      title: 'Táº¡o project dá»‹ch',
       bodyHtml: `
-        <label class="form-label">Truyện</label>
+        <label class="form-label">Truyá»‡n</label>
         <select class="form-input" id="translation-project-novel">${options}</select>
-        <label class="form-label" style="margin-top:12px;">Tên project</label>
-        <input class="form-input" id="translation-project-name" placeholder="Ví dụ: Việt hóa đọc mượt">
+        <label class="form-label" style="margin-top:12px;">TÃªn project</label>
+        <input class="form-input" id="translation-project-name" placeholder="VÃ­ dá»¥: Viá»‡t hÃ³a Ä‘á»c mÆ°á»£t">
         <label class="form-label" style="margin-top:12px;">Provider</label>
         <select class="form-input" id="translation-project-provider"><option value="mock">mock</option><option value="openai">openai-compatible</option><option value="gemini">gemini</option></select>
         <label class="form-label" style="margin-top:12px;">Model</label>
@@ -3765,20 +3978,20 @@
   "pronouns": "contextual"
 }</textarea>
         <div class="translation-toolbar">
-          <label><input type="checkbox" id="translation-project-auto"> Auto chap mới</label>
+          <label><input type="checkbox" id="translation-project-auto"> Auto chap má»›i</label>
           <label><input type="checkbox" id="translation-project-active" checked> Active auto</label>
-          <label><input type="checkbox" id="translation-project-default" checked> Edition mặc định</label>
+          <label><input type="checkbox" id="translation-project-default" checked> Edition máº·c Ä‘á»‹nh</label>
         </div>
       `,
       footerHtml: `
-        <button class="btn-ghost" type="button" data-close="dynamic-modal">Hủy</button>
-        <button class="btn-primary" type="button" id="translation-project-save">Tạo</button>
+        <button class="btn-ghost" type="button" data-close="dynamic-modal">Há»§y</button>
+        <button class="btn-primary" type="button" id="translation-project-save">Táº¡o</button>
       `
     });
     $id('translation-project-save')?.addEventListener('click', async () => {
       const body = {
         novelId: $id('translation-project-novel').value,
-        name: $id('translation-project-name').value || 'Bản dịch mới',
+        name: $id('translation-project-name').value || 'Báº£n dá»‹ch má»›i',
         provider: $id('translation-project-provider').value,
         model: $id('translation-project-model').value || 'mock-vi',
         targetLanguage: $id('translation-project-language').value || 'vi',
@@ -3791,7 +4004,7 @@
       state.translationProjectsLoaded = false;
       await loadTranslationProjects(true);
       closeModal('dynamic-modal');
-      showToast('✓', 'Đã tạo project dịch', payload.item?.name || body.name);
+      showToast('âœ“', 'ÄÃ£ táº¡o project dá»‹ch', payload.item?.name || body.name);
       navigateTo(translationProjectPath(payload.item?.id));
     });
   }
@@ -3814,19 +4027,19 @@
             <span class="translation-chip">${escapeHtml(detail.provider)}</span>
             <span class="translation-chip">${escapeHtml(detail.model)}</span>
             <span class="translation-chip">${escapeHtml(detail.targetLanguage)}</span>
-            ${detail.isActiveAuto ? '<span class="translation-chip">auto chap mới</span>' : ''}
-            ${detail.isDefaultEdition ? '<span class="translation-chip">edition mặc định</span>' : ''}
+            ${detail.isActiveAuto ? '<span class="translation-chip">auto chap má»›i</span>' : ''}
+            ${detail.isDefaultEdition ? '<span class="translation-chip">edition máº·c Ä‘á»‹nh</span>' : ''}
           </div>
           <div class="translation-toolbar">
-            <button class="btn-primary" type="button" id="translation-run-project">Dịch / cập nhật</button>
+            <button class="btn-primary" type="button" id="translation-run-project">Dá»‹ch / cáº­p nháº­t</button>
             <button class="btn-ghost" type="button" id="translation-rebuild-project">Rebuild</button>
-            <button class="btn-ghost" type="button" id="translation-edit-config">Sửa cấu hình</button>
+            <button class="btn-ghost" type="button" id="translation-edit-config">Sá»­a cáº¥u hÃ¬nh</button>
             <button class="btn-ghost" type="button" id="translation-edit-glossary">Glossary</button>
             <button class="btn-ghost" type="button" id="translation-runtime-settings">Runtime</button>
             <button class="btn-ghost" type="button" id="translation-export-epub">Export EPUB</button>
             <button class="btn-ghost" type="button" id="translation-export-txt">Export TXT</button>
           </div>
-          <p class="translation-muted">Glossary active: v${escapeHtml(activeGlossary?.version || 1)} · ${escapeHtml((activeGlossary?.entries || []).length)} entries</p>
+          <p class="translation-muted">Glossary active: v${escapeHtml(activeGlossary?.version || 1)} Â· ${escapeHtml((activeGlossary?.entries || []).length)} entries</p>
         </section>
         <section class="translation-section">
           <h3>Chapters</h3>
@@ -3836,26 +4049,26 @@
                 <strong>${escapeHtml(item.chapter?.title || '')}</strong>
                 <div class="translation-toolbar">
                   <span class="translation-chip">${escapeHtml(item.status || 'pending')}</span>
-                  ${item.hasManualEdits ? '<span class="translation-chip">đã sửa tay</span>' : ''}
-                  ${item.newGeneratedAvailable ? '<span class="translation-chip">có bản generated mới</span>' : ''}
+                  ${item.hasManualEdits ? '<span class="translation-chip">Ä‘Ã£ sá»­a tay</span>' : ''}
+                  ${item.newGeneratedAvailable ? '<span class="translation-chip">cÃ³ báº£n generated má»›i</span>' : ''}
                 </div>
                 <div class="translation-toolbar">
-                  <button class="btn-ghost" type="button" data-translation-open-chapter="${escapeHtml(item.id)}">Mở editor</button>
-                  <button class="btn-ghost" type="button" data-translation-retranslate-chapter="${escapeHtml(item.id)}">Dịch lại</button>
+                  <button class="btn-ghost" type="button" data-translation-open-chapter="${escapeHtml(item.id)}">Má»Ÿ editor</button>
+                  <button class="btn-ghost" type="button" data-translation-retranslate-chapter="${escapeHtml(item.id)}">Dá»‹ch láº¡i</button>
                 </div>
               </article>
-            `).join('') || '<p class="translation-muted">Chưa có chapter dịch.</p>'}
+            `).join('') || '<p class="translation-muted">ChÆ°a cÃ³ chapter dá»‹ch.</p>'}
           </div>
         </section>
       </div>
     `;
     $id('translation-run-project')?.addEventListener('click', async () => {
       await apiJson(`/api/translations/projects/${encodeURIComponent(detail.id)}/start`, { method: 'POST', body: { triggerType: 'manual' } });
-      showToast('↻', 'Đã xếp hàng dịch', detail.name);
+      showToast('â†»', 'ÄÃ£ xáº¿p hÃ ng dá»‹ch', detail.name);
     });
     $id('translation-rebuild-project')?.addEventListener('click', async () => {
       await apiJson(`/api/translations/projects/${encodeURIComponent(detail.id)}/rebuild`, { method: 'POST' });
-      showToast('↻', 'Đã xếp hàng rebuild', detail.name);
+      showToast('â†»', 'ÄÃ£ xáº¿p hÃ ng rebuild', detail.name);
     });
     $id('translation-edit-glossary')?.addEventListener('click', () => void openGlossaryEditor(detail.id));
     $id('translation-runtime-settings')?.addEventListener('click', () => void openRuntimeSettingsModal());
@@ -3867,9 +4080,9 @@
     });
     $id('translation-edit-config')?.addEventListener('click', async () => {
       showDynamicModal({
-        title: `Cấu hình — ${detail.name}`,
+        title: `Cáº¥u hÃ¬nh â€” ${detail.name}`,
         bodyHtml: `
-          <label class="form-label">Tên project</label>
+          <label class="form-label">TÃªn project</label>
           <input class="form-input" id="translation-config-name" value="${escapeHtml(detail.name)}">
           <label class="form-label" style="margin-top:12px;">Provider</label>
           <input class="form-input" id="translation-config-provider" value="${escapeHtml(detail.provider)}">
@@ -3881,8 +4094,8 @@
           <textarea class="form-input" id="translation-config-prompt" rows="8">${escapeHtml(detail.systemPrompt || '')}</textarea>
         `,
         footerHtml: `
-          <button class="btn-ghost" type="button" data-close="dynamic-modal">Đóng</button>
-          <button class="btn-primary" type="button" id="translation-config-save">Lưu</button>
+          <button class="btn-ghost" type="button" data-close="dynamic-modal">ÄÃ³ng</button>
+          <button class="btn-primary" type="button" id="translation-config-save">LÆ°u</button>
         `
       });
       $id('translation-config-save')?.addEventListener('click', async () => {
@@ -3899,13 +4112,13 @@
         await loadTranslationProjectDetail(detail.id);
         renderTranslations();
         closeModal('dynamic-modal');
-        showToast('✓', 'Đã lưu cấu hình', detail.name);
+        showToast('âœ“', 'ÄÃ£ lÆ°u cáº¥u hÃ¬nh', detail.name);
       });
     });
     $$('[data-translation-retranslate-chapter]', container).forEach((button) => {
       button.addEventListener('click', async () => {
         await apiJson(`/api/translations/projects/${encodeURIComponent(detail.id)}/chapters/${encodeURIComponent(button.getAttribute('data-translation-retranslate-chapter'))}/retranslate`, { method: 'POST' });
-        showToast('↻', 'Đã xếp hàng dịch lại chap', detail.name);
+        showToast('â†»', 'ÄÃ£ xáº¿p hÃ ng dá»‹ch láº¡i chap', detail.name);
       });
     });
     $$('[data-translation-open-chapter]', container).forEach((button) => {
@@ -3918,29 +4131,29 @@
     const detail = payload.item;
     const published = (detail.versions || []).find((item) => item.id === detail.currentPublishedVersionId) || detail.versions?.[0];
     showDynamicModal({
-      title: `Editor — ${detail.chapter?.title || ''}`,
+      title: `Editor â€” ${detail.chapter?.title || ''}`,
       bodyHtml: `
         <div class="translation-editor-grid">
           <div>
-            <h4>Bản gốc</h4>
+            <h4>Báº£n gá»‘c</h4>
             <div class="translation-editor-pane">${detail.sourceHtml || ''}</div>
           </div>
           <div>
-            <h4>Bản publish hiện tại</h4>
+            <h4>Báº£n publish hiá»‡n táº¡i</h4>
             <div class="translation-editor-pane" id="translation-editor-pane" contenteditable="true">${published?.html || ''}</div>
           </div>
         </div>
         <div class="translation-toolbar" style="margin-top:14px;">
           <select class="form-input" id="translation-version-select" style="max-width:320px;">
-            ${(detail.versions || []).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === detail.currentPublishedVersionId ? 'selected' : ''}>v${item.versionNumber} · ${escapeHtml(item.kind)}${item.isPublished ? ' · publish' : ''}</option>`).join('')}
+            ${(detail.versions || []).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === detail.currentPublishedVersionId ? 'selected' : ''}>v${item.versionNumber} Â· ${escapeHtml(item.kind)}${item.isPublished ? ' Â· publish' : ''}</option>`).join('')}
           </select>
-          <button class="btn-ghost" type="button" id="translation-switch-version">Dùng version này</button>
-          <button class="btn-ghost" type="button" id="translation-delete-version">Xóa version đang chọn</button>
+          <button class="btn-ghost" type="button" id="translation-switch-version">DÃ¹ng version nÃ y</button>
+          <button class="btn-ghost" type="button" id="translation-delete-version">XÃ³a version Ä‘ang chá»n</button>
         </div>
       `,
       footerHtml: `
-        <button class="btn-ghost" type="button" data-close="dynamic-modal">Đóng</button>
-        <button class="btn-primary" type="button" id="translation-save-editor">Lưu thành version mới</button>
+        <button class="btn-ghost" type="button" data-close="dynamic-modal">ÄÃ³ng</button>
+        <button class="btn-primary" type="button" id="translation-save-editor">LÆ°u thÃ nh version má»›i</button>
       `,
       dismissible: true
     });
@@ -3956,7 +4169,7 @@
       await loadTranslationProjectDetail(projectId);
       renderTranslations();
       closeModal('dynamic-modal');
-      showToast('✓', 'Đã lưu version mới', detail.chapter?.title || 'chapter');
+      showToast('âœ“', 'ÄÃ£ lÆ°u version má»›i', detail.chapter?.title || 'chapter');
     });
     $id('translation-switch-version')?.addEventListener('click', async () => {
       await apiJson(`/api/translations/projects/${encodeURIComponent(projectId)}/chapters/${encodeURIComponent(chapterTranslationId)}/published-version`, {
@@ -3966,7 +4179,7 @@
       await loadTranslationProjectDetail(projectId);
       renderTranslations();
       closeModal('dynamic-modal');
-      showToast('✓', 'Đã đổi version publish', detail.chapter?.title || 'chapter');
+      showToast('âœ“', 'ÄÃ£ Ä‘á»•i version publish', detail.chapter?.title || 'chapter');
     });
     $id('translation-delete-version')?.addEventListener('click', async () => {
       const versionId = $id('translation-version-select').value;
@@ -3976,7 +4189,7 @@
       await loadTranslationProjectDetail(projectId);
       renderTranslations();
       closeModal('dynamic-modal');
-      showToast('✓', 'Đã xóa version', detail.chapter?.title || 'chapter');
+      showToast('âœ“', 'ÄÃ£ xÃ³a version', detail.chapter?.title || 'chapter');
     });
   }
 
@@ -4062,19 +4275,19 @@
 
     $id("btn-add-library")?.addEventListener("click", () => {
       void addCurrentDetailToLibrary().catch((error) => {
-        showToast("!", "Không thêm được vào thư viện", error.message);
+        showToast("!", "KhÃ´ng thÃªm Ä‘Æ°á»£c vÃ o thÆ° viá»‡n", error.message);
       });
     });
 
     $id("btn-download-all")?.addEventListener("click", () => {
       void syncCurrentDetail().catch((error) => {
-        showToast("!", "Không đẩy được tác vụ", error.message);
+        showToast("!", "KhÃ´ng Ä‘áº©y Ä‘Æ°á»£c tÃ¡c vá»¥", error.message);
       });
     });
 
     $id("btn-rebuild-library")?.addEventListener("click", () => {
       void rebuildCurrentDetail().catch((error) => {
-        showToast("!", "Không xếp hàng rebuild được", error.message);
+        showToast("!", "KhÃ´ng xáº¿p hÃ ng rebuild Ä‘Æ°á»£c", error.message);
       });
     });
 
@@ -4082,13 +4295,21 @@
       try {
         exportCurrentDetailEpub();
       } catch (error) {
-        showToast("!", "Không xuất được EPUB", error.message);
+        showToast("!", "KhÃ´ng xuáº¥t Ä‘Æ°á»£c EPUB", error.message);
+      }
+    });
+
+    $id("btn-upload-chapters")?.addEventListener("click", () => {
+      try {
+        openAppendChaptersModal();
+      } catch (error) {
+        showToast("!", "KhÃ´ng má»Ÿ Ä‘Æ°á»£c form upload", error.message);
       }
     });
 
     $id("btn-remove-library")?.addEventListener("click", () => {
       void removeCurrentDetailFromLibrary().catch((error) => {
-        showToast("!", "Không xóa được truyện", error.message);
+        showToast("!", "KhÃ´ng xÃ³a Ä‘Æ°á»£c truyá»‡n", error.message);
       });
     });
 
@@ -4117,14 +4338,46 @@
       }
     });
 
-    $("#page-library .icon-btn")?.addEventListener("click", () => {
+    $id("library-sync-btn")?.addEventListener("click", () => {
       void syncAllLibrary().catch((error) => {
-        showToast("!", "Không sync được thư viện", error.message);
+        showToast("!", "KhÃ´ng sync Ä‘Æ°á»£c thÆ° viá»‡n", error.message);
       });
+    });
+
+    $id("library-upload-btn")?.addEventListener("click", () => {
+      try {
+        openLibraryUploadModal();
+      } catch (error) {
+        showToast("!", "KhÃ´ng má»Ÿ Ä‘Æ°á»£c form upload", error.message);
+      }
     });
 
     $id("detail-summary")?.addEventListener("click", () => {
       $id("detail-summary").classList.toggle("expanded");
+    });
+
+    document.addEventListener("click", (event) => {
+      const uploadLibraryButton = event.target.closest("#library-upload-btn");
+      if (uploadLibraryButton) {
+        event.preventDefault();
+        openLibraryUploadModal();
+        return;
+      }
+
+      const syncLibraryButton = event.target.closest("#library-sync-btn");
+      if (syncLibraryButton) {
+        event.preventDefault();
+        void syncAllLibrary().catch((error) => {
+          showToast("!", "KhÃ´ng sync Ä‘Æ°á»£c thÆ° viá»‡n", error.message);
+        });
+        return;
+      }
+
+      const uploadChaptersButton = event.target.closest("#btn-upload-chapters");
+      if (uploadChaptersButton) {
+        event.preventDefault();
+        openAppendChaptersModal();
+      }
     });
 
     document.addEventListener("click", (event) => {
@@ -4191,13 +4444,13 @@
 
       if (!username) {
         error.hidden = false;
-        error.textContent = "Vui lòng nhập tên đăng nhập.";
+        error.textContent = "Vui lÃ²ng nháº­p tÃªn Ä‘Äƒng nháº­p.";
         usernameInput.focus();
         return;
       }
       if (!password) {
         error.hidden = false;
-        error.textContent = "Vui lòng nhập mật khẩu.";
+        error.textContent = "Vui lÃ²ng nháº­p máº­t kháº©u.";
         passwordInput.focus();
         return;
       }
@@ -4292,7 +4545,7 @@
 
       if (route.sourceId && !getEnabledSourceById(route.sourceId) && isSourceHiddenByPolicy(route.sourceId)) {
         navigateTo("/extensions", true);
-        showToast("!", "Nguồn đang bị ẩn bởi policy", findKnownSourceById(route.sourceId)?.name || route.sourceId);
+        showToast("!", "Nguá»“n Ä‘ang bá»‹ áº©n bá»Ÿi policy", findKnownSourceById(route.sourceId)?.name || route.sourceId);
         return;
       }
 
@@ -4333,7 +4586,7 @@
       if (!getEnabledSourceById(route.sourceId)) {
         if (isSourceHiddenByPolicy(route.sourceId)) {
           navigateTo("/extensions", true);
-          showToast("!", "Nguồn đang bị ẩn bởi policy", findKnownSourceById(route.sourceId)?.name || route.sourceId);
+          showToast("!", "Nguá»“n Ä‘ang bá»‹ áº©n bá»Ÿi policy", findKnownSourceById(route.sourceId)?.name || route.sourceId);
           return;
         }
         navigateTo(defaultBrowsePath(), true);
@@ -4364,7 +4617,7 @@
           requestUrl: normalizeKnownSourceUrl(route.detailUrl),
           sourceUrl: normalizeKnownSourceUrl(route.detailUrl)
         };
-        showToast("!", "Không tải được chi tiết truyện", error.message);
+        showToast("!", "KhÃ´ng táº£i Ä‘Æ°á»£c chi tiáº¿t truyá»‡n", error.message);
       }
       if (token !== state.routeToken) {
         return;
@@ -4445,3 +4698,7 @@
     void initAppPage();
   });
 })();
+
+
+
+
