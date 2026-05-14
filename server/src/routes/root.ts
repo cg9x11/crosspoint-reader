@@ -1,7 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { resolveAdminAuthState } from "../lib/adminAuth.js";
-import { getAppCss, getAppJs, getUiMeta, renderAppPage, renderLoginPage } from "../web/shell.js";
+import { getAppCss, getAsset, getUiMeta, renderAppPage, renderLoginPage } from "../web/shell.js";
 
 function buildLoginRedirectTarget(request: FastifyRequest) {
   const currentPath = request.url || "/";
@@ -15,6 +17,20 @@ function requireSession(request: FastifyRequest, reply: FastifyReply) {
   }
 
   return false;
+}
+
+function assetContentType(filename: string) {
+  const ext = path.extname(filename).toLowerCase();
+
+  if (ext === ".css") {
+    return "text/css; charset=utf-8";
+  }
+
+  if (ext === ".js") {
+    return "application/javascript; charset=utf-8";
+  }
+
+  return "text/plain; charset=utf-8";
 }
 
 async function renderProtectedPage(request: FastifyRequest, reply: FastifyReply) {
@@ -62,10 +78,26 @@ export async function registerRootRoutes(app: FastifyInstance) {
     return getAppCss();
   });
 
-  app.get("/assets/app.js", async (_, reply) => {
-    reply.type("application/javascript; charset=utf-8");
-    reply.header("cache-control", "public, max-age=300");
-    return getAppJs();
+  app.get("/assets/:assetName", async (request, reply) => {
+    const assetName = typeof request.params === "object" && request.params ? (request.params as { assetName?: string }).assetName : "";
+
+    if (!assetName || assetName.includes("/") || assetName.includes("\\")) {
+      reply.code(404);
+      return reply.send({ ok: false, error: "NOT_FOUND" });
+    }
+
+    try {
+      const content = getAsset(assetName);
+      reply.type(assetContentType(assetName));
+      reply.header("cache-control", "public, max-age=300");
+      return reply.send(content);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        reply.code(404);
+        return reply.send({ ok: false, error: "NOT_FOUND" });
+      }
+      throw error;
+    }
   });
 
   app.get("/login", async (request, reply) => {
@@ -116,4 +148,3 @@ export async function registerRootRoutes(app: FastifyInstance) {
   app.get("/extensions", renderProtectedPage);
   app.get("/settings", renderProtectedPage);
 }
-

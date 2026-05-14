@@ -10,12 +10,22 @@ function assetPath(filename: string) {
   return path.resolve(process.cwd(), "src", "web", "assets", filename);
 }
 
+function assetDirPath() {
+  return path.resolve(process.cwd(), "src", "web", "assets");
+}
+
 function webPath(filename: string) {
   return path.resolve(process.cwd(), "src", "web", filename);
 }
 
 function readAsset(filename: string) {
   return fs.readFileSync(assetPath(filename), "utf8");
+}
+
+function getAssetVersion() {
+  const assetFiles = fs.readdirSync(assetDirPath());
+  const assetMtimes = assetFiles.map((filename) => fs.statSync(assetPath(filename)).mtimeMs);
+  return String(Math.max(...assetMtimes, fs.statSync(webPath("themeAppShell.html")).mtimeMs));
 }
 
 function readThemeBody(filename: string) {
@@ -28,13 +38,7 @@ function readThemeBody(filename: string) {
 const appCss = readAsset("app.css");
 const appJs = readAsset("app.js");
 const appShellMarkup = readThemeBody("themeAppShell.html");
-const assetVersion = String(
-  Math.max(
-    fs.statSync(assetPath("app.css")).mtimeMs,
-    fs.statSync(assetPath("app.js")).mtimeMs,
-    fs.statSync(webPath("themeAppShell.html")).mtimeMs
-  )
-);
+const assetVersion = getAssetVersion();
 
 function escapeHtml(value: string) {
   return value
@@ -248,4 +252,8 @@ export function getAppCss() {
 
 export function getAppJs() {
   return appJs;
+}
+
+export function getAsset(filename: string) {
+  return readAsset(filename);
 }
