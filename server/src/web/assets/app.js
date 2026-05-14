@@ -2391,12 +2391,12 @@
 
   function openExtensionInfoModal(item, isInstalled) {
     const capabilities = [
-      ["Home", item.capabilities?.supportsHome ? item.supportsHome],
-      ["Search", item.capabilities?.supportsSearch ? item.supportsSearch],
-      ["Genre", item.capabilities?.supportsGenre ? item.supportsGenre],
-      ["Paging", item.capabilities?.supportsPagination ? item.supportsPagination],
-      ["Detail", item.capabilities?.supportsDetailDescription ? item.supportsDetailDescription],
-      ["Browser", item.capabilities?.supportsBrowserAutomation ? item.supportsBrowserAutomation]
+      ["Home", item.capabilities?.supportsHome ?? item.supportsHome],
+      ["Search", item.capabilities?.supportsSearch ?? item.supportsSearch],
+      ["Genre", item.capabilities?.supportsGenre ?? item.supportsGenre],
+      ["Paging", item.capabilities?.supportsPagination ?? item.supportsPagination],
+      ["Detail", item.capabilities?.supportsDetailDescription ?? item.supportsDetailDescription],
+      ["Browser", item.capabilities?.supportsBrowserAutomation ?? item.supportsBrowserAutomation]
     ]
       .filter((entry) => Boolean(entry[1]))
       .map((entry) => `<span class="badge badge-cat">${escapeHtml(entry[0])}</span>`)
