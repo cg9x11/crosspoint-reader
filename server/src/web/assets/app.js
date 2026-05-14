@@ -24,9 +24,9 @@
     ["www.ln.hako.re", "docln.sbs"]
   ]);
   const SERVER_SECTIONS = [
-    { id: "tasks", label: "TÃ¡c vá»¥", path: "/tasks" },
+    { id: "tasks", label: "Tác vụ", path: "/tasks" },
     { id: "extensions", label: "Extensions", path: "/extensions" },
-    { id: "settings", label: "CÃ i Ä‘áº·t", path: "/settings" }
+    { id: "settings", label: "Cài đặt", path: "/settings" }
   ];
   const FALLBACK_AUTH = {
     authenticated: false,
@@ -342,27 +342,27 @@
   function statusLabel(status) {
     const key = String(status ?? "").toLowerCase();
     const labels = {
-      completed: "HoÃ n thÃ nh",
-      complete: "HoÃ n thÃ nh",
-      ongoing: "Äang ra",
-      updating: "Äang cáº­p nháº­t",
-      finished: "HoÃ n thÃ nh",
-      active: "Äang hoáº¡t Ä‘á»™ng",
-      idle: "Chá»"
+      completed: "Hoàn thành",
+      complete: "Hoàn thành",
+      ongoing: "Đang ra",
+      updating: "Đang cập nhật",
+      finished: "Hoàn thành",
+      active: "Đang hoạt động",
+      idle: "Chờ"
     };
-    return labels[key] || (status ? String(status) : "ChÆ°a rÃµ");
+    return labels[key] || (status ? String(status) : "Chưa rõ");
   }
 
   function syncStatusLabel(status) {
     const key = String(status ?? "").toLowerCase();
     const labels = {
-      ready: "Sáºµn sÃ ng",
-      syncing: "Äang Ä‘á»“ng bá»™",
-      error: "Lá»—i",
-      idle: "ChÆ°a Ä‘á»“ng bá»™",
-      pending: "Äang chá»"
+      ready: "Sẵn sàng",
+      syncing: "Đang đồng bộ",
+      error: "Lỗi",
+      idle: "Chưa đồng bộ",
+      pending: "Đang chờ"
     };
-    return labels[key] || (status ? String(status) : "ChÆ°a rÃµ");
+    return labels[key] || (status ? String(status) : "Chưa rõ");
   }
 
   function formatCount(value) {
@@ -394,7 +394,7 @@
 
   function formatRelative(value) {
     if (!value) {
-      return "ChÆ°a cÃ³";
+      return "Chưa có";
     }
 
     const date = new Date(value);
@@ -407,7 +407,7 @@
     const rtf = new Intl.RelativeTimeFormat("vi", { numeric: "auto" });
 
     if (Math.abs(diffMinutes) < 1) {
-      return "Vá»«a xong";
+      return "Vừa xong";
     }
     if (Math.abs(diffMinutes) < 60) {
       return rtf.format(diffMinutes, "minute");
@@ -812,15 +812,15 @@
 
   function taskStateLabel(stateValue) {
     if (stateValue === "running") {
-      return "Äang cháº¡y";
+      return "Đang chạy";
     }
     if (stateValue === "queued") {
-      return "Äang xáº¿p hÃ ng";
+      return "Đang xếp hàng";
     }
     if (stateValue === "stopped") {
-      return "ÄÃ£ dá»«ng";
+      return "Đã dừng";
     }
-    return "HoÃ n táº¥t";
+    return "Hoàn tất";
   }
 
   function taskStateTone(stateValue) {
@@ -839,33 +839,33 @@
       return "Rebuild local";
     }
     if (value === "export") {
-      return "Xuáº¥t EPUB";
+      return "Xuất EPUB";
     }
     if (value === "manual") {
-      return "Äá»“ng bá»™ tay";
+      return "Đồng bộ tay";
     }
     if (value === "retry") {
-      return "Cháº¡y láº¡i";
+      return "Chạy lại";
     }
     if (value === "cron") {
-      return "Äá»“ng bá»™ lá»‹ch";
+      return "Đồng bộ lịch";
     }
     if (value === "add") {
-      return "ThÃªm vÃ o thÆ° viá»‡n";
+      return "Thêm vào thư viện";
     }
-    return "TÃ¡c vá»¥";
+    return "Tác vụ";
   }
 
   function formatChapterProgress(downloadedChapters, totalChapters) {
     const downloaded = Number(downloadedChapters) || 0;
     const total = Number(totalChapters) || 0;
     if (total > 0) {
-      return `${formatCount(downloaded)}/${formatCount(total)} chÆ°Æ¡ng`;
+      return `${formatCount(downloaded)}/${formatCount(total)} chương`;
     }
     if (downloaded > 0) {
-      return `${formatCount(downloaded)} chÆ°Æ¡ng Ä‘Ã£ táº£i`;
+      return `${formatCount(downloaded)} chương đã tải`;
     }
-    return "ChÆ°a táº£i chÆ°Æ¡ng";
+    return "Chưa tải chương";
   }
 
   function buildTaskSummary(task) {
@@ -875,30 +875,30 @@
         `${formatCount(task.rebuildCompletedChapters)}/${formatCount(task.rebuildTargetChapters)} chap built`
       );
       if (Number(task.rebuildRemainingChapters) > 0) {
-        parts.push(`cÃ²n ${formatCount(task.rebuildRemainingChapters)}`);
+        parts.push(`còn ${formatCount(task.rebuildRemainingChapters)}`);
       }
     } else if (task?.triggerType === "export" && Number(task.exportTargetChapters) > 0) {
       parts.push(
         `${formatCount(task.exportCompletedChapters)}/${formatCount(task.exportTargetChapters)} chap exported`
       );
       if (Number(task.exportRemainingChapters) > 0) {
-        parts.push(`cÃ²n ${formatCount(task.exportRemainingChapters)}`);
+        parts.push(`còn ${formatCount(task.exportRemainingChapters)}`);
       }
     } else {
       parts.push(formatChapterProgress(task.downloadedChapters, task.totalChapters));
       if (task.remainingChapters > 0) {
-        parts.push(`cÃ²n ${formatCount(task.remainingChapters)}`);
+        parts.push(`còn ${formatCount(task.remainingChapters)}`);
       }
     }
     if (task.failedChapters > 0) {
-      parts.push(`lá»—i ${formatCount(task.failedChapters)}`);
+      parts.push(`lỗi ${formatCount(task.failedChapters)}`);
     }
     if (task.activeJobs > 0) {
-      parts.push(`${formatCount(task.activeJobs)} Ä‘ang cháº¡y`);
+      parts.push(`${formatCount(task.activeJobs)} đang chạy`);
     } else if (task.waitingJobs > 0) {
-      parts.push(`${formatCount(task.waitingJobs)} Ä‘ang chá»`);
+      parts.push(`${formatCount(task.waitingJobs)} đang chờ`);
     }
-    return parts.join(" â€¢ ");
+    return parts.join(" • ");
   }
 
   function formatTaskChapterLabel(chapter) {
@@ -906,9 +906,9 @@
       return "";
     }
 
-    const chapterLabel = `ChÆ°Æ¡ng ${String(chapter.chapterIndex ?? 0).padStart(3, "0")}`;
+    const chapterLabel = `Chương ${String(chapter.chapterIndex ?? 0).padStart(3, "0")}`;
     const title = truncate(stripHtml(chapter.title || ""), 56);
-    return title ? `${chapterLabel} â€¢ ${title}` : chapterLabel;
+    return title ? `${chapterLabel} • ${title}` : chapterLabel;
   }
 
   function buildTaskErrorMeta(task) {
