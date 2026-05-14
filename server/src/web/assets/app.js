@@ -2266,15 +2266,15 @@
 
     syncButton.textContent =
       sourceBlocked
-        ? "Nguá»“n Ä‘ang cháº·n"
+        ? "Nguồn đang chặn"
         : detail.libraryItem?.syncStatus === "error"
-          ? "â†» Thá»­ láº¡i Ä‘á»“ng bá»™"
-          : "â†» Äá»“ng bá»™ láº¡i";
-    rebuildButton.textContent = "â†» Rebuild local files";
-    exportButton.textContent = "â‡© Xuáº¥t EPUB tá»•ng há»£p";
+          ? "↻ Thử lại đồng bộ"
+          : "↻ Đồng bộ lại";
+    rebuildButton.textContent = "↻ Rebuild local files";
+    exportButton.textContent = "⇩ Xuất EPUB tổng hợp";
     uploadChaptersButton.textContent = "+ Upload chapter";
-    addButton.textContent = sourceBlocked ? "Nguá»“n Ä‘ang cháº·n" : "+ ThÃªm vÃ o thÆ° viá»‡n";
-    openLibraryButton.textContent = detail.kind === "library" ? "âœ“ ÄÃ£ trong thÆ° viá»‡n" : "âœ“ Má»Ÿ trong thÆ° viá»‡n";
+    addButton.textContent = sourceBlocked ? "Nguồn đang chặn" : "+ Thêm vào thư viện";
+    openLibraryButton.textContent = detail.kind === "library" ? "✓ Đã trong thư viện" : "✓ Mở trong thư viện";
 
     const chapters = [...(detail.chapters || [])];
     if (state.chapterSort === "desc") {
