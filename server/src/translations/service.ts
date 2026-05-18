@@ -96,6 +96,41 @@ export async function listTranslationProjects(prisma: PrismaClient) {
 }
 
 export async function getTranslationProject(prisma: PrismaClient, projectId: string) {
+  const projectSeed = await prisma.translationProject.findUnique({
+    where: { id: projectId },
+    select: { id: true, novelId: true }
+  });
+  if (!projectSeed) {
+    return null;
+  }
+
+  const chapters = await prisma.chapter.findMany({
+    where: { novelId: projectSeed.novelId, status: "published" },
+    select: { id: true },
+    orderBy: { chapterIndex: "asc" }
+  });
+
+  if (chapters.length) {
+    const existing = await prisma.chapterTranslation.findMany({
+      where: { projectId: projectSeed.id },
+      select: { chapterId: true }
+    });
+    const existingIds = new Set(existing.map((item) => item.chapterId));
+    for (const chapter of chapters) {
+      if (existingIds.has(chapter.id)) {
+        continue;
+      }
+      await prisma.chapterTranslation.create({
+        data: {
+          projectId: projectSeed.id,
+          chapterId: chapter.id,
+          sourceChecksum: "bootstrap",
+          status: "pending"
+        }
+      });
+    }
+  }
+
   return prisma.translationProject.findUnique({
     where: { id: projectId },
     include: {

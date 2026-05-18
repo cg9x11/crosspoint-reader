@@ -199,7 +199,7 @@ function translationProjectPath(projectId) {
       bindGlossaryButtons();
     });
     $id('translation-suggest-glossary')?.addEventListener('click', async () => {
-      const payload = await apiJson(`/api/translations/projects/${encodeURIComponent(projectId)}/glossary/suggest`, { method: 'POST' });
+      const payload = await apiJson(`/api/translations/projects/${encodeURIComponent(projectId)}/glossary/suggest`, { method: 'POST', body: {} });
       const body = $id('translation-glossary-body');
       for (const item of payload.items || []) {
         body.insertAdjacentHTML('beforeend', buildGlossaryRows([{ ...item, locked: false }]));
