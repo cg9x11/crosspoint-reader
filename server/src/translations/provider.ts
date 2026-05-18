@@ -166,7 +166,10 @@ function buildHeuristicGlossary(text: string): GlossaryCandidate[] {
   return tokens.slice(0, 20).map((token) => ({
     type: "term",
     rawName: token,
-    translatedName: toLatinGlossaryValue(token)
+    translatedName: toLatinGlossaryValue(token),
+    description: hasJapaneseScript(token)
+      ? "Thuật ngữ được trích tự động từ văn bản tiếng Nhật. Cần người dùng xác nhận nghĩa/ngữ cảnh."
+      : "Thuật ngữ được trích tự động từ văn bản nguồn."
   }));
 }
 
@@ -277,7 +280,11 @@ export async function suggestGlossaryCandidates(
   if (!credential) {
     return heuristic;
   }
-  const prompt = `Extract glossary candidates for translation to ${targetLanguage}. Return JSON {"items":[{"type":"term","rawName":"","translatedName":"","gender":"","description":""}]}. Keep 20 items max. Important: translatedName must be Latin script only (romanized/transliterated), never keep original non-Latin script.`;
+  const prompt = `Extract glossary candidates for translation to ${targetLanguage}. Return JSON {"items":[{"type":"term","rawName":"","translatedName":"","gender":"","description":""}]}. Keep 20 items max.
+Important rules:
+- translatedName must be Latin script only (romanized/transliterated), never keep original non-Latin script.
+- description must be a short Vietnamese explanation for non-Japanese readers (what this term refers to in story context).
+- Prefer specific terms: person names, organizations, skills, places, ranks, items.`;
   try {
     const sample = sourceText.slice(0, runtime.maxCharsPerRequest);
     let parsed: any = null;
@@ -333,7 +340,7 @@ export async function suggestGlossaryCandidates(
           String(item.translatedName || item.rawName || "").trim()
         ),
         gender: item.gender ? String(item.gender) : undefined,
-        description: item.description ? String(item.description) : undefined
+        description: item.description ? String(item.description).trim() : undefined
       })).filter((item: GlossaryCandidate) => item.rawName && item.translatedName);
     }
   } catch {
