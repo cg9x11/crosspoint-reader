@@ -153,15 +153,51 @@ export async function suggestGlossaryCandidates(
   }
   const prompt = `Extract glossary candidates for translation to ${targetLanguage}. Return JSON {"items":[{"type":"term","rawName":"","translatedName":"","gender":"","description":""}]}. Keep 20 items max.`;
   try {
-    const result = provider === "gemini"
-      ? await translateWithGemini(credential, prompt, [sourceText.slice(0, runtime.maxCharsPerRequest)], runtime, model)
-      : provider === "openai"
-        ? await translateWithOpenAICompatible(credential, prompt, [sourceText.slice(0, runtime.maxCharsPerRequest)], runtime, model)
-        : null;
-    if (!result) {
+    const sample = sourceText.slice(0, runtime.maxCharsPerRequest);
+    let parsed: any = null;
+    if (provider === "openai") {
+      const baseUrl = credential.baseUrl?.trim() || "https://api.openai.com/v1";
+      const response = await fetchJson<any>(
+        `${baseUrl.replace(/\/+$/, "")}/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${credential.apiKey || ""}`,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            model,
+            stream: false,
+            temperature: 0.2,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: prompt },
+              { role: "user", content: sample }
+            ]
+          })
+        },
+        runtime.requestTimeoutMs
+      );
+      parsed = JSON.parse(response?.choices?.[0]?.message?.content || "{}");
+    } else if (provider === "gemini") {
+      const response = await fetchJson<any>(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(credential.apiKey || "")}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: prompt }] },
+            contents: [{ parts: [{ text: sample }] }],
+            generationConfig: { temperature: 0.2 }
+          })
+        },
+        runtime.requestTimeoutMs
+      );
+      const raw = response?.candidates?.[0]?.content?.parts?.map((item: any) => item?.text || "").join("\n") || "{}";
+      parsed = JSON.parse(raw);
+    } else {
       throw new Error(`Unsupported translation provider: ${provider}`);
     }
-    const parsed = JSON.parse(result.texts[0] || "{}");
     if (Array.isArray(parsed.items)) {
       return parsed.items.map((item: any) => ({
         type: String(item.type || "term"),
