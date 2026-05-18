@@ -8269,6 +8269,7 @@ export namespace Prisma {
     type: string | null
     rawName: string | null
     translatedName: string | null
+    viLabel: string | null
     gender: string | null
     description: string | null
     aliasesJson: string | null
@@ -8285,6 +8286,7 @@ export namespace Prisma {
     type: string | null
     rawName: string | null
     translatedName: string | null
+    viLabel: string | null
     gender: string | null
     description: string | null
     aliasesJson: string | null
@@ -8301,6 +8303,7 @@ export namespace Prisma {
     type: number
     rawName: number
     translatedName: number
+    viLabel: number
     gender: number
     description: number
     aliasesJson: number
@@ -8327,6 +8330,7 @@ export namespace Prisma {
     type?: true
     rawName?: true
     translatedName?: true
+    viLabel?: true
     gender?: true
     description?: true
     aliasesJson?: true
@@ -8343,6 +8347,7 @@ export namespace Prisma {
     type?: true
     rawName?: true
     translatedName?: true
+    viLabel?: true
     gender?: true
     description?: true
     aliasesJson?: true
@@ -8359,6 +8364,7 @@ export namespace Prisma {
     type?: true
     rawName?: true
     translatedName?: true
+    viLabel?: true
     gender?: true
     description?: true
     aliasesJson?: true
@@ -8462,6 +8468,7 @@ export namespace Prisma {
     type: string
     rawName: string
     translatedName: string
+    viLabel: string | null
     gender: string | null
     description: string | null
     aliasesJson: string
@@ -8497,6 +8504,7 @@ export namespace Prisma {
     type?: boolean
     rawName?: boolean
     translatedName?: boolean
+    viLabel?: boolean
     gender?: boolean
     description?: boolean
     aliasesJson?: boolean
@@ -8514,6 +8522,7 @@ export namespace Prisma {
     type?: boolean
     rawName?: boolean
     translatedName?: boolean
+    viLabel?: boolean
     gender?: boolean
     description?: boolean
     aliasesJson?: boolean
@@ -8531,6 +8540,7 @@ export namespace Prisma {
     type?: boolean
     rawName?: boolean
     translatedName?: boolean
+    viLabel?: boolean
     gender?: boolean
     description?: boolean
     aliasesJson?: boolean
@@ -8548,6 +8558,7 @@ export namespace Prisma {
     type?: boolean
     rawName?: boolean
     translatedName?: boolean
+    viLabel?: boolean
     gender?: boolean
     description?: boolean
     aliasesJson?: boolean
@@ -8558,7 +8569,7 @@ export namespace Prisma {
     updatedAt?: boolean
   }
 
-  export type TranslationGlossaryEntryOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "glossaryId" | "type" | "rawName" | "translatedName" | "gender" | "description" | "aliasesJson" | "notes" | "locked" | "priority" | "createdAt" | "updatedAt", ExtArgs["result"]["translationGlossaryEntry"]>
+  export type TranslationGlossaryEntryOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "glossaryId" | "type" | "rawName" | "translatedName" | "viLabel" | "gender" | "description" | "aliasesJson" | "notes" | "locked" | "priority" | "createdAt" | "updatedAt", ExtArgs["result"]["translationGlossaryEntry"]>
   export type TranslationGlossaryEntryInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     glossary?: boolean | TranslationGlossaryDefaultArgs<ExtArgs>
   }
@@ -8580,6 +8591,7 @@ export namespace Prisma {
       type: string
       rawName: string
       translatedName: string
+      viLabel: string | null
       gender: string | null
       description: string | null
       aliasesJson: string
@@ -9017,6 +9029,7 @@ export namespace Prisma {
     readonly type: FieldRef<"TranslationGlossaryEntry", 'String'>
     readonly rawName: FieldRef<"TranslationGlossaryEntry", 'String'>
     readonly translatedName: FieldRef<"TranslationGlossaryEntry", 'String'>
+    readonly viLabel: FieldRef<"TranslationGlossaryEntry", 'String'>
     readonly gender: FieldRef<"TranslationGlossaryEntry", 'String'>
     readonly description: FieldRef<"TranslationGlossaryEntry", 'String'>
     readonly aliasesJson: FieldRef<"TranslationGlossaryEntry", 'String'>
@@ -15410,6 +15423,7 @@ export namespace Prisma {
     type: 'type',
     rawName: 'rawName',
     translatedName: 'translatedName',
+    viLabel: 'viLabel',
     gender: 'gender',
     description: 'description',
     aliasesJson: 'aliasesJson',
@@ -16123,6 +16137,7 @@ export namespace Prisma {
     type?: StringFilter<"TranslationGlossaryEntry"> | string
     rawName?: StringFilter<"TranslationGlossaryEntry"> | string
     translatedName?: StringFilter<"TranslationGlossaryEntry"> | string
+    viLabel?: StringNullableFilter<"TranslationGlossaryEntry"> | string | null
     gender?: StringNullableFilter<"TranslationGlossaryEntry"> | string | null
     description?: StringNullableFilter<"TranslationGlossaryEntry"> | string | null
     aliasesJson?: StringFilter<"TranslationGlossaryEntry"> | string
@@ -16140,6 +16155,7 @@ export namespace Prisma {
     type?: SortOrder
     rawName?: SortOrder
     translatedName?: SortOrder
+    viLabel?: SortOrderInput | SortOrder
     gender?: SortOrderInput | SortOrder
     description?: SortOrderInput | SortOrder
     aliasesJson?: SortOrder
@@ -16160,6 +16176,7 @@ export namespace Prisma {
     type?: StringFilter<"TranslationGlossaryEntry"> | string
     rawName?: StringFilter<"TranslationGlossaryEntry"> | string
     translatedName?: StringFilter<"TranslationGlossaryEntry"> | string
+    viLabel?: StringNullableFilter<"TranslationGlossaryEntry"> | string | null
     gender?: StringNullableFilter<"TranslationGlossaryEntry"> | string | null
     description?: StringNullableFilter<"TranslationGlossaryEntry"> | string | null
     aliasesJson?: StringFilter<"TranslationGlossaryEntry"> | string
@@ -16177,6 +16194,7 @@ export namespace Prisma {
     type?: SortOrder
     rawName?: SortOrder
     translatedName?: SortOrder
+    viLabel?: SortOrderInput | SortOrder
     gender?: SortOrderInput | SortOrder
     description?: SortOrderInput | SortOrder
     aliasesJson?: SortOrder
@@ -16201,6 +16219,7 @@ export namespace Prisma {
     type?: StringWithAggregatesFilter<"TranslationGlossaryEntry"> | string
     rawName?: StringWithAggregatesFilter<"TranslationGlossaryEntry"> | string
     translatedName?: StringWithAggregatesFilter<"TranslationGlossaryEntry"> | string
+    viLabel?: StringNullableWithAggregatesFilter<"TranslationGlossaryEntry"> | string | null
     gender?: StringNullableWithAggregatesFilter<"TranslationGlossaryEntry"> | string | null
     description?: StringNullableWithAggregatesFilter<"TranslationGlossaryEntry"> | string | null
     aliasesJson?: StringWithAggregatesFilter<"TranslationGlossaryEntry"> | string
@@ -17326,6 +17345,7 @@ export namespace Prisma {
     type?: string
     rawName: string
     translatedName: string
+    viLabel?: string | null
     gender?: string | null
     description?: string | null
     aliasesJson?: string
@@ -17343,6 +17363,7 @@ export namespace Prisma {
     type?: string
     rawName: string
     translatedName: string
+    viLabel?: string | null
     gender?: string | null
     description?: string | null
     aliasesJson?: string
@@ -17358,6 +17379,7 @@ export namespace Prisma {
     type?: StringFieldUpdateOperationsInput | string
     rawName?: StringFieldUpdateOperationsInput | string
     translatedName?: StringFieldUpdateOperationsInput | string
+    viLabel?: NullableStringFieldUpdateOperationsInput | string | null
     gender?: NullableStringFieldUpdateOperationsInput | string | null
     description?: NullableStringFieldUpdateOperationsInput | string | null
     aliasesJson?: StringFieldUpdateOperationsInput | string
@@ -17375,6 +17397,7 @@ export namespace Prisma {
     type?: StringFieldUpdateOperationsInput | string
     rawName?: StringFieldUpdateOperationsInput | string
     translatedName?: StringFieldUpdateOperationsInput | string
+    viLabel?: NullableStringFieldUpdateOperationsInput | string | null
     gender?: NullableStringFieldUpdateOperationsInput | string | null
     description?: NullableStringFieldUpdateOperationsInput | string | null
     aliasesJson?: StringFieldUpdateOperationsInput | string
@@ -17391,6 +17414,7 @@ export namespace Prisma {
     type?: string
     rawName: string
     translatedName: string
+    viLabel?: string | null
     gender?: string | null
     description?: string | null
     aliasesJson?: string
@@ -17406,6 +17430,7 @@ export namespace Prisma {
     type?: StringFieldUpdateOperationsInput | string
     rawName?: StringFieldUpdateOperationsInput | string
     translatedName?: StringFieldUpdateOperationsInput | string
+    viLabel?: NullableStringFieldUpdateOperationsInput | string | null
     gender?: NullableStringFieldUpdateOperationsInput | string | null
     description?: NullableStringFieldUpdateOperationsInput | string | null
     aliasesJson?: StringFieldUpdateOperationsInput | string
@@ -17422,6 +17447,7 @@ export namespace Prisma {
     type?: StringFieldUpdateOperationsInput | string
     rawName?: StringFieldUpdateOperationsInput | string
     translatedName?: StringFieldUpdateOperationsInput | string
+    viLabel?: NullableStringFieldUpdateOperationsInput | string | null
     gender?: NullableStringFieldUpdateOperationsInput | string | null
     description?: NullableStringFieldUpdateOperationsInput | string | null
     aliasesJson?: StringFieldUpdateOperationsInput | string
@@ -18578,6 +18604,7 @@ export namespace Prisma {
     type?: SortOrder
     rawName?: SortOrder
     translatedName?: SortOrder
+    viLabel?: SortOrder
     gender?: SortOrder
     description?: SortOrder
     aliasesJson?: SortOrder
@@ -18598,6 +18625,7 @@ export namespace Prisma {
     type?: SortOrder
     rawName?: SortOrder
     translatedName?: SortOrder
+    viLabel?: SortOrder
     gender?: SortOrder
     description?: SortOrder
     aliasesJson?: SortOrder
@@ -18614,6 +18642,7 @@ export namespace Prisma {
     type?: SortOrder
     rawName?: SortOrder
     translatedName?: SortOrder
+    viLabel?: SortOrder
     gender?: SortOrder
     description?: SortOrder
     aliasesJson?: SortOrder
@@ -20660,6 +20689,7 @@ export namespace Prisma {
     type?: string
     rawName: string
     translatedName: string
+    viLabel?: string | null
     gender?: string | null
     description?: string | null
     aliasesJson?: string
@@ -20675,6 +20705,7 @@ export namespace Prisma {
     type?: string
     rawName: string
     translatedName: string
+    viLabel?: string | null
     gender?: string | null
     description?: string | null
     aliasesJson?: string
@@ -20776,6 +20807,7 @@ export namespace Prisma {
     type?: StringFilter<"TranslationGlossaryEntry"> | string
     rawName?: StringFilter<"TranslationGlossaryEntry"> | string
     translatedName?: StringFilter<"TranslationGlossaryEntry"> | string
+    viLabel?: StringNullableFilter<"TranslationGlossaryEntry"> | string | null
     gender?: StringNullableFilter<"TranslationGlossaryEntry"> | string | null
     description?: StringNullableFilter<"TranslationGlossaryEntry"> | string | null
     aliasesJson?: StringFilter<"TranslationGlossaryEntry"> | string
@@ -21759,6 +21791,7 @@ export namespace Prisma {
     type?: string
     rawName: string
     translatedName: string
+    viLabel?: string | null
     gender?: string | null
     description?: string | null
     aliasesJson?: string
@@ -21774,6 +21807,7 @@ export namespace Prisma {
     type?: StringFieldUpdateOperationsInput | string
     rawName?: StringFieldUpdateOperationsInput | string
     translatedName?: StringFieldUpdateOperationsInput | string
+    viLabel?: NullableStringFieldUpdateOperationsInput | string | null
     gender?: NullableStringFieldUpdateOperationsInput | string | null
     description?: NullableStringFieldUpdateOperationsInput | string | null
     aliasesJson?: StringFieldUpdateOperationsInput | string
@@ -21789,6 +21823,7 @@ export namespace Prisma {
     type?: StringFieldUpdateOperationsInput | string
     rawName?: StringFieldUpdateOperationsInput | string
     translatedName?: StringFieldUpdateOperationsInput | string
+    viLabel?: NullableStringFieldUpdateOperationsInput | string | null
     gender?: NullableStringFieldUpdateOperationsInput | string | null
     description?: NullableStringFieldUpdateOperationsInput | string | null
     aliasesJson?: StringFieldUpdateOperationsInput | string
@@ -21804,6 +21839,7 @@ export namespace Prisma {
     type?: StringFieldUpdateOperationsInput | string
     rawName?: StringFieldUpdateOperationsInput | string
     translatedName?: StringFieldUpdateOperationsInput | string
+    viLabel?: NullableStringFieldUpdateOperationsInput | string | null
     gender?: NullableStringFieldUpdateOperationsInput | string | null
     description?: NullableStringFieldUpdateOperationsInput | string | null
     aliasesJson?: StringFieldUpdateOperationsInput | string

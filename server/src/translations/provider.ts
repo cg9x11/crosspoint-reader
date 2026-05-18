@@ -80,7 +80,7 @@ const KANA_MONOGRAPHS: Record<string, string> = {
 };
 
 function hasJapaneseScript(value: string) {
-  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(value);
+  return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u.test(value);
 }
 
 function hasNonLatinScript(value: string) {
@@ -140,6 +140,26 @@ function toLatinGlossaryValue(rawName: string, translatedName?: string) {
   return `term-${Buffer.from(rawName).toString("hex").slice(0, 12)}`;
 }
 
+function toVietnameseLabel(rawName: string, latinName: string, type?: string) {
+  const shortLatin = String(latinName || "").trim() || String(rawName || "").trim();
+  const prefix = type === "person" ? "Nhân vật" : type === "place" ? "Địa danh" : "Thuật ngữ";
+  return `${prefix} ${shortLatin}`.trim();
+}
+
+function toVietnameseDescription(rawName: string, latinName: string, type?: string) {
+  const label = String(latinName || rawName || "").trim();
+  if (!label) {
+    return "Thuật ngữ trích tự động từ văn bản nguồn.";
+  }
+  if (type === "person") {
+    return `Tên nhân vật trong truyện: ${label}.`;
+  }
+  if (type === "place") {
+    return `Tên địa danh trong truyện: ${label}.`;
+  }
+  return `Thuật ngữ trong truyện: ${label}.`;
+}
+
 function chunkByChars(items: string[], maxChars: number) {
   const groups: string[][] = [];
   let current: string[] = [];
@@ -162,15 +182,15 @@ function chunkByChars(items: string[], maxChars: number) {
 
 function buildHeuristicGlossary(text: string): GlossaryCandidate[] {
   const latinTokens = text.match(/[A-ZÀ-ỹ][\p{L}\p{M}0-9_'-]{2,}/gu) || [];
-  const cjkTokens = text.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{2,12}/gu) || [];
+  const cjkTokens = text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]{2,12}/gu) || [];
   const tokens = Array.from(new Set([...latinTokens, ...cjkTokens])).slice(0, 40);
   return tokens.slice(0, 20).map((token) => ({
     type: "term",
     rawName: token,
     translatedName: toLatinGlossaryValue(token),
-    viLabel: "",
+    viLabel: toVietnameseLabel(token, toLatinGlossaryValue(token), "term"),
     description: hasJapaneseScript(token)
-      ? "Thuật ngữ được trích tự động từ văn bản tiếng Nhật. Cần người dùng xác nhận nghĩa/ngữ cảnh."
+      ? toVietnameseDescription(token, toLatinGlossaryValue(token), "term")
       : "Thuật ngữ được trích tự động từ văn bản nguồn."
   }));
 }
@@ -335,17 +355,24 @@ Important rules:
       throw new Error(`Unsupported translation provider: ${provider}`);
     }
     if (Array.isArray(parsed.items)) {
-      return parsed.items.map((item: any) => ({
-        type: String(item.type || "term"),
-        rawName: String(item.rawName || "").trim(),
-        translatedName: toLatinGlossaryValue(
-          String(item.rawName || "").trim(),
+      return parsed.items.map((item: any) => {
+        const type = String(item.type || "term").trim() || "term";
+        const rawName = String(item.rawName || "").trim();
+        const translatedName = toLatinGlossaryValue(
+          rawName,
           String(item.translatedName || item.rawName || "").trim()
-        ),
-        viLabel: item.viLabel ? String(item.viLabel).trim() : undefined,
-        gender: item.gender ? String(item.gender) : undefined,
-        description: item.description ? String(item.description).trim() : undefined
-      })).filter((item: GlossaryCandidate) => item.rawName && item.translatedName);
+        );
+        const viLabel = String(item.viLabel || "").trim() || toVietnameseLabel(rawName, translatedName, type);
+        const description = String(item.description || "").trim() || toVietnameseDescription(rawName, translatedName, type);
+        return {
+          type,
+          rawName,
+          translatedName,
+          viLabel,
+          gender: item.gender ? String(item.gender) : undefined,
+          description
+        };
+      }).filter((item: GlossaryCandidate) => item.rawName && item.translatedName);
     }
   } catch {
     // fallback

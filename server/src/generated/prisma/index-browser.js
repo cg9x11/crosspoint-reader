@@ -210,6 +210,7 @@ exports.Prisma.TranslationGlossaryEntryScalarFieldEnum = {
   type: 'type',
   rawName: 'rawName',
   translatedName: 'translatedName',
+  viLabel: 'viLabel',
   gender: 'gender',
   description: 'description',
   aliasesJson: 'aliasesJson',
