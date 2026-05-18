@@ -36,7 +36,9 @@ function chunkByChars(items: string[], maxChars: number) {
 }
 
 function buildHeuristicGlossary(text: string): GlossaryCandidate[] {
-  const tokens = Array.from(new Set((text.match(/[A-ZÀ-ỹ][\p{L}\p{M}0-9_'-]{2,}/gu) || []).slice(0, 40)));
+  const latinTokens = text.match(/[A-ZÀ-ỹ][\p{L}\p{M}0-9_'-]{2,}/gu) || [];
+  const cjkTokens = text.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{2,12}/gu) || [];
+  const tokens = Array.from(new Set([...latinTokens, ...cjkTokens])).slice(0, 40);
   return tokens.slice(0, 20).map((token) => ({
     type: "term",
     rawName: token,
