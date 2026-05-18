@@ -174,6 +174,13 @@
       if (uploadChaptersButton) {
         event.preventDefault();
         openAppendChaptersModal();
+        return;
+      }
+
+      const editLibraryButton = event.target.closest("#btn-edit-library");
+      if (editLibraryButton) {
+        event.preventDefault();
+        openEditUploadedNovelModal();
       }
     });
 

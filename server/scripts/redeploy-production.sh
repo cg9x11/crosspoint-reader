@@ -46,6 +46,7 @@ fi
 
 cd "$DEPLOY_DIR"
 APP_DATA_DIR="$APP_DATA_DIR" sudo -n docker compose up --build -d app worker
+sudo -n docker compose exec -T app node scripts/normalize-translation-providers.mjs
 sudo -n docker compose exec -T app node scripts/backfill-cover-assets.mjs
 
 echo "Redeployed crosspoint-reader server from $REPO_URL@$BRANCH"

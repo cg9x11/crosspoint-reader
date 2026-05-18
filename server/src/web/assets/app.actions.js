@@ -453,10 +453,14 @@
 
       const submitButton = $id("library-upload-submit");
       const closeButton = $id("dynamic-modal-close");
+      const cancelButton = $id("dynamic-modal-footer")?.querySelector('[data-close="dynamic-modal"]');
       submitButton.disabled = true;
       submitButton.textContent = "Dang upload...";
       if (closeButton) {
         closeButton.disabled = true;
+      }
+      if (cancelButton) {
+        cancelButton.disabled = true;
       }
       setUploadProgressState(
         "library",
@@ -483,6 +487,16 @@
         const payload = await apiFormUpload("/api/library/uploads/novel", formData, {
           onProgress: ({ percent }) => {
             setUploadProgressState("library", `Đang upload ${file.name}`, percent);
+          },
+          onUploadComplete: () => {
+            setUploadProgressState("library", "Upload xong. Server đang nhập truyện...", 100);
+            if (closeButton) {
+              closeButton.disabled = false;
+            }
+            if (cancelButton) {
+              cancelButton.disabled = false;
+              cancelButton.textContent = "Đóng";
+            }
           }
         });
         setUploadProgressState("library", "Upload xong. Đang nạp lại thư viện...", 100);
@@ -546,10 +560,14 @@
 
       const submitButton = $id("library-chapter-upload-submit");
       const closeButton = $id("dynamic-modal-close");
+      const cancelButton = $id("dynamic-modal-footer")?.querySelector('[data-close="dynamic-modal"]');
       submitButton.disabled = true;
       submitButton.textContent = "Dang upload...";
       if (closeButton) {
         closeButton.disabled = true;
+      }
+      if (cancelButton) {
+        cancelButton.disabled = true;
       }
       setUploadProgressState(
         "chapter",
@@ -567,6 +585,16 @@
         const payload = await apiFormUpload(`/api/library/novels/${encodeURIComponent(libraryItem.id)}/uploads/chapters`, formData, {
           onProgress: ({ percent }) => {
             setUploadProgressState("chapter", `Đang upload ${file.name}`, percent);
+          },
+          onUploadComplete: () => {
+            setUploadProgressState("chapter", "Upload xong. Server đang nhập chapter...", 100);
+            if (closeButton) {
+              closeButton.disabled = false;
+            }
+            if (cancelButton) {
+              cancelButton.disabled = false;
+              cancelButton.textContent = "Đóng";
+            }
           }
         });
         setUploadProgressState("chapter", "Upload xong. Đang nạp lại truyện...", 100);
@@ -583,9 +611,97 @@
         if (closeButton) {
           closeButton.disabled = false;
         }
+        if (cancelButton) {
+          cancelButton.disabled = false;
+        }
       }
     });
   }
+
+  function isLocalUploadLibraryItem(item) {
+    return item?.sourceId === "local-upload" || String(item?.sourceUrl || "").startsWith("upload:");
+  }
+
+  function openEditUploadedNovelModal() {
+    const libraryItem = state.detailPayload?.libraryItem || getLibraryById(state.detailLibraryId);
+    if (!libraryItem?.id || !isLocalUploadLibraryItem(libraryItem)) {
+      return;
+    }
+
+    showDynamicModal({
+      title: "Sửa truyện upload",
+      bodyHtml: `
+        <label class="form-label">Tên truyện</label>
+        <input class="form-input" id="uploaded-novel-title" value="${escapeHtml(libraryItem.title || "")}">
+        <label class="form-label" style="margin-top:12px;">Tác giả</label>
+        <input class="form-input" id="uploaded-novel-author" value="${escapeHtml(libraryItem.author || "")}">
+        <label class="form-label" style="margin-top:12px;">Mô tả</label>
+        <textarea class="form-input" id="uploaded-novel-description" rows="6">${escapeHtml(libraryItem.description || "")}</textarea>
+        <label class="form-label" style="margin-top:12px;">Cover</label>
+        <input class="form-input" id="uploaded-novel-cover" type="file" accept="image/*">
+        <p class="form-hint">Có thể đổi tên, mô tả, cover cho truyện upload local.</p>
+      `,
+      footerHtml: `
+        <button class="btn-ghost" type="button" data-close="dynamic-modal">Hủy</button>
+        <button class="btn-primary" type="button" id="uploaded-novel-save">Lưu</button>
+      `
+    });
+
+    $id("uploaded-novel-save")?.addEventListener("click", async () => {
+      const submitButton = $id("uploaded-novel-save");
+      submitButton.disabled = true;
+      submitButton.textContent = "Dang lưu...";
+      try {
+        const title = $id("uploaded-novel-title")?.value?.trim();
+        const author = $id("uploaded-novel-author")?.value?.trim();
+        const description = $id("uploaded-novel-description")?.value?.trim();
+        const coverFile = $id("uploaded-novel-cover")?.files?.[0] || null;
+
+        await apiJson(`/api/library/novels/${encodeURIComponent(libraryItem.id)}/uploaded`, {
+          method: "PATCH",
+          body: {
+            title,
+            author: author || null,
+            description: description || null
+          }
+        });
+
+        if (coverFile) {
+          const coverForm = new FormData();
+          coverForm.append("file", coverFile);
+          await apiForm(`/api/library/novels/${encodeURIComponent(libraryItem.id)}/uploaded/cover`, coverForm);
+        }
+
+        state.libraryLoaded = false;
+        await loadLibrary(true);
+        await refreshActiveDetailView();
+        closeModal("dynamic-modal");
+        showToast("✓", "Đã lưu truyện upload", title || libraryItem.title);
+      } catch (error) {
+        showToast("!", "Không lưu được truyện upload", error.message);
+      } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = "Lưu";
+      }
+    });
+  }
+
+  async function deleteUploadedChapter(chapterId) {
+    const libraryItem = state.detailPayload?.libraryItem || getLibraryById(state.detailLibraryId);
+    if (!libraryItem?.id || !chapterId || !isLocalUploadLibraryItem(libraryItem)) {
+      return;
+    }
+
+    await apiJson(
+      `/api/library/novels/${encodeURIComponent(libraryItem.id)}/chapters/${encodeURIComponent(chapterId)}`,
+      { method: "DELETE" }
+    );
+    state.libraryLoaded = false;
+    await loadLibrary(true);
+    await refreshActiveDetailView();
+    showToast("✓", "Đã xóa chapter", libraryItem.title);
+  }
+
   async function refreshActiveDetailView() {
     if (!state.detailPayload) {
       return;
@@ -910,6 +1026,4 @@
       submit.disabled = false;
     }
   }
-
-
 

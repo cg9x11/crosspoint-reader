@@ -41,13 +41,18 @@ export function buildTranslationSystemPrompt(
   context: TranslationContextSnapshot
 ) {
   const style = project.styleGuideJson ? String(project.styleGuideJson) : "{}";
+  let sourceLanguage = "";
+  try {
+    const parsed = JSON.parse(style);
+    sourceLanguage = typeof parsed?.sourceLanguage === "string" ? parsed.sourceLanguage.trim() : "";
+  } catch {}
   const glossary = buildGlossaryLines(glossaryEntries);
   const contextBlock = context.previousSummaries.length
     ? `Previous chapter summaries:\n${context.previousSummaries.join("\n---\n")}`
     : "No previous chapter summaries.";
 
   return [
-    `You are a professional translator. Translate to ${project.targetLanguage}.`,
+    `You are a professional translator.${sourceLanguage ? ` Translate from ${sourceLanguage} to ${project.targetLanguage}.` : ` Translate to ${project.targetLanguage}.`}`,
     `Preserve structure, headings, paragraphs, and readability.`,
     `Use stable names and terms from glossary.`,
     `Style guide JSON: ${style}`,

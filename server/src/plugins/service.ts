@@ -20,6 +20,11 @@ import {
   inspectVbookPackage,
   materializeVbookPackage
 } from "./vbook/runtime.js";
+import {
+  createSyosetuSourceDefinition,
+  createSyosetuSourceHandler,
+  SYOSETU_SOURCE_ID
+} from "./syosetu.js";
 import type {
   CatalogExtensionRecord,
   ExtensionStateFile,
@@ -53,8 +58,11 @@ interface SourcePayloadCacheEntry<T> {
 const sourcePayloadCache = new Map<string, SourcePayloadCacheEntry<unknown>>();
 const SYSTEM_SOURCE_IDS = new Set([
   "ext:vbook-extensions-hako-novel-https-docln-sbs-b2fef1a6",
-  "ext:vbook-extensions-truyen-full-https-truyenfull-vi-556a351d"
+  "ext:vbook-extensions-truyen-full-https-truyenfull-vi-556a351d",
+  SYOSETU_SOURCE_ID
 ]);
+
+const BUILTIN_SOURCES = [createSyosetuSourceDefinition()];
 
 const EMPTY_CAPABILITIES: SourceCapabilities = {
   supportsHome: false,
@@ -81,7 +89,9 @@ function applySourceVisibilityPolicy<T extends { id: string }>(
   }
 ) {
   const allowlist = policy.enabledAllowlist.length > 0 ? new Set(policy.enabledAllowlist) : null;
-  const visibleItems = allowlist ? items.filter((item) => allowlist.has(item.id)) : items;
+  const visibleItems = allowlist
+    ? items.filter((item) => allowlist.has(item.id) || Boolean((item as { systemSource?: boolean }).systemSource))
+    : items;
   const priority = policy.priorityIds;
 
   if (priority.length === 0) {
@@ -348,6 +358,44 @@ function normalizeInstalledExtensionRecord(extension: InstalledExtensionRecord):
   };
 }
 
+function toBuiltinInstalledExtensionRecord(
+  source: SourceListItem,
+  existing?: InstalledExtensionRecord | null
+): InstalledExtensionRecord {
+  return {
+    id: source.id,
+    name: source.name,
+    author: source.author,
+    version: source.version,
+    sourceUrl: source.sourceUrl,
+    iconUrl: source.iconUrl,
+    description: source.description,
+    type: source.type,
+    locale: source.locale,
+    trustType: source.trustType,
+    registryId: 'system',
+    registryName: 'System',
+    runtimeKind: source.runtimeKind,
+    runtimeSupported: source.runtimeSupported,
+    capabilities: {
+      supportsHome: source.supportsHome,
+      supportsSearch: source.supportsSearch,
+      supportsGenre: source.supportsGenre,
+      supportsPagination: source.supportsPagination,
+      supportsDetailDescription: source.supportsDetailDescription,
+      supportsBrowserAutomation: source.supportsBrowserAutomation
+    },
+    enabled: existing?.enabled === true,
+    installedAt: existing?.installedAt || new Date(0).toISOString(),
+    updatedAt: existing?.updatedAt || new Date(0).toISOString(),
+    bundled: false,
+    systemSource: true,
+    lastError: null,
+    manifestUrl: existing?.manifestUrl,
+    installUrl: existing?.installUrl
+  };
+}
+
 function toSourceListItem(extension: InstalledExtensionRecord): SourceListItem {
   return {
     id: extension.id,
@@ -479,12 +527,19 @@ async function refreshInstalledExtensionState(storagePaths: StorageLayout, state
 async function findInstalledExtension(storagePaths: StorageLayout, sourceId: string) {
   const state = await loadState(storagePaths);
   const extension = state.installed.find((item) => item.id === sourceId);
-  if (!extension) {
-    return null;
+  if (extension) {
+    const refreshed = await refreshInstalledExtensionRuntime(storagePaths, extension);
+    return normalizeInstalledExtensionRecord(refreshed);
   }
 
-  const refreshed = await refreshInstalledExtensionRuntime(storagePaths, extension);
-  return normalizeInstalledExtensionRecord(refreshed);
+  if (isSystemSourceId(sourceId)) {
+    const builtin = BUILTIN_SOURCES.find((item) => item.id === sourceId);
+    if (builtin) {
+      return normalizeInstalledExtensionRecord(toBuiltinInstalledExtensionRecord(builtin, null));
+    }
+  }
+
+  return null;
 }
 
 export async function listRegistries(storagePaths: StorageLayout) {
@@ -500,13 +555,21 @@ export async function listCatalog(storagePaths: StorageLayout) {
 export async function listInstalledExtensions(storagePaths: StorageLayout, prisma: PrismaClient) {
   const state = await loadState(storagePaths);
   const installed = await refreshInstalledExtensionState(storagePaths, state);
-  return installed.map(normalizeInstalledExtensionRecord);
+  const installedMap = new Map(installed.map((item) => [item.id, item]));
+  const builtinInstalled = BUILTIN_SOURCES.map((item) =>
+    toBuiltinInstalledExtensionRecord(item, installedMap.get(item.id) || null)
+  );
+  const others = installed.filter((item) => !SYSTEM_SOURCE_IDS.has(item.id));
+  return others.concat(builtinInstalled).map(normalizeInstalledExtensionRecord);
 }
 
 export async function listSources(storagePaths: StorageLayout, prisma: PrismaClient) {
   const installed = await listInstalledExtensions(storagePaths, prisma);
   const policy = await resolveSourcePolicy(prisma);
-  return applySourceVisibilityPolicy(installed.filter((item) => item.enabled).map(toSourceListItem), policy);
+  return applySourceVisibilityPolicy(
+    installed.filter((item) => item.enabled).map(toSourceListItem),
+    policy
+  );
 }
 
 export async function addRegistry(storagePaths: StorageLayout, input: { name?: string; url: string; trustType?: "community" | "custom" }) {
@@ -718,7 +781,15 @@ async function toggleExtension(
 ) {
   return queueExtensionStateMutation(async () => {
     const state = await loadState(storagePaths);
-    const extension = state.installed.find((item) => item.id === extensionId);
+    let extension = state.installed.find((item) => item.id === extensionId);
+
+    if (!extension && isSystemSourceId(extensionId)) {
+      const builtin = BUILTIN_SOURCES.find((item) => item.id === extensionId);
+      if (builtin) {
+        extension = toBuiltinInstalledExtensionRecord(builtin, null);
+        state.installed.push(extension);
+      }
+    }
 
     if (!extension) {
       throw new Error("Installed extension not found");
@@ -785,6 +856,13 @@ async function resolveRuntime(storagePaths: StorageLayout, prisma: PrismaClient,
   const extension = await findInstalledExtension(storagePaths, sourceId);
   if (!extension || !extension.enabled) {
     throw new Error("Source not found");
+  }
+
+  if (sourceId === SYOSETU_SOURCE_ID) {
+    return {
+      source: toSourceListItem(extension),
+      runtime: createSyosetuSourceHandler(toSourceListItem(extension))
+    };
   }
 
   if (!extension.runtimeSupported) {

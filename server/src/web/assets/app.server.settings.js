@@ -43,6 +43,8 @@
 
     const system = state.system || {};
     const storage = state.storage || {};
+    const translationSettings = system.translationSettings || {};
+    const translationCredential = (translationSettings.credentials || []).find((item) => item.enabled !== false) || translationSettings.credentials?.[0] || null;
     const enabledSourceCount = state.enabledSources.length;
     const totalQueueConcurrency =
       (system.queueConcurrency?.novelSync || 0) +
@@ -93,8 +95,14 @@
     `;
 
     const logCard = $("#page-server .log-card");
-    logCard.innerHTML = `<h3 class="card-title">Thiết lập ứng dụng</h3><div class="log-list" id="setting-list"></div>`;
+    logCard.innerHTML = `
+      <h3 class="card-title">Thiết lập ứng dụng</h3>
+      <div class="log-list" id="setting-list"></div>
+      <h3 class="card-title" style="margin-top:18px;">Model dịch chung</h3>
+      <div class="log-list" id="translation-setting-list"></div>
+    `;
     const settingList = logCard.querySelector("#setting-list");
+    const translationSettingList = logCard.querySelector("#translation-setting-list");
     if (!state.settings.length) {
       setMessageInBlock(settingList, "Chưa có AppSetting", "Server sẽ tự tạo khi có cấu hình runtime cần lưu.");
     } else {
@@ -113,6 +121,41 @@
         settingList.appendChild(row);
       });
     }
+
+    const translationRows = [
+      ["PROVIDER", translationCredential?.provider || "Chưa cấu hình"],
+      ["BASE URL", translationCredential?.baseUrl || "Mặc định provider"],
+      ["MODEL", translationCredential?.modelHint || "Chưa cấu hình"],
+      ["API KEY", translationCredential?.apiKey ? "••••••••" : "Chưa cấu hình"]
+    ];
+    translationRows.forEach(([label, value]) => {
+      const row = document.createElement("div");
+      row.className = "log-row";
+      row.innerHTML = `
+        <div class="log-dot"></div>
+        <div class="log-content">
+          <div class="log-title">${escapeHtml(label)}</div>
+          <div class="log-time">${escapeHtml(truncate(String(value || ""), 90) || "(trống)")}</div>
+        </div>
+      `;
+      translationSettingList.appendChild(row);
+    });
+    const actionRow = document.createElement("div");
+    actionRow.className = "log-row";
+    actionRow.innerHTML = `
+      <div class="log-dot"></div>
+      <div class="log-content">
+        <div class="log-title">Cấu hình model dịch</div>
+        <div class="log-time">Mở từ màn Bản dịch để sửa provider, base URL, API key, model.</div>
+      </div>
+      <button class="source-browse-btn" type="button" id="open-translation-settings-btn">Mở</button>
+    `;
+    translationSettingList.appendChild(actionRow);
+    actionRow.querySelector("#open-translation-settings-btn")?.addEventListener("click", () => {
+      if (typeof openRuntimeSettingsModal === "function") {
+        void openRuntimeSettingsModal();
+      }
+    });
 
     const connectCard = $("#page-server .connect-card");
     connectCard.innerHTML = `<h3 class="card-title">Storage & chính sách nguồn</h3><div class="log-list" id="runtime-list"></div>`;
@@ -147,4 +190,3 @@
       runtimeList.appendChild(row);
     });
   }
-

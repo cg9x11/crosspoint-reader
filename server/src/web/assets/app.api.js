@@ -90,7 +90,7 @@
     return payload;
   }
 
-  function apiFormUpload(url, formData, { method = "POST", headers = {}, onProgress } = {}) {
+  function apiFormUpload(url, formData, { method = "POST", headers = {}, onProgress, onUploadComplete } = {}) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open(method, url, true);
@@ -108,6 +108,11 @@
           total: event.total,
           percent: Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)))
         });
+      };
+      xhr.upload.onload = () => {
+        if (typeof onUploadComplete === "function") {
+          onUploadComplete();
+        }
       };
 
       xhr.onerror = () => reject(new Error("Upload failed."));
@@ -399,6 +404,12 @@
 
   function taskTriggerLabel(task) {
     const value = String(task?.triggerType || "").toLowerCase();
+    if (value === "upload") {
+      return "Upload truyện";
+    }
+    if (value === "upload_chapters") {
+      return "Upload chapter";
+    }
     if (value === "rebuild") {
       return "Rebuild local";
     }
@@ -526,7 +537,7 @@
   }
 
   function visibleInstalledNames() {
-    return sortByPriority(filterInstalledBySourcePolicy(state.installedExtensions)).map(
+    return sortByPriority(filterInstalledBySourcePolicy(state.enabledSources.length ? state.enabledSources : state.installedExtensions)).map(
       (item) => item.name || item.id
     );
   }
@@ -561,4 +572,3 @@
       { once: true }
     );
   }
-

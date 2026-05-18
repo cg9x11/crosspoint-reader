@@ -223,6 +223,36 @@
     }
   }
 
+  function tryParseUrl(value) {
+    try {
+      return new URL(String(value || "").trim());
+    } catch {
+      return null;
+    }
+  }
+
+  function resolveBrowseSourceIdFromUrl(rawUrl) {
+    const url = tryParseUrl(rawUrl);
+    if (!url) {
+      return null;
+    }
+
+    const host = url.hostname.toLowerCase();
+    if (/(^|\.)syosetu\.com$/i.test(host) && /^\/n[0-9a-z]+(?:\/\d+)?\/?$/i.test(url.pathname)) {
+      return "sys:syosetu";
+    }
+
+    if (/(^|\.)docln\.sbs$/i.test(host) || /(^|\.)docln\.net$/i.test(host) || /(^|\.)docln\.top$/i.test(host) || /(^|\.)hako\./i.test(host)) {
+      return state.enabledSources.find((item) => item.id.toLowerCase().includes("hako"))?.id || null;
+    }
+
+    if (/(^|\.)truyenfull\.vi$/i.test(host)) {
+      return state.enabledSources.find((item) => item.id.toLowerCase().includes("truyen-full"))?.id || null;
+    }
+
+    return null;
+  }
+
   function normalizeKnownSourceUrl(rawUrl) {
     const value = String(rawUrl || "").trim();
     if (!value) {
@@ -413,4 +443,3 @@
     }
     pill.querySelector(".pill-text").textContent = isOnline ? "OPDS: online" : "OPDS: offline";
   }
-

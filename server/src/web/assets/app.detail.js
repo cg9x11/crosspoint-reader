@@ -179,9 +179,11 @@
     const rebuildButton = $id("btn-rebuild-library");
     const exportButton = $id("btn-export-epub");
     const uploadChaptersButton = $id("btn-upload-chapters");
+    const editButton = $id("btn-edit-library");
     const removeLibraryButton = $id("btn-remove-library");
     const openLibraryButton = $id("btn-in-library");
     const sourceBlocked = Boolean(detail.upstreamBlocked);
+    const isLocalUpload = isLocalUploadLibraryItem(detail.libraryItem);
 
     editionsBox?.classList.add("is-hidden");
     if (editionsBox) {
@@ -206,7 +208,7 @@
     const originalUrl = detail.sourceUrl || detail.requestUrl || "";
     const displayTitle = resolveDetailTitle(detail.title, originalUrl);
     detailTitleLink.textContent = displayTitle;
-    if (originalUrl) {
+    if (originalUrl && !isLocalUpload) {
       detailTitleLink.href = originalUrl;
       detailOriginLink.href = originalUrl;
       detailOriginLink.classList.remove("is-hidden");
@@ -255,16 +257,19 @@
     rebuildButton.style.display = detail.libraryItem ? "block" : "none";
     exportButton.style.display = detail.libraryItem ? "block" : "none";
     uploadChaptersButton.style.display = detail.libraryItem ? "block" : "none";
+    editButton.style.display = isLocalUpload ? "block" : "none";
     removeLibraryButton.style.display = detail.libraryItem ? "block" : "none";
-    openLibraryButton.style.display = detail.libraryItem && detail.kind !== "library" ? "block" : "none";
+    openLibraryButton.style.display = detail.libraryItem && detail.kind !== "library" && !isLocalUpload ? "block" : "none";
     addButton.disabled = sourceBlocked;
-    syncButton.disabled = sourceBlocked;
-    rebuildButton.disabled = !detail.libraryItem;
+    syncButton.disabled = sourceBlocked || isLocalUpload;
+    rebuildButton.disabled = !detail.libraryItem || isLocalUpload;
     exportButton.disabled = !detail.libraryItem || !Number(detail.libraryItem?.downloadedChapters);
     uploadChaptersButton.disabled = !detail.libraryItem;
 
     syncButton.textContent =
-      sourceBlocked
+      isLocalUpload
+        ? "Đã upload local"
+        : sourceBlocked
         ? "Nguồn đang chặn"
         : detail.libraryItem?.syncStatus === "error"
           ? "↻ Thử lại đồng bộ"
@@ -294,8 +299,11 @@
       const previewButton = isChapterPreviewable(chapter)
         ? `<button class="chapter-view-btn" type="button">Xem</button>`
         : "";
-      const retryButton = isChapterRetryable(chapter)
+      const retryButton = !isLocalUpload && isChapterRetryable(chapter)
         ? `<button class="chapter-retry-btn" type="button">Tải lại</button>`
+        : "";
+      const deleteButton = isLocalUpload && chapter.id
+        ? `<button class="chapter-delete-btn" type="button">Xóa</button>`
         : "";
       row.className = `chapter-row${downloaded ? " downloaded" : ""}${isChapterFailed(chapter.status) ? " failed" : ""}`;
       row.innerHTML = `
@@ -308,11 +316,12 @@
           <span class="ch-dl-icon">${buildDetailRowIcon(chapter.status)}</span>
           ${previewButton}
           ${retryButton}
+          ${deleteButton}
         </div>
       `;
-      if (isChapterPreviewable(chapter) || chapter.sourceUrl) {
+      if (isChapterPreviewable(chapter) || (chapter.sourceUrl && !isLocalUpload)) {
         row.addEventListener("click", (event) => {
-          if (event.target.closest(".chapter-retry-btn, .chapter-view-btn")) {
+          if (event.target.closest(".chapter-retry-btn, .chapter-view-btn, .chapter-delete-btn")) {
             return;
           }
           if (isChapterPreviewable(chapter)) {
@@ -329,6 +338,18 @@
       row.querySelector(".chapter-retry-btn")?.addEventListener("click", (event) => {
         event.stopPropagation();
         void retryCurrentChapter(chapter.id);
+      });
+      row.querySelector(".chapter-delete-btn")?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        showConfirmModal({
+          title: "Xóa chapter",
+          message: `Xóa ${chapter.title || `Chương ${chapter.chapterIndex}`} khỏi truyện upload?`,
+          confirmLabel: "Xóa",
+          confirmTone: "danger",
+          onConfirm: async () => {
+            await deleteUploadedChapter(chapter.id);
+          }
+        });
       });
       chapterList.appendChild(row);
     });
@@ -356,9 +377,9 @@
       const button = document.createElement("button");
       button.className = "chapter-more-btn";
       button.type = "button";
-      button.textContent = `Xem thÃªm ${Math.min(150, chapters.length - visibleChapters.length)} / ${
+      button.textContent = `Xem thêm ${Math.min(150, chapters.length - visibleChapters.length)} / ${
         chapters.length - visibleChapters.length
-      } chÆ°Æ¡ng`;
+      } chương`;
       button.addEventListener("click", () => {
         state.detailChapterLimit += 150;
         if (state.detailPayload) {
@@ -525,4 +546,3 @@
       }
     });
   }
-

@@ -625,6 +625,24 @@ function normalizeChapterUrl(rawItem: Record<string, unknown>, sourceBaseUrl: st
   return url ? normalizeUrl(url, host || sourceBaseUrl) : "";
 }
 
+function extractReadableChapterTitleFromHtml(html: string, chapterUrl: string) {
+  try {
+    const $ = loadHtml(html);
+    const candidate =
+      $("h1").first().text().trim() ||
+      $("h2").first().text().trim() ||
+      $("title").first().text().trim();
+
+    if (candidate) {
+      return candidate;
+    }
+  } catch {
+    // fall through to URL basename
+  }
+
+  return path.basename(new URL(chapterUrl).pathname) || "Chapter";
+}
+
 function toRuntimeData(result: unknown) {
   return unwrapRuntimeResult(result).data;
 }
@@ -2101,7 +2119,7 @@ export async function createVbookSourceRuntime(options: {
           throw buildUpstreamBlockedError(chapterUrl);
         }
         return {
-          title: path.basename(new URL(chapterUrl).pathname) || "Chapter",
+          title: extractReadableChapterTitleFromHtml(rawChapterData, chapterUrl),
           html: rawChapterData
         };
       }

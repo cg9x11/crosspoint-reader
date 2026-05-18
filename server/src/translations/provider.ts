@@ -35,15 +35,6 @@ function chunkByChars(items: string[], maxChars: number) {
   return groups;
 }
 
-function buildMockTranslation(text: string) {
-  return text
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => `VI: ${line}`)
-    .join("\n\n");
-}
-
 function buildHeuristicGlossary(text: string): GlossaryCandidate[] {
   const tokens = Array.from(new Set((text.match(/[A-ZÀ-ỹ][\p{L}\p{M}0-9_'-]{2,}/gu) || []).slice(0, 40)));
   return tokens.slice(0, 20).map((token) => ({
@@ -67,6 +58,7 @@ async function translateWithOpenAICompatible(
   for (const batch of batches) {
     const body = {
       model,
+      stream: false,
       temperature: 0.2,
       response_format: { type: "json_object" },
       messages: [
@@ -135,15 +127,14 @@ export async function translateTexts(
   texts: string[],
   runtime: TranslationRuntimeSettings
 ): Promise<TranslationProviderResult> {
-  if (provider === "mock" || !credential) {
-    return {
-      texts: texts.map(buildMockTranslation),
-      tokenUsage: 0,
-      estimatedCost: 0
-    };
+  if (!credential) {
+    throw new Error(`Missing credential for provider: ${provider}`);
   }
   if (provider === "gemini") {
     return translateWithGemini(credential, systemPrompt, texts, runtime, model);
+  }
+  if (provider !== "openai") {
+    throw new Error(`Unsupported translation provider: ${provider}`);
   }
   return translateWithOpenAICompatible(credential, systemPrompt, texts, runtime, model);
 }
@@ -157,14 +148,19 @@ export async function suggestGlossaryCandidates(
   targetLanguage: string
 ): Promise<GlossaryCandidate[]> {
   const heuristic = buildHeuristicGlossary(sourceText);
-  if (provider === "mock" || !credential) {
+  if (!credential) {
     return heuristic;
   }
   const prompt = `Extract glossary candidates for translation to ${targetLanguage}. Return JSON {"items":[{"type":"term","rawName":"","translatedName":"","gender":"","description":""}]}. Keep 20 items max.`;
   try {
     const result = provider === "gemini"
       ? await translateWithGemini(credential, prompt, [sourceText.slice(0, runtime.maxCharsPerRequest)], runtime, model)
-      : await translateWithOpenAICompatible(credential, prompt, [sourceText.slice(0, runtime.maxCharsPerRequest)], runtime, model);
+      : provider === "openai"
+        ? await translateWithOpenAICompatible(credential, prompt, [sourceText.slice(0, runtime.maxCharsPerRequest)], runtime, model)
+        : null;
+    if (!result) {
+      throw new Error(`Unsupported translation provider: ${provider}`);
+    }
     const parsed = JSON.parse(result.texts[0] || "{}");
     if (Array.isArray(parsed.items)) {
       return parsed.items.map((item: any) => ({

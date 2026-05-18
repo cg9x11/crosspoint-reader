@@ -81,8 +81,8 @@ model TranslationProject {
   novelId                 String
   name                    String
   targetLanguage          String               @default("vi")
-  provider                String               @default("mock")
-  model                   String               @default("mock-vi")
+  provider                String               @default("openai")
+  model                   String               @default("gpt-4.1-mini")
   systemPrompt            String?
   styleGuideJson          String               @default("{}")
   contextMode             String               @default("light")

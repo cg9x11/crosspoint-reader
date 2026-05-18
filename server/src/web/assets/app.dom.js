@@ -110,6 +110,13 @@
 
     const detailActions = $id("detail-actions");
     if (detailActions && !$id("btn-upload-chapters")) {
+      const editButton = document.createElement("button");
+      editButton.className = "btn-secondary btn-full";
+      editButton.id = "btn-edit-library";
+      editButton.type = "button";
+      editButton.style.display = "none";
+      editButton.textContent = "Sửa truyện";
+
       const button = document.createElement("button");
       button.className = "btn-secondary btn-full";
       button.id = "btn-upload-chapters";
@@ -118,8 +125,10 @@
       button.textContent = "+ Upload chapter";
       const removeButton = $id("btn-remove-library");
       if (removeButton?.parentElement === detailActions) {
+        detailActions.insertBefore(editButton, removeButton);
         detailActions.insertBefore(button, removeButton);
       } else {
+        detailActions.appendChild(editButton);
         detailActions.appendChild(button);
       }
     }
@@ -385,5 +394,4 @@
 
     return card;
   }
-
 

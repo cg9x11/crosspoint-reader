@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { FastifyInstance } from "fastify";
+import { load as loadHtml } from "cheerio";
 import { z } from "zod";
 
 import { buildBookEpub } from "../../epub/builder.js";
-import { readEpubCoverBuffer } from "../../library/cover-assets.js";
+import { readEpubCoverBuffer, syncNovelCoverAssets } from "../../library/cover-assets.js";
 import { appendChaptersFromUpload, importNovelFromUpload } from "../../library/import.js";
+import { getSourceHandler } from "../../plugins/service.js";
 import {
   deleteLibraryNovel,
   getChapterHtmlPath,
@@ -16,6 +18,7 @@ import {
   getPublishedCoverBmpPath,
   listLibraryNovels,
   purgeLibraryNovelArtifacts,
+  updateNovelAggregateState,
   upsertNovelFromSourceDetail
 } from "../../library/service.js";
 import { fileExists, formatChapterFilename, sanitizeFileSegment } from "../../lib/filesystem.js";
@@ -28,12 +31,43 @@ import {
   retryNovelPipeline,
   scheduleNovelSync
 } from "../../worker/handlers.js";
+import sharp from "sharp";
 
 const createLibraryNovelSchema = z.object({
   sourceId: z.string().min(1),
   detailUrl: z.string().min(1),
   syncNow: z.boolean().optional().default(true)
 });
+
+const updateUploadedNovelSchema = z.object({
+  title: z.string().trim().min(1).optional(),
+  author: z.string().trim().nullable().optional(),
+  description: z.string().trim().nullable().optional()
+});
+
+function isLocalUploadNovel(novel: { sourceId?: string | null; sourceUrl?: string | null }) {
+  return novel.sourceId === "local-upload" || String(novel.sourceUrl || "").startsWith("upload:");
+}
+
+async function createCompletedSyncRun(
+  app: FastifyInstance,
+  novelId: string,
+  triggerType: string,
+  totalFound: number,
+  newChapters: number
+) {
+  await app.prisma.syncRun.create({
+    data: {
+      novelId,
+      triggerType,
+      status: "completed",
+      totalFound,
+      newChapters,
+      startedAt: new Date(),
+      endedAt: new Date()
+    }
+  });
+}
 
 function plainTextToHtml(text: string) {
   const escaped = text
@@ -90,6 +124,82 @@ function stripLeadingSourceFilename(text: string) {
   }
 
   return lines.join("\n");
+}
+
+function looksLikeSlugChapterTitle(title: string, sourceUrl?: string | null) {
+  const normalized = String(title || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  const sourceSlug = sourceUrl
+    ? path.posix.basename(new URL(sourceUrl).pathname).trim().toLowerCase()
+    : "";
+
+  return normalized === sourceSlug || /^c\d+-/i.test(normalized) || normalized.endsWith(".html");
+}
+
+function extractTitleFromStoredHtml(html: string) {
+  try {
+    const $ = loadHtml(html);
+    return $("h1").first().text().trim() || $("h2").first().text().trim() || $("title").first().text().trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveReadableChapterTitle(
+  app: FastifyInstance,
+  chapter: {
+    sourceId?: string;
+    novelSourceUrl?: string | null;
+    novelId: string;
+    chapterIndex: number;
+    title: string;
+    sourceUrl?: string | null;
+    epubPath?: string | null;
+  }
+) {
+  if (!looksLikeSlugChapterTitle(chapter.title, chapter.sourceUrl)) {
+    return chapter.title;
+  }
+
+  const content = await loadChapterContentHtml(app, chapter);
+  if (content.html) {
+    const extracted = extractTitleFromStoredHtml(content.html);
+    if (extracted && !looksLikeSlugChapterTitle(extracted, chapter.sourceUrl)) {
+      return extracted;
+    }
+  }
+
+  if (content.chapterAsset?.path?.toLowerCase().endsWith(".txt")) {
+    try {
+      const rawText = await fs.readFile(content.chapterAsset.path, "utf8");
+      const firstLine = String(rawText || "").split(/\r?\n/).find((line) => line.trim())?.trim() || "";
+      if (firstLine && !looksLikeSlugChapterTitle(firstLine, chapter.sourceUrl)) {
+        return firstLine;
+      }
+    } catch {
+      return chapter.title;
+    }
+  }
+
+  if (chapter.sourceId && chapter.novelSourceUrl && chapter.sourceUrl) {
+    try {
+      const handler = await getSourceHandler(app.storagePaths, app.prisma, chapter.sourceId);
+      const upstreamChapters = await handler.chapters(chapter.novelSourceUrl);
+      const matchedChapter =
+        upstreamChapters.find((item) => item.sourceUrl === chapter.sourceUrl) ||
+        upstreamChapters.find((item) => item.chapterIndex === chapter.chapterIndex);
+      if (matchedChapter?.title && !looksLikeSlugChapterTitle(matchedChapter.title, chapter.sourceUrl)) {
+        return matchedChapter.title;
+      }
+    } catch {
+      return chapter.title;
+    }
+  }
+
+  return chapter.title;
 }
 
 async function resolvePublishedChapterAsset(
@@ -256,7 +366,83 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
       author,
       description
     });
+    await createCompletedSyncRun(app, item.id, "upload", 0, Number(item.totalChapters) || 0);
     return { ok: true, item: await getLibraryNovel(app.prisma, item.id) };
+  });
+
+  app.patch("/api/library/novels/:novelId/uploaded", async (request, reply) => {
+    const params = z.object({ novelId: z.string().min(1) }).parse(request.params);
+    const body = updateUploadedNovelSchema.parse(request.body || {});
+    const novel = await app.prisma.novel.findUnique({
+      where: { id: params.novelId },
+      select: { id: true, sourceId: true, sourceUrl: true }
+    });
+    if (!novel) {
+      reply.code(404);
+      return { ok: false, error: "NOVEL_NOT_FOUND" };
+    }
+    if (!isLocalUploadNovel(novel)) {
+      reply.code(400);
+      return { ok: false, error: "NOVEL_NOT_LOCAL_UPLOAD", message: "Chỉ sửa trực tiếp truyện upload local." };
+    }
+
+    await app.prisma.novel.update({
+      where: { id: params.novelId },
+      data: {
+        title: body.title,
+        author: body.author === undefined ? undefined : body.author || null,
+        description: body.description === undefined ? undefined : body.description || null
+      }
+    });
+
+    return { ok: true, item: await getLibraryNovel(app.prisma, params.novelId) };
+  });
+
+  app.post("/api/library/novels/:novelId/uploaded/cover", async (request, reply) => {
+    const params = z.object({ novelId: z.string().min(1) }).parse(request.params);
+    const novel = await app.prisma.novel.findUnique({
+      where: { id: params.novelId },
+      select: { id: true, sourceId: true, sourceUrl: true }
+    });
+    if (!novel) {
+      reply.code(404);
+      return { ok: false, error: "NOVEL_NOT_FOUND" };
+    }
+    if (!isLocalUploadNovel(novel)) {
+      reply.code(400);
+      return { ok: false, error: "NOVEL_NOT_LOCAL_UPLOAD", message: "Chỉ sửa trực tiếp truyện upload local." };
+    }
+
+    const file = await request.file();
+    if (!file) {
+      reply.code(400);
+      return { ok: false, error: "UPLOAD_FILE_REQUIRED", message: "Chọn file cover." };
+    }
+
+    const mediaType = String(file.mimetype || "").toLowerCase();
+    if (!mediaType.startsWith("image/")) {
+      reply.code(400);
+      return { ok: false, error: "UPLOAD_FILE_TYPE_UNSUPPORTED", message: "Cover phải là file ảnh." };
+    }
+
+    const buffer = await file.toBuffer();
+    const optimized = await sharp(buffer, { animated: false })
+      .rotate()
+      .flatten({ background: "#ffffff" })
+      .png({ compressionLevel: 9, effort: 10, palette: true })
+      .toBuffer();
+    const coverUrl = `data:image/png;base64,${optimized.toString("base64")}`;
+
+    await app.prisma.novel.update({
+      where: { id: params.novelId },
+      data: { coverUrl }
+    });
+    await syncNovelCoverAssets(app.prisma, app.storagePaths, {
+      id: params.novelId,
+      coverUrl
+    });
+
+    return { ok: true, item: await getLibraryNovel(app.prisma, params.novelId) };
   });
 
   app.get("/api/library/novels/:novelId", async (request, reply) => {
@@ -271,7 +457,21 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
       };
     }
 
-    return item;
+    const chapters = await Promise.all(
+      (item.chapters || []).map(async (chapter) => ({
+        ...chapter,
+        title: await resolveReadableChapterTitle(app, {
+          ...chapter,
+          sourceId: item.sourceId,
+          novelSourceUrl: item.sourceUrl
+        })
+      }))
+    );
+
+    return {
+      ...item,
+      chapters
+    };
   });
 
   app.get("/api/library/novels/:novelId/chapters/:chapterId/preview", async (request, reply) => {
@@ -403,6 +603,7 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
 
   app.post("/api/library/novels/:novelId/uploads/chapters", async (request, reply) => {
     const params = z.object({ novelId: z.string().min(1) }).parse(request.params);
+    const beforeNovel = await app.prisma.novel.findUnique({ where: { id: params.novelId }, select: { totalChapters: true } });
     const file = await request.file();
     if (!file) {
       reply.code(400);
@@ -422,7 +623,48 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
       buffer,
       startIndex: Number.isFinite(startIndexRaw) && startIndexRaw > 0 ? startIndexRaw : null
     });
+    await createCompletedSyncRun(
+      app,
+      params.novelId,
+      "upload_chapters",
+      0,
+      Math.max(0, Number(item?.totalChapters || 0) - Number(beforeNovel?.totalChapters || 0))
+    );
     return { ok: true, item };
+  });
+
+  app.delete("/api/library/novels/:novelId/chapters/:chapterId", async (request, reply) => {
+    const params = z
+      .object({
+        novelId: z.string().min(1),
+        chapterId: z.string().min(1)
+      })
+      .parse(request.params);
+
+    const chapter = await app.prisma.chapter.findFirst({
+      where: { id: params.chapterId, novelId: params.novelId },
+      include: { novel: { select: { sourceId: true, sourceUrl: true } } }
+    });
+    if (!chapter) {
+      reply.code(404);
+      return { ok: false, error: "CHAPTER_NOT_FOUND" };
+    }
+    if (!isLocalUploadNovel(chapter.novel)) {
+      reply.code(400);
+      return { ok: false, error: "NOVEL_NOT_LOCAL_UPLOAD", message: "Chỉ xóa chapter của truyện upload local." };
+    }
+
+    const htmlPath = getChapterHtmlPath(app.storagePaths, params.novelId, chapter.chapterIndex);
+    const chapterAssets = getPublishedChapterCandidates(app.storagePaths, params.novelId, chapter.chapterIndex, chapter.epubPath);
+
+    await app.prisma.chapter.delete({ where: { id: chapter.id } });
+    await Promise.all([
+      fs.rm(htmlPath, { force: true }).catch(() => undefined),
+      ...chapterAssets.map((asset) => fs.rm(asset.path, { force: true }).catch(() => undefined))
+    ]);
+    await updateNovelAggregateState(app.prisma, params.novelId);
+
+    return { ok: true, item: await getLibraryNovel(app.prisma, params.novelId) };
   });
 
   app.post("/api/library/novels/:novelId/chapters/:chapterId/retry", async (request) => {
@@ -609,6 +851,18 @@ export async function registerLibraryApiRoutes(app: FastifyInstance) {
       return {
         ok: false,
         error: "NOVEL_NOT_FOUND"
+      };
+    }
+
+    const translationProjectCount = await app.prisma.translationProject.count({
+      where: { novelId: params.novelId }
+    });
+    if (translationProjectCount > 0) {
+      reply.code(409);
+      return {
+        ok: false,
+        error: "NOVEL_HAS_TRANSLATION_PROJECTS",
+        message: `Không thể xóa truyện vì còn ${translationProjectCount} project dịch. Hãy xóa project dịch trước.`
       };
     }
 

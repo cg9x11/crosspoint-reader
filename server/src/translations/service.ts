@@ -139,8 +139,8 @@ export async function createTranslationProject(
       novelId,
       name: input.name,
       targetLanguage: input.targetLanguage || "vi",
-      provider: input.provider || "mock",
-      model: input.model || "mock-vi",
+      provider: input.provider || "openai",
+      model: input.model || "gpt-4.1-mini",
       systemPrompt: input.systemPrompt || null,
       styleGuideJson: input.styleGuideJson || "{}",
       contextMode: input.contextMode || "light",
@@ -222,6 +222,40 @@ export async function updateTranslationProject(
     });
   }
   return getTranslationProject(prisma, project.id);
+}
+
+export async function deleteTranslationProject(prisma: PrismaClient, projectId: string) {
+  const existing = await prisma.translationProject.findUnique({ where: { id: projectId } });
+  if (!existing) {
+    throw new Error("TRANSLATION_PROJECT_NOT_FOUND");
+  }
+
+  await prisma.translationProject.delete({ where: { id: projectId } });
+
+  if (existing.isDefaultEdition) {
+    await prisma.novel.update({
+      where: { id: existing.novelId },
+      data: {
+        defaultEditionKind: "original",
+        defaultTranslationProjectId: null
+      }
+    });
+  }
+
+  if (existing.isActiveAuto) {
+    const nextActive = await prisma.translationProject.findFirst({
+      where: { novelId: existing.novelId },
+      orderBy: { createdAt: "desc" }
+    });
+    if (nextActive) {
+      await prisma.translationProject.update({
+        where: { id: nextActive.id },
+        data: { isActiveAuto: true }
+      });
+    }
+  }
+
+  return { id: projectId, novelId: existing.novelId };
 }
 
 async function getActiveGlossary(prisma: PrismaClient, projectId: string) {

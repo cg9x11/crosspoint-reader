@@ -29,7 +29,13 @@ export async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status} ${response.statusText}`);
   }
-  return (await response.json()) as T;
+  const raw = await response.text();
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    const preview = raw.slice(0, 180).trim();
+    throw new Error(preview ? `Invalid JSON response: ${preview}` : "Invalid JSON response");
+  }
 }
 
 export async function fetchText(url: string, init?: RequestInit, timeoutMs = DEFAULT_TIMEOUT_MS) {

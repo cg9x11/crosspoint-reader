@@ -171,6 +171,16 @@
     const input = $id("browse-search");
     state.searchQuery = input?.value ?? "";
     syncBrowseSearchUi();
+
+    const sourceIdFromUrl = resolveBrowseSourceIdFromUrl(state.searchQuery);
+    if (sourceIdFromUrl) {
+      resetBrowseState();
+      state.searchQuery = input?.value ?? "";
+      syncBrowseSearchUi();
+      navigateTo(sourceBrowsePath(sourceIdFromUrl, state.searchQuery));
+      return;
+    }
+
     void refreshBrowseContent({ append: false });
   }
 
@@ -206,4 +216,3 @@
       button.classList.toggle("active", SERVER_SECTIONS[index]?.id === sectionId);
     });
   }
-

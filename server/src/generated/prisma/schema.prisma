@@ -1,0 +1,233 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Novel {
+  id                          String               @id @default(uuid())
+  title                       String
+  author                      String?
+  sourceId                    String
+  sourceName                  String?
+  sourceUrl                   String
+  coverUrl                    String?
+  coverLocalPath              String?
+  description                 String?
+  status                      String               @default("ongoing")
+  syncStatus                  String               @default("idle")
+  totalChapters               Int                  @default(0)
+  downloadedChapters          Int                  @default(0)
+  defaultEditionKind          String               @default("original")
+  defaultTranslationProjectId String?
+  lastCheckedAt               DateTime?
+  lastSyncStartedAt           DateTime?
+  lastSyncEndedAt             DateTime?
+  lastError                   String?
+  createdAt                   DateTime             @default(now())
+  updatedAt                   DateTime             @updatedAt
+  chapters                    Chapter[]
+  syncRuns                    SyncRun[]
+  translationProjects         TranslationProject[]
+
+  @@index([sourceId])
+  @@index([syncStatus])
+}
+
+model Chapter {
+  id           String               @id @default(uuid())
+  novelId      String
+  chapterIndex Int
+  title        String
+  sourceUrl    String
+  status       String               @default("pending")
+  epubPath     String?
+  fileSize     Int?
+  checksum     String?
+  retryCount   Int                  @default(0)
+  publishedAt  DateTime?
+  lastError    String?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  novel        Novel                @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  translations ChapterTranslation[]
+
+  @@unique([novelId, chapterIndex])
+  @@index([novelId, status])
+}
+
+model SyncRun {
+  id           String    @id @default(uuid())
+  novelId      String
+  triggerType  String
+  status       String    @default("queued")
+  totalFound   Int       @default(0)
+  newChapters  Int       @default(0)
+  errorMessage String?
+  startedAt    DateTime?
+  endedAt      DateTime?
+  createdAt    DateTime  @default(now())
+  novel        Novel     @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, status])
+}
+
+model TranslationProject {
+  id                       String                @id @default(uuid())
+  novelId                  String
+  name                     String
+  targetLanguage           String                @default("vi")
+  provider                 String                @default("mock")
+  model                    String                @default("mock-vi")
+  systemPrompt             String?
+  styleGuideJson           String                @default("{}")
+  contextMode              String                @default("light")
+  historyDepth             Int                   @default(3)
+  autoTranslateNewChapters Boolean               @default(false)
+  chapterConcurrency       Int                   @default(1)
+  isActiveAuto             Boolean               @default(false)
+  isDefaultEdition         Boolean               @default(false)
+  status                   String                @default("idle")
+  lastError                String?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  novel                    Novel                 @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  glossaries               TranslationGlossary[]
+  chapterTranslations      ChapterTranslation[]
+  runs                     TranslationRun[]
+
+  @@index([novelId, status])
+  @@index([novelId, isActiveAuto])
+}
+
+model TranslationGlossary {
+  id         String                     @id @default(uuid())
+  projectId  String
+  version    Int
+  sourceType String                     @default("manual")
+  rawPayload String                     @default("")
+  isActive   Boolean                    @default(false)
+  createdAt  DateTime                   @default(now())
+  updatedAt  DateTime                   @updatedAt
+  project    TranslationProject         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  entries    TranslationGlossaryEntry[]
+
+  @@unique([projectId, version])
+  @@index([projectId, isActive])
+}
+
+model TranslationGlossaryEntry {
+  id             String              @id @default(uuid())
+  glossaryId     String
+  type           String              @default("term")
+  rawName        String
+  translatedName String
+  gender         String?
+  description    String?
+  aliasesJson    String              @default("[]")
+  notes          String?
+  locked         Boolean             @default(false)
+  priority       Int                 @default(0)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  glossary       TranslationGlossary @relation(fields: [glossaryId], references: [id], onDelete: Cascade)
+
+  @@index([glossaryId, type])
+  @@index([glossaryId, rawName])
+}
+
+model ChapterTranslation {
+  id                        String                      @id @default(uuid())
+  projectId                 String
+  chapterId                 String
+  sourceChecksum            String
+  status                    String                      @default("pending")
+  currentPublishedVersionId String?
+  latestGeneratedVersionId  String?
+  hasManualEdits            Boolean                     @default(false)
+  newGeneratedAvailable     Boolean                     @default(false)
+  staleReason               String?
+  lastError                 String?
+  retryCount                Int                         @default(0)
+  createdAt                 DateTime                    @default(now())
+  updatedAt                 DateTime                    @updatedAt
+  project                   TranslationProject          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chapter                   Chapter                     @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  versions                  ChapterTranslationVersion[]
+
+  @@unique([projectId, chapterId])
+  @@index([projectId, status])
+}
+
+model ChapterTranslationVersion {
+  id                   String             @id @default(uuid())
+  chapterTranslationId String
+  versionNumber        Int
+  kind                 String
+  title                String?
+  htmlPath             String
+  textPath             String?
+  summary              String?
+  provider             String?
+  model                String?
+  promptSnapshot       String?
+  glossaryVersion      Int?
+  sourceChecksum       String
+  isPublished          Boolean            @default(false)
+  createdBy            String             @default("system")
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  chapterTranslation   ChapterTranslation @relation(fields: [chapterTranslationId], references: [id], onDelete: Cascade)
+
+  @@unique([chapterTranslationId, versionNumber])
+  @@index([chapterTranslationId, isPublished])
+}
+
+model TranslationRun {
+  id             String             @id @default(uuid())
+  projectId      String
+  triggerType    String
+  scope          String             @default("project")
+  status         String             @default("queued")
+  queuedCount    Int                @default(0)
+  completedCount Int                @default(0)
+  failedCount    Int                @default(0)
+  tokenUsage     Int                @default(0)
+  estimatedCost  Float              @default(0)
+  errorMessage   String?
+  startedAt      DateTime?
+  endedAt        DateTime?
+  createdAt      DateTime           @default(now())
+  project        TranslationProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, status])
+}
+
+model PluginSource {
+  id                        String    @id
+  name                      String
+  enabled                   Boolean   @default(true)
+  version                   String?
+  trustType                 String    @default("community")
+  supportsHome              Boolean   @default(false)
+  supportsSearch            Boolean   @default(true)
+  supportsGenre             Boolean   @default(false)
+  supportsPagination        Boolean   @default(false)
+  supportsDetailDescription Boolean   @default(false)
+  supportsBrowserAutomation Boolean   @default(false)
+  timeoutMs                 Int       @default(30000)
+  lastCheckedAt             DateTime?
+  lastError                 String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+}
+
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}

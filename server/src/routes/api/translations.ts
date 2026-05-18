@@ -11,6 +11,7 @@ import {
   createEditedVersion,
   createGlossaryVersion,
   createTranslationProject,
+  deleteTranslationProject,
   deleteTranslationVersion,
   generateGlossarySuggestions,
   getProjectChapterDetail,
@@ -24,13 +25,14 @@ import {
   updateTranslationProject
 } from "../../translations/service.js";
 import { getTranslationSettings, saveTranslationSettings } from "../../translations/settings.js";
+import { translateTexts } from "../../translations/provider.js";
 
 const projectCreateSchema = z.object({
   novelId: z.string().min(1),
   name: z.string().trim().min(1),
   targetLanguage: z.string().trim().default("vi"),
-  provider: z.string().trim().default("mock"),
-  model: z.string().trim().default("mock-vi"),
+  provider: z.enum(["openai", "gemini"]).default("openai"),
+  model: z.string().trim().default("gpt-4.1-mini"),
   systemPrompt: z.string().optional(),
   styleGuideJson: z.string().optional(),
   contextMode: z.enum(["off", "light", "strong"]).default("light"),
@@ -50,6 +52,19 @@ const settingsPatchSchema = z.object({
     modelHint: z.string().optional(),
     enabled: z.boolean().optional()
   })).optional(),
+  runtime: z.object({
+    maxActiveProjects: z.coerce.number().int().min(1).max(8).optional(),
+    maxChapterConcurrency: z.coerce.number().int().min(1).max(8).optional(),
+    requestTimeoutMs: z.coerce.number().int().min(5000).max(180000).optional(),
+    maxCharsPerRequest: z.coerce.number().int().min(500).max(12000).optional()
+  }).optional()
+});
+
+const settingsTestSchema = z.object({
+  provider: z.string().trim().min(1),
+  baseUrl: z.string().trim().optional(),
+  apiKey: z.string().optional(),
+  modelHint: z.string().trim().min(1),
   runtime: z.object({
     maxActiveProjects: z.coerce.number().int().min(1).max(8).optional(),
     maxChapterConcurrency: z.coerce.number().int().min(1).max(8).optional(),
@@ -82,9 +97,15 @@ export async function registerTranslationsApiRoutes(app: FastifyInstance) {
 
   app.post("/api/translations/projects", async (request) => {
     const body = projectCreateSchema.parse(request.body);
+    const settings = await getTranslationSettings(app.prisma, app.appConfig);
+    const defaultCredential = settings.credentials.find((item) => item.enabled !== false) || settings.credentials[0];
     return {
       ok: true,
-      item: await createTranslationProject(app.prisma, body.novelId, body)
+      item: await createTranslationProject(app.prisma, body.novelId, {
+        ...body,
+        provider: body.provider || defaultCredential?.provider || "openai",
+        model: body.model || defaultCredential?.modelHint || "gpt-4.1-mini"
+      })
     };
   });
 
@@ -101,9 +122,23 @@ export async function registerTranslationsApiRoutes(app: FastifyInstance) {
   app.patch("/api/translations/projects/:projectId", async (request) => {
     const params = z.object({ projectId: z.string().min(1) }).parse(request.params);
     const body = projectCreateSchema.partial().parse(request.body);
+    const settings = await getTranslationSettings(app.prisma, app.appConfig);
+    const defaultCredential = settings.credentials.find((item) => item.enabled !== false) || settings.credentials[0];
     return {
       ok: true,
-      item: await updateTranslationProject(app.prisma, params.projectId, body)
+      item: await updateTranslationProject(app.prisma, params.projectId, {
+        ...body,
+        provider: body.provider === undefined ? (defaultCredential?.provider || "openai") : body.provider,
+        model: body.model === undefined ? (defaultCredential?.modelHint || "gpt-4.1-mini") : body.model
+      })
+    };
+  });
+
+  app.delete("/api/translations/projects/:projectId", async (request) => {
+    const params = z.object({ projectId: z.string().min(1) }).parse(request.params);
+    return {
+      ok: true,
+      item: await deleteTranslationProject(app.prisma, params.projectId)
     };
   });
 
@@ -131,6 +166,56 @@ export async function registerTranslationsApiRoutes(app: FastifyInstance) {
   app.patch("/api/translations/settings", async (request) => {
     const body = settingsPatchSchema.parse(request.body);
     return await saveTranslationSettings(app.prisma, app.appConfig, body);
+  });
+
+
+  app.post("/api/translations/settings/test", async (request, reply) => {
+    const body = settingsTestSchema.parse(request.body);
+    try {
+      const current = await getTranslationSettings(app.prisma, app.appConfig);
+      const runtime = {
+        ...current.runtime,
+        ...(body.runtime || {}),
+        requestTimeoutMs: Math.min(Number(body.runtime?.requestTimeoutMs || current.runtime.requestTimeoutMs || 12000), 12000),
+        maxCharsPerRequest: Math.min(Number(body.runtime?.maxCharsPerRequest || current.runtime.maxCharsPerRequest || 500), 500)
+      };
+      const startedAt = Date.now();
+      const result = await translateTexts(
+        {
+          provider: body.provider,
+          label: 'test',
+          apiKey: body.apiKey,
+          baseUrl: body.baseUrl,
+          modelHint: body.modelHint,
+          enabled: true
+        },
+        body.provider,
+        body.modelHint,
+        'Return same text in JSON items array.',
+        ['ping'],
+        runtime
+      );
+      return {
+        ok: true,
+        latencyMs: Date.now() - startedAt,
+        preview: result.texts?.[0] || '',
+        tokenUsage: result.tokenUsage || 0
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Provider test failed';
+      if (/429|Too Many Requests/i.test(message)) {
+        reply.code(429);
+      } else {
+        reply.code(400);
+      }
+      return {
+        ok: false,
+        error: 'TRANSLATION_PROVIDER_TEST_FAILED',
+        message: /Invalid JSON response:/i.test(message)
+          ? `${message}. Upstream có thể đang trả SSE/HTML hoặc endpoint không tương thích OpenAI-compatible.`
+          : message
+      };
+    }
   });
 
   app.get("/api/translations/projects/:projectId/glossaries", async (request, reply) => {

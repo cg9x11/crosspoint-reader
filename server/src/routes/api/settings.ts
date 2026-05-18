@@ -5,6 +5,7 @@ import { z } from "zod";
 import { isHiddenAppSettingKey } from "../../lib/adminAuth.js";
 import { resolvePublicBaseUrl } from "../../lib/requestBaseUrl.js";
 import { resolveSourcePolicy, updateSourcePolicy } from "../../lib/sourcePolicy.js";
+import { getTranslationSettings } from "../../translations/settings.js";
 
 const patchSettingsSchema = z.object({
   settings: z.record(z.string(), z.string())
@@ -89,6 +90,7 @@ export async function registerSettingsApiRoutes(app: FastifyInstance) {
   app.get("/api/settings/system", async (request) => {
     const roleMeta = buildRoleMeta(app.appConfig.APP_ROLE);
     const sourcePolicy = await resolveSourcePolicy(app.prisma, app.appConfig);
+    const translationSettings = await getTranslationSettings(app.prisma, app.appConfig);
 
     return {
       role: app.appConfig.APP_ROLE,
@@ -107,7 +109,8 @@ export async function registerSettingsApiRoutes(app: FastifyInstance) {
         chapterBuild: app.appConfig.QUEUE_CONCURRENCY_CHAPTER_BUILD,
         maintenance: app.appConfig.QUEUE_CONCURRENCY_MAINTENANCE
       },
-      sourcePolicy
+      sourcePolicy,
+      translationSettings
     };
   });
 }
