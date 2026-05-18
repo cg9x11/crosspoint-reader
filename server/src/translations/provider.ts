@@ -559,7 +559,7 @@ Important rules:
           gender: item.gender ? String(item.gender) : undefined,
           description
         };
-      }).map(normalizeGlossaryCandidate).filter((item): item is GlossaryCandidate => Boolean(item));
+      }).map((item: GlossaryCandidate) => normalizeGlossaryCandidate(item)).filter((item): item is GlossaryCandidate => Boolean(item));
     }
   } catch {
     // fallback
