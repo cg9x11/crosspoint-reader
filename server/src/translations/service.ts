@@ -305,7 +305,7 @@ async function getActiveGlossary(prisma: PrismaClient, projectId: string) {
 }
 
 function normalizeGlossaryEntries(input: Array<Record<string, unknown>>) {
-  return input
+  const normalized = input
     .map((entry) => ({
       type: String(entry.type || "term").trim() || "term",
       rawName: String(entry.rawName || entry.raw_name || "").trim(),
@@ -318,6 +318,34 @@ function normalizeGlossaryEntries(input: Array<Record<string, unknown>>) {
       priority: Number(entry.priority || 0) || 0
     }))
     .filter((entry) => entry.rawName && entry.translatedName);
+
+  const merged = new Map<string, typeof normalized[number]>();
+  for (const entry of normalized) {
+    const key = `${entry.type}::${entry.rawName.toLocaleLowerCase()}`;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, entry);
+      continue;
+    }
+
+    const aliasSet = new Set<string>([
+      ...JSON.parse(existing.aliasesJson || "[]"),
+      ...JSON.parse(entry.aliasesJson || "[]")
+    ].map((item) => String(item || "").trim()).filter(Boolean));
+
+    merged.set(key, {
+      ...existing,
+      translatedName: existing.translatedName.length >= entry.translatedName.length ? existing.translatedName : entry.translatedName,
+      gender: existing.gender || entry.gender,
+      description: existing.description || entry.description,
+      aliasesJson: safeJsonStringify([...aliasSet], "[]"),
+      notes: existing.notes || entry.notes,
+      locked: existing.locked || entry.locked,
+      priority: Math.max(existing.priority, entry.priority)
+    });
+  }
+
+  return [...merged.values()];
 }
 
 export async function createGlossaryVersion(
@@ -943,7 +971,11 @@ export async function scheduleProjectRun(
   queues: AppQueues,
   projectId: string,
   triggerType: string,
-  scope = "project"
+  scope = "project",
+  range?: {
+    fromChapterIndex?: number;
+    toChapterIndex?: number;
+  }
 ) {
   const project = await prisma.translationProject.findUnique({
     where: { id: projectId },
@@ -960,7 +992,13 @@ export async function scheduleProjectRun(
   });
   const existingTranslations = await prisma.chapterTranslation.findMany({ where: { projectId } });
   const existingByChapter = new Map(existingTranslations.map((item) => [item.chapterId, item]));
+  const minIndex = Math.max(1, Number(range?.fromChapterIndex || 1));
+  const maxIndex = Math.max(minIndex, Number(range?.toChapterIndex || Number.MAX_SAFE_INTEGER));
+
   const candidates = chapters.filter((chapter) => {
+    if (chapter.chapterIndex < minIndex || chapter.chapterIndex > maxIndex) {
+      return false;
+    }
     const translation = existingByChapter.get(chapter.id);
     return !translation || Boolean(translation.staleReason) || translation.status !== "ready";
   });

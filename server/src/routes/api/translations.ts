@@ -81,7 +81,9 @@ const glossaryVersionCreateSchema = z.object({
 
 const projectRunSchema = z.object({
   triggerType: z.string().trim().default("manual"),
-  scope: z.string().trim().default("project")
+  scope: z.string().trim().default("project"),
+  fromChapterIndex: z.coerce.number().int().positive().optional(),
+  toChapterIndex: z.coerce.number().int().positive().optional()
 });
 
 const chapterVersionCreateSchema = z.object({
@@ -147,7 +149,10 @@ export async function registerTranslationsApiRoutes(app: FastifyInstance) {
     const body = projectRunSchema.parse(request.body || {});
     return {
       ok: true,
-      item: await scheduleProjectRun(app.prisma, app.queues, params.projectId, body.triggerType, body.scope)
+      item: await scheduleProjectRun(app.prisma, app.queues, params.projectId, body.triggerType, body.scope, {
+        fromChapterIndex: body.fromChapterIndex,
+        toChapterIndex: body.toChapterIndex
+      })
     };
   });
 

@@ -593,6 +593,8 @@ function translationProjectPath(projectId) {
 
           <!-- action toolbar -->
           <div class="t-action-toolbar">
+            <input class="form-input t-input-sm" type="number" min="1" id="translation-range-from" placeholder="Từ chap #">
+            <input class="form-input t-input-sm" type="number" min="1" id="translation-range-to" placeholder="Đến chap #">
             <button class="btn-primary t-btn-sm" type="button" id="translation-run-project">▶ Dịch / cập nhật</button>
             <button class="btn-ghost  t-btn-sm" type="button" id="translation-rebuild-project">↺ Rebuild</button>
             <button class="btn-ghost  t-btn-sm" type="button" id="translation-edit-config">Sửa project</button>
@@ -646,8 +648,18 @@ function translationProjectPath(projectId) {
 
     // bind detail events
     $id('translation-run-project')?.addEventListener('click', async (event) => {
+      const fromChapterIndex = Number($id('translation-range-from')?.value || 0) || undefined;
+      const toChapterIndex = Number($id('translation-range-to')?.value || 0) || undefined;
       await withButtonLoading(event.currentTarget, 'Đang xếp hàng...', async () => {
-        await apiJson(`/api/translations/projects/${encodeURIComponent(detail.id)}/start`, { method: 'POST', body: { triggerType: 'manual' } });
+        await apiJson(`/api/translations/projects/${encodeURIComponent(detail.id)}/start`, {
+          method: 'POST',
+          body: {
+            triggerType: 'manual',
+            scope: fromChapterIndex || toChapterIndex ? 'range' : 'project',
+            fromChapterIndex,
+            toChapterIndex
+          }
+        });
       });
       showToast('↻', 'Đã xếp hàng dịch', detail.name);
     });
