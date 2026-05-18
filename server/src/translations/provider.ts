@@ -140,6 +140,43 @@ function toLatinGlossaryValue(rawName: string, translatedName?: string) {
   return `term-${Buffer.from(rawName).toString("hex").slice(0, 12)}`;
 }
 
+function containsKana(value: string) {
+  return /[\u3040-\u30ff]/u.test(value);
+}
+
+function containsKanji(value: string) {
+  return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u.test(value);
+}
+
+function looksLikeSentenceFragment(value: string) {
+  return /[。、！？!?]|(を|に|で|へ|から|まで|より|と|が|は|も|の|た|だ|です|ます)$/.test(value);
+}
+
+function splitJapaneseGlossaryTerms(value: string) {
+  return value
+    .split(/[\s\r\n。、！？!?「」『』（）()\[\]【】,，:：;；/\\|]+/u)
+    .flatMap((part) => part.split(/(?:という|として|には|では|から|まで|より|だけ|ほど|など|なら|ので|ため|こと|もの|よう|する|した|して|され|なる|いる|ある|ない)/u))
+    .flatMap((part) => part.split(/[はがをにへでともやの]/u))
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 2 && part.length <= 10)
+    .filter((part) => hasJapaneseScript(part))
+    .filter((part) => !/^[\u3040-\u309f]+$/u.test(part))
+    .filter((part) => !looksLikeSentenceFragment(part));
+}
+
+function inferGlossaryType(rawName: string) {
+  if (/(スキル|魔法|術|技|目|眼|剣|槍|弓|盾|杖|薬|石|書|鍵)/u.test(rawName)) {
+    return "term";
+  }
+  if (/(国|王国|帝国|都市|村|町|領|地|森|山|川|城|館|港)/u.test(rawName)) {
+    return "place";
+  }
+  if (rawName.length >= 2 && rawName.length <= 5 && containsKanji(rawName) && !containsKana(rawName)) {
+    return "person";
+  }
+  return "term";
+}
+
 function toVietnameseLabel(rawName: string, latinName: string, type?: string) {
   const shortLatin = String(latinName || "").trim() || String(rawName || "").trim();
   const prefix = type === "person" ? "Nhân vật" : type === "place" ? "Địa danh" : "Thuật ngữ";
@@ -182,17 +219,25 @@ function chunkByChars(items: string[], maxChars: number) {
 
 function buildHeuristicGlossary(text: string): GlossaryCandidate[] {
   const latinTokens = text.match(/[A-ZÀ-ỹ][\p{L}\p{M}0-9_'-]{2,}/gu) || [];
-  const cjkTokens = text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]{2,12}/gu) || [];
-  const tokens = Array.from(new Set([...latinTokens, ...cjkTokens])).slice(0, 40);
-  return tokens.slice(0, 20).map((token) => ({
-    type: "term",
-    rawName: token,
-    translatedName: toLatinGlossaryValue(token),
-    viLabel: toVietnameseLabel(token, toLatinGlossaryValue(token), "term"),
-    description: hasJapaneseScript(token)
-      ? toVietnameseDescription(token, toLatinGlossaryValue(token), "term")
-      : "Thuật ngữ được trích tự động từ văn bản nguồn."
-  }));
+  const japaneseRuns = text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]{2,24}/gu) || [];
+  const cjkTokens = japaneseRuns.flatMap(splitJapaneseGlossaryTerms);
+  const tokens = Array.from(new Set([...latinTokens, ...cjkTokens]))
+    .filter((token) => token.length >= 2 && token.length <= 32)
+    .filter((token) => !hasJapaneseScript(token) || !looksLikeSentenceFragment(token))
+    .slice(0, 40);
+  return tokens.slice(0, 20).map((token) => {
+    const type = hasJapaneseScript(token) ? inferGlossaryType(token) : "term";
+    const translatedName = toLatinGlossaryValue(token);
+    return {
+      type,
+      rawName: token,
+      translatedName,
+      viLabel: toVietnameseLabel(token, translatedName, type),
+      description: hasJapaneseScript(token)
+        ? toVietnameseDescription(token, translatedName, type)
+        : "Thuật ngữ được trích tự động từ văn bản nguồn."
+    };
+  });
 }
 
 async function translateWithOpenAICompatible(
