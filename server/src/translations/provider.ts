@@ -226,6 +226,91 @@ function inferGlossaryType(rawName: string) {
   return "term";
 }
 
+function isWeakLatinGlossaryValue(value: string) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  if (normalized.length <= 2) {
+    return true;
+  }
+  if (/^[aeiou]{1,3}$/u.test(normalized)) {
+    return true;
+  }
+  if (!/[aeiou]/u.test(normalized) && normalized.length <= 4) {
+    return true;
+  }
+  return false;
+}
+
+function buildLatinFallbackFromRawName(rawName: string, type: string) {
+  if (type === "place") {
+    if (/領地/u.test(rawName)) return "ryochi";
+    if (/領主/u.test(rawName)) return "ryoshu";
+    if (/領/u.test(rawName)) return "ryo";
+    if (/王国/u.test(rawName)) return "okoku";
+    if (/帝国/u.test(rawName)) return "teikoku";
+  }
+  if (type === "term") {
+    if (/スキル/u.test(rawName)) return "sukiru";
+    if (/魔法/u.test(rawName)) return "maho";
+    if (/魔術/u.test(rawName)) return "majutsu";
+    if (/神/u.test(rawName) && /スキル/u.test(rawName)) return "shinsukiru";
+  }
+  if (type === "person" && /家/u.test(rawName)) {
+    return "ke";
+  }
+  return "";
+}
+
+function buildVietnameseTypeLabel(rawName: string, type: string) {
+  if (type === "place") {
+    if (/領地/u.test(rawName)) return "Lãnh địa";
+    if (/領主/u.test(rawName)) return "Lãnh chúa";
+    if (/領/u.test(rawName)) return "Vùng lãnh địa";
+    if (/王国/u.test(rawName)) return "Vương quốc";
+    if (/帝国/u.test(rawName)) return "Đế quốc";
+    return "Địa danh";
+  }
+  if (type === "person") {
+    if (/家/u.test(rawName)) return "Gia tộc";
+    return "Nhân vật";
+  }
+  if (/スキル/u.test(rawName)) return "Kỹ năng";
+  if (/魔法|魔術/u.test(rawName)) return "Phép thuật";
+  if (/神/u.test(rawName) && /スキル/u.test(rawName)) return "Thần kỹ";
+  return "Thuật ngữ";
+}
+
+function normalizeGlossaryCandidate(candidate: GlossaryCandidate): GlossaryCandidate | null {
+  const rawName = String(candidate.rawName || "").trim();
+  if (!rawName) {
+    return null;
+  }
+  const type = inferGlossaryType(rawName);
+  let translatedName = toLatinGlossaryValue(rawName, candidate.translatedName);
+  if (isWeakLatinGlossaryValue(translatedName)) {
+    const mapped = buildLatinFallbackFromRawName(rawName, type);
+    if (mapped) {
+      translatedName = mapped;
+    }
+  }
+  if (isWeakLatinGlossaryValue(translatedName)) {
+    return null;
+  }
+  const typeLabel = buildVietnameseTypeLabel(rawName, type);
+  const viLabel = String(candidate.viLabel || "").trim() || `${typeLabel} ${translatedName}`.trim();
+  const description = String(candidate.description || "").trim() || `${typeLabel} trong truyện: ${translatedName}.`;
+  return {
+    type,
+    rawName,
+    translatedName,
+    viLabel,
+    gender: candidate.gender,
+    description
+  };
+}
+
 function toVietnameseLabel(rawName: string, latinName: string, type?: string) {
   const shortLatin = String(latinName || "").trim() || String(rawName || "").trim();
   const prefix = type === "person" ? "Nhân vật" : type === "place" ? "Địa danh" : "Thuật ngữ";
@@ -294,7 +379,7 @@ function buildHeuristicGlossary(text: string): GlossaryCandidate[] {
         ? toVietnameseDescription(token, translatedName, type)
         : "Thuật ngữ được trích tự động từ văn bản nguồn."
     };
-  });
+  }).map(normalizeGlossaryCandidate).filter((item): item is GlossaryCandidate => Boolean(item));
 }
 
 async function translateWithOpenAICompatible(
@@ -474,7 +559,7 @@ Important rules:
           gender: item.gender ? String(item.gender) : undefined,
           description
         };
-      }).filter((item: GlossaryCandidate) => item.rawName && item.translatedName);
+      }).map(normalizeGlossaryCandidate).filter((item): item is GlossaryCandidate => Boolean(item));
     }
   } catch {
     // fallback
