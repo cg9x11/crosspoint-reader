@@ -533,6 +533,7 @@ function translationProjectPath(projectId) {
     }
 
     const activeGlossary = detail.glossaries?.find((g) => g.isActive) || detail.glossaries?.[0];
+    const latestRun = detail.runs?.[0] || null;
     const translated     = Number(detail._count?.chapterTranslations || detail.chapterTranslations?.length || 0);
     const total          = Number(detail.novel?.downloadedChapters || 0);
     const pct            = total > 0 ? Math.round((translated / total) * 100) : 0;
@@ -588,6 +589,10 @@ function translationProjectPath(projectId) {
             <div class="t-stat">
               <span class="s-val t-stat-model">${escapeHtml(detail.model || '—')}</span>
               <span class="s-lbl">Model</span>
+            </div>
+            <div class="t-stat">
+              <span class="s-val">${latestRun ? `${latestRun.completedCount || 0}/${latestRun.queuedCount || 0}` : '—'}</span>
+              <span class="s-lbl">Run gần nhất</span>
             </div>
           </div>
 
