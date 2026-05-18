@@ -152,6 +152,54 @@ function looksLikeSentenceFragment(value: string) {
   return /[。、！？!?]|(を|に|で|へ|から|まで|より|と|が|は|も|の|た|だ|です|ます)$/.test(value);
 }
 
+const JAPANESE_GLOSSARY_STOPWORDS = new Set([
+  "会社",
+  "社長",
+  "経営者",
+  "仲間",
+  "武器",
+  "再建",
+  "過労",
+  "最悪",
+  "覚ま",
+  "呼ばれる",
+  "裏切られ",
+  "転生先",
+  "異世界",
+  "息子",
+  "歳社長"
+]);
+
+function isJapaneseGlossaryStopword(value: string) {
+  return JAPANESE_GLOSSARY_STOPWORDS.has(value);
+}
+
+function scoreJapaneseGlossaryTerm(value: string) {
+  let score = 0;
+  if (containsKanji(value) && containsKana(value)) {
+    score += 4;
+  }
+  if (/^[\u30a0-\u30ffー]{3,}$/u.test(value)) {
+    score += 5;
+  }
+  if (/(スキル|魔法|術|技|流|派|団|隊|家|門|族|国|王国|帝国|都市|村|町|領|領地|領主|城|森|山|川|神|剣|槍|弓|盾|杖|薬|石|書|鍵)/u.test(value)) {
+    score += 6;
+  }
+  if (value.length >= 3 && value.length <= 8) {
+    score += 2;
+  }
+  if (looksLikeSentenceFragment(value)) {
+    score -= 6;
+  }
+  if (isJapaneseGlossaryStopword(value)) {
+    score -= 10;
+  }
+  if (/^[\u3040-\u309f]+$/u.test(value)) {
+    score -= 10;
+  }
+  return score;
+}
+
 function splitJapaneseGlossaryTerms(value: string) {
   return value
     .split(/[\s\r\n。、！？!?「」『』（）()\[\]【】,，:：;；/\\|]+/u)
@@ -161,7 +209,8 @@ function splitJapaneseGlossaryTerms(value: string) {
     .filter((part) => part.length >= 2 && part.length <= 10)
     .filter((part) => hasJapaneseScript(part))
     .filter((part) => !/^[\u3040-\u309f]+$/u.test(part))
-    .filter((part) => !looksLikeSentenceFragment(part));
+    .filter((part) => !looksLikeSentenceFragment(part))
+    .filter((part) => !isJapaneseGlossaryStopword(part));
 }
 
 function inferGlossaryType(rawName: string) {
@@ -171,7 +220,7 @@ function inferGlossaryType(rawName: string) {
   if (/(国|王国|帝国|都市|村|町|領|地|森|山|川|城|館|港)/u.test(rawName)) {
     return "place";
   }
-  if (rawName.length >= 2 && rawName.length <= 5 && containsKanji(rawName) && !containsKana(rawName)) {
+  if (rawName.length >= 2 && rawName.length <= 4 && containsKanji(rawName) && !containsKana(rawName) && !isJapaneseGlossaryStopword(rawName)) {
     return "person";
   }
   return "term";
@@ -224,6 +273,14 @@ function buildHeuristicGlossary(text: string): GlossaryCandidate[] {
   const tokens = Array.from(new Set([...latinTokens, ...cjkTokens]))
     .filter((token) => token.length >= 2 && token.length <= 32)
     .filter((token) => !hasJapaneseScript(token) || !looksLikeSentenceFragment(token))
+    .filter((token) => !hasJapaneseScript(token) || scoreJapaneseGlossaryTerm(token) >= 4)
+    .sort((left, right) => {
+      const scoreDiff = scoreJapaneseGlossaryTerm(right) - scoreJapaneseGlossaryTerm(left);
+      if (scoreDiff !== 0) {
+        return scoreDiff;
+      }
+      return left.length - right.length;
+    })
     .slice(0, 40);
   return tokens.slice(0, 20).map((token) => {
     const type = hasJapaneseScript(token) ? inferGlossaryType(token) : "term";
