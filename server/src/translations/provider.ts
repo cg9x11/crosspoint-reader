@@ -15,6 +15,130 @@ export interface GlossaryCandidate {
   description?: string;
 }
 
+const KANA_DIGRAPHS: Record<string, string> = {
+  きゃ: "kya", きゅ: "kyu", きょ: "kyo",
+  しゃ: "sha", しゅ: "shu", しょ: "sho",
+  ちゃ: "cha", ちゅ: "chu", ちょ: "cho",
+  にゃ: "nya", にゅ: "nyu", にょ: "nyo",
+  ひゃ: "hya", ひゅ: "hyu", ひょ: "hyo",
+  みゃ: "mya", みゅ: "myu", みょ: "myo",
+  りゃ: "rya", りゅ: "ryu", りょ: "ryo",
+  ぎゃ: "gya", ぎゅ: "gyu", ぎょ: "gyo",
+  じゃ: "ja", じゅ: "ju", じょ: "jo",
+  びゃ: "bya", びゅ: "byu", びょ: "byo",
+  ぴゃ: "pya", ぴゅ: "pyu", ぴょ: "pyo",
+  ティ: "ti", ディ: "di", ツァ: "tsa", ツィ: "tsi", ツェ: "tse", ツォ: "tso",
+  ファ: "fa", フィ: "fi", フェ: "fe", フォ: "fo",
+  ウィ: "wi", ウェ: "we", ウォ: "wo",
+  ヴァ: "va", ヴィ: "vi", ヴェ: "ve", ヴォ: "vo",
+  キャ: "kya", キュ: "kyu", キョ: "kyo",
+  シャ: "sha", シュ: "shu", ショ: "sho",
+  チャ: "cha", チュ: "chu", チョ: "cho",
+  ニャ: "nya", ニュ: "nyu", ニョ: "nyo",
+  ヒャ: "hya", ヒュ: "hyu", ヒョ: "hyo",
+  ミャ: "mya", ミュ: "myu", ミョ: "myo",
+  リャ: "rya", リュ: "ryu", リョ: "ryo",
+  ギャ: "gya", ギュ: "gyu", ギョ: "gyo",
+  ジャ: "ja", ジュ: "ju", ジョ: "jo",
+  ビャ: "bya", ビュ: "byu", ビョ: "byo",
+  ピャ: "pya", ピュ: "pyu", ピョ: "pyo"
+};
+
+const KANA_MONOGRAPHS: Record<string, string> = {
+  あ: "a", い: "i", う: "u", え: "e", お: "o",
+  か: "ka", き: "ki", く: "ku", け: "ke", こ: "ko",
+  さ: "sa", し: "shi", す: "su", せ: "se", そ: "so",
+  た: "ta", ち: "chi", つ: "tsu", て: "te", と: "to",
+  な: "na", に: "ni", ぬ: "nu", ね: "ne", の: "no",
+  は: "ha", ひ: "hi", ふ: "fu", へ: "he", ほ: "ho",
+  ま: "ma", み: "mi", む: "mu", め: "me", も: "mo",
+  や: "ya", ゆ: "yu", よ: "yo",
+  ら: "ra", り: "ri", る: "ru", れ: "re", ろ: "ro",
+  わ: "wa", を: "o", ん: "n",
+  が: "ga", ぎ: "gi", ぐ: "gu", げ: "ge", ご: "go",
+  ざ: "za", じ: "ji", ず: "zu", ぜ: "ze", ぞ: "zo",
+  だ: "da", ぢ: "ji", づ: "zu", で: "de", ど: "do",
+  ば: "ba", び: "bi", ぶ: "bu", べ: "be", ぼ: "bo",
+  ぱ: "pa", ぴ: "pi", ぷ: "pu", ぺ: "pe", ぽ: "po",
+  ア: "a", イ: "i", ウ: "u", エ: "e", オ: "o",
+  カ: "ka", キ: "ki", ク: "ku", ケ: "ke", コ: "ko",
+  サ: "sa", シ: "shi", ス: "su", セ: "se", ソ: "so",
+  タ: "ta", チ: "chi", ツ: "tsu", テ: "te", ト: "to",
+  ナ: "na", ニ: "ni", ヌ: "nu", ネ: "ne", ノ: "no",
+  ハ: "ha", ヒ: "hi", フ: "fu", ヘ: "he", ホ: "ho",
+  マ: "ma", ミ: "mi", ム: "mu", メ: "me", モ: "mo",
+  ヤ: "ya", ユ: "yu", ヨ: "yo",
+  ラ: "ra", リ: "ri", ル: "ru", レ: "re", ロ: "ro",
+  ワ: "wa", ヲ: "o", ン: "n",
+  ガ: "ga", ギ: "gi", グ: "gu", ゲ: "ge", ゴ: "go",
+  ザ: "za", ジ: "ji", ズ: "zu", ゼ: "ze", ゾ: "zo",
+  ダ: "da", ヂ: "ji", ヅ: "zu", デ: "de", ド: "do",
+  バ: "ba", ビ: "bi", ブ: "bu", ベ: "be", ボ: "bo",
+  パ: "pa", ピ: "pi", プ: "pu", ペ: "pe", ポ: "po",
+  ー: "-"
+};
+
+function hasJapaneseScript(value: string) {
+  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(value);
+}
+
+function hasNonLatinScript(value: string) {
+  return /[^\p{Script=Latin}\p{N}\s\-_'’.]/u.test(value);
+}
+
+function toLatinSlug(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9\s-]/g, " ")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+}
+
+function romanizeJapanese(value: string) {
+  let result = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const pair = value.slice(index, index + 2);
+    if (KANA_DIGRAPHS[pair]) {
+      result += KANA_DIGRAPHS[pair];
+      index += 1;
+      continue;
+    }
+    const current = value[index] || "";
+    if (current === "っ" || current === "ッ") {
+      const nextPair = value.slice(index + 1, index + 3);
+      const next = KANA_DIGRAPHS[nextPair] || KANA_MONOGRAPHS[value[index + 1] || ""] || "";
+      result += next.slice(0, 1);
+      continue;
+    }
+    result += KANA_MONOGRAPHS[current] || (hasJapaneseScript(current) ? "" : current);
+  }
+  return result
+    .replace(/-+/g, "-")
+    .replace(/[^a-zA-Z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function toLatinGlossaryValue(rawName: string, translatedName?: string) {
+  const candidate = String(translatedName || "").trim();
+  if (candidate && !hasNonLatinScript(candidate)) {
+    const normalized = toLatinSlug(candidate).replace(/-/g, " ").trim();
+    return normalized || candidate;
+  }
+  const romanized = romanizeJapanese(candidate || rawName);
+  if (romanized) {
+    return romanized;
+  }
+  const latinized = toLatinSlug(candidate || rawName).replace(/-/g, " ").trim();
+  if (latinized) {
+    return latinized;
+  }
+  return `term-${Buffer.from(rawName).toString("hex").slice(0, 12)}`;
+}
+
 function chunkByChars(items: string[], maxChars: number) {
   const groups: string[][] = [];
   let current: string[] = [];
@@ -42,7 +166,7 @@ function buildHeuristicGlossary(text: string): GlossaryCandidate[] {
   return tokens.slice(0, 20).map((token) => ({
     type: "term",
     rawName: token,
-    translatedName: token
+    translatedName: toLatinGlossaryValue(token)
   }));
 }
 
@@ -153,7 +277,7 @@ export async function suggestGlossaryCandidates(
   if (!credential) {
     return heuristic;
   }
-  const prompt = `Extract glossary candidates for translation to ${targetLanguage}. Return JSON {"items":[{"type":"term","rawName":"","translatedName":"","gender":"","description":""}]}. Keep 20 items max.`;
+  const prompt = `Extract glossary candidates for translation to ${targetLanguage}. Return JSON {"items":[{"type":"term","rawName":"","translatedName":"","gender":"","description":""}]}. Keep 20 items max. Important: translatedName must be Latin script only (romanized/transliterated), never keep original non-Latin script.`;
   try {
     const sample = sourceText.slice(0, runtime.maxCharsPerRequest);
     let parsed: any = null;
@@ -204,7 +328,10 @@ export async function suggestGlossaryCandidates(
       return parsed.items.map((item: any) => ({
         type: String(item.type || "term"),
         rawName: String(item.rawName || "").trim(),
-        translatedName: String(item.translatedName || item.rawName || "").trim(),
+        translatedName: toLatinGlossaryValue(
+          String(item.rawName || "").trim(),
+          String(item.translatedName || item.rawName || "").trim()
+        ),
         gender: item.gender ? String(item.gender) : undefined,
         description: item.description ? String(item.description) : undefined
       })).filter((item: GlossaryCandidate) => item.rawName && item.translatedName);

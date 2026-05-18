@@ -198,8 +198,10 @@ function translationProjectPath(projectId) {
       body.insertAdjacentHTML('beforeend', buildGlossaryRows([{ type: 'term', rawName: '', translatedName: '', gender: '', description: '', locked: false }]));
       bindGlossaryButtons();
     });
-    $id('translation-suggest-glossary')?.addEventListener('click', async () => {
-      const payload = await apiJson(`/api/translations/projects/${encodeURIComponent(projectId)}/glossary/suggest`, { method: 'POST', body: {} });
+    $id('translation-suggest-glossary')?.addEventListener('click', async (event) => {
+      const payload = await withButtonLoading(event.currentTarget, 'Đang gợi ý...', async () => (
+        await apiJson(`/api/translations/projects/${encodeURIComponent(projectId)}/glossary/suggest`, { method: 'POST', body: {} })
+      ));
       const body = $id('translation-glossary-body');
       for (const item of payload.items || []) {
         body.insertAdjacentHTML('beforeend', buildGlossaryRows([{ ...item, locked: false }]));
@@ -504,6 +506,22 @@ function translationProjectPath(projectId) {
     }).join('');
   }
 
+  async function withButtonLoading(button, loadingLabel, action) {
+    const originalLabel = button?.textContent || '';
+    if (button) {
+      button.disabled = true;
+      button.textContent = loadingLabel;
+    }
+    try {
+      return await action();
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
+    }
+  }
+
   // ─── Detail panel ─────────────────────────────────────────────────────────────
 
   function renderTranslationDetail(detail) {
@@ -627,8 +645,10 @@ function translationProjectPath(projectId) {
     `;
 
     // bind detail events
-    $id('translation-run-project')?.addEventListener('click', async () => {
-      await apiJson(`/api/translations/projects/${encodeURIComponent(detail.id)}/start`, { method: 'POST', body: { triggerType: 'manual' } });
+    $id('translation-run-project')?.addEventListener('click', async (event) => {
+      await withButtonLoading(event.currentTarget, 'Đang xếp hàng...', async () => {
+        await apiJson(`/api/translations/projects/${encodeURIComponent(detail.id)}/start`, { method: 'POST', body: { triggerType: 'manual' } });
+      });
       showToast('↻', 'Đã xếp hàng dịch', detail.name);
     });
     $id('translation-rebuild-project')?.addEventListener('click', async () => {
@@ -647,7 +667,9 @@ function translationProjectPath(projectId) {
     });
     $$('[data-translation-retranslate-chapter]', container).forEach((btn) => {
       btn.addEventListener('click', async () => {
-        await apiJson(`/api/translations/projects/${encodeURIComponent(detail.id)}/chapters/${encodeURIComponent(btn.getAttribute('data-translation-retranslate-chapter'))}/retranslate`, { method: 'POST' });
+        await withButtonLoading(btn, 'Đang dịch...', async () => {
+          await apiJson(`/api/translations/projects/${encodeURIComponent(detail.id)}/chapters/${encodeURIComponent(btn.getAttribute('data-translation-retranslate-chapter'))}/retranslate`, { method: 'POST' });
+        });
         showToast('↻', 'Đã xếp hàng dịch chap', detail.name);
       });
     });
@@ -733,9 +755,11 @@ function translationProjectPath(projectId) {
       showToast('✓', 'Đã xóa version', detail.chapter?.title || 'chapter');
     });
 
-    $id('translation-translate-current-chapter')?.addEventListener('click', async () => {
-      await apiJson(`/api/translations/projects/${encodeURIComponent(projectId)}/chapters/${encodeURIComponent(chapterTranslationId)}/retranslate`, {
-        method: 'POST'
+    $id('translation-translate-current-chapter')?.addEventListener('click', async (event) => {
+      await withButtonLoading(event.currentTarget, 'Đang dịch...', async () => {
+        await apiJson(`/api/translations/projects/${encodeURIComponent(projectId)}/chapters/${encodeURIComponent(chapterTranslationId)}/retranslate`, {
+          method: 'POST'
+        });
       });
       showToast('↻', 'Đã xếp hàng dịch chap này', detail.chapter?.title || chapterTranslationId);
     });
