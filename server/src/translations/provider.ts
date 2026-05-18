@@ -542,7 +542,7 @@ Important rules:
       throw new Error(`Unsupported translation provider: ${provider}`);
     }
     if (Array.isArray(parsed.items)) {
-      return parsed.items.map((item: any) => {
+      const mappedItems: GlossaryCandidate[] = parsed.items.map((item: any) => {
         const type = String(item.type || "term").trim() || "term";
         const rawName = String(item.rawName || "").trim();
         const translatedName = toLatinGlossaryValue(
@@ -559,7 +559,10 @@ Important rules:
           gender: item.gender ? String(item.gender) : undefined,
           description
         };
-      }).map((item: GlossaryCandidate) => normalizeGlossaryCandidate(item)).filter((item): item is GlossaryCandidate => Boolean(item));
+      });
+      return mappedItems
+        .map((item) => normalizeGlossaryCandidate(item))
+        .filter((item): item is GlossaryCandidate => Boolean(item));
     }
   } catch {
     // fallback
