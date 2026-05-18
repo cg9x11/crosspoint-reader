@@ -11,6 +11,7 @@ export interface GlossaryCandidate {
   type: string;
   rawName: string;
   translatedName: string;
+  viLabel?: string;
   gender?: string;
   description?: string;
 }
@@ -167,6 +168,7 @@ function buildHeuristicGlossary(text: string): GlossaryCandidate[] {
     type: "term",
     rawName: token,
     translatedName: toLatinGlossaryValue(token),
+    viLabel: "",
     description: hasJapaneseScript(token)
       ? "Thuật ngữ được trích tự động từ văn bản tiếng Nhật. Cần người dùng xác nhận nghĩa/ngữ cảnh."
       : "Thuật ngữ được trích tự động từ văn bản nguồn."
@@ -280,9 +282,10 @@ export async function suggestGlossaryCandidates(
   if (!credential) {
     return heuristic;
   }
-  const prompt = `Extract glossary candidates for translation to ${targetLanguage}. Return JSON {"items":[{"type":"term","rawName":"","translatedName":"","gender":"","description":""}]}. Keep 20 items max.
+  const prompt = `Extract glossary candidates for translation to ${targetLanguage}. Return JSON {"items":[{"type":"term","rawName":"","translatedName":"","viLabel":"","gender":"","description":""}]}. Keep 20 items max.
 Important rules:
 - translatedName must be Latin script only (romanized/transliterated), never keep original non-Latin script.
+- viLabel must be a short Vietnamese name (2-6 words) for quick selection while translating.
 - description must be a short Vietnamese explanation for non-Japanese readers (what this term refers to in story context).
 - Prefer specific terms: person names, organizations, skills, places, ranks, items.`;
   try {
@@ -339,6 +342,7 @@ Important rules:
           String(item.rawName || "").trim(),
           String(item.translatedName || item.rawName || "").trim()
         ),
+        viLabel: item.viLabel ? String(item.viLabel).trim() : undefined,
         gender: item.gender ? String(item.gender) : undefined,
         description: item.description ? String(item.description).trim() : undefined
       })).filter((item: GlossaryCandidate) => item.rawName && item.translatedName);

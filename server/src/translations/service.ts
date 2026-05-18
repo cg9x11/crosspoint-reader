@@ -310,6 +310,7 @@ function normalizeGlossaryEntries(input: Array<Record<string, unknown>>) {
       type: String(entry.type || "term").trim() || "term",
       rawName: String(entry.rawName || entry.raw_name || "").trim(),
       translatedName: String(entry.translatedName || entry.translated_name || entry.rawName || entry.raw_name || "").trim(),
+      viLabel: entry.viLabel ? String(entry.viLabel).trim() : null,
       gender: entry.gender ? String(entry.gender) : null,
       description: entry.description ? String(entry.description) : null,
       aliasesJson: safeJsonStringify(Array.isArray(entry.aliases) ? entry.aliases : [] , "[]"),
@@ -333,11 +334,12 @@ function normalizeGlossaryEntries(input: Array<Record<string, unknown>>) {
       ...JSON.parse(entry.aliasesJson || "[]")
     ].map((item) => String(item || "").trim()).filter(Boolean));
 
-    merged.set(key, {
-      ...existing,
-      translatedName: existing.translatedName.length >= entry.translatedName.length ? existing.translatedName : entry.translatedName,
-      gender: existing.gender || entry.gender,
-      description: existing.description || entry.description,
+      merged.set(key, {
+        ...existing,
+        translatedName: existing.translatedName.length >= entry.translatedName.length ? existing.translatedName : entry.translatedName,
+        viLabel: existing.viLabel || entry.viLabel,
+        gender: existing.gender || entry.gender,
+        description: existing.description || entry.description,
       aliasesJson: safeJsonStringify([...aliasSet], "[]"),
       notes: existing.notes || entry.notes,
       locked: existing.locked || entry.locked,

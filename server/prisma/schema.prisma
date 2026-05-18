@@ -126,6 +126,7 @@ model TranslationGlossaryEntry {
   type           String               @default("term")
   rawName        String
   translatedName String
+  viLabel        String?
   gender         String?
   description    String?
   aliasesJson    String               @default("[]")

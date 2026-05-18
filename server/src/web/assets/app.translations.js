@@ -94,6 +94,7 @@ function translationProjectPath(projectId) {
         </td>
         <td><input class="form-input" data-field="rawName"        value="${escapeHtml(entry.rawName||'')}"></td>
         <td><input class="form-input" data-field="translatedName" value="${escapeHtml(entry.translatedName||'')}"></td>
+        <td><input class="form-input" data-field="viLabel" value="${escapeHtml(entry.viLabel||'')}"></td>
         <td>
           <select class="form-input" data-field="gender">
             <option value="">-</option>
@@ -120,6 +121,7 @@ function translationProjectPath(projectId) {
       type:           $('[data-field="type"]',           row)?.value || 'term',
       rawName:        $('[data-field="rawName"]',        row)?.value || '',
       translatedName: $('[data-field="translatedName"]', row)?.value || '',
+      viLabel:        $('[data-field="viLabel"]',        row)?.value || '',
       gender:         $('[data-field="gender"]',         row)?.value || '',
       description:    $('[data-field="description"]',    row)?.value || '',
       locked:        ($('[data-field="locked"]',         row)?.value || 'false') === 'true'
@@ -161,7 +163,7 @@ function translationProjectPath(projectId) {
             <table class="translation-table">
               <thead>
                 <tr>
-                  <th>Type</th><th>Raw</th><th>Translated</th>
+                  <th>Type</th><th>Raw</th><th>Translated</th><th>Đề xuất tiếng Việt</th>
                   <th>Gender</th><th>Mô tả</th><th>Lock</th><th></th>
                 </tr>
               </thead>
@@ -187,6 +189,7 @@ function translationProjectPath(projectId) {
       type: row.querySelector('[data-field="type"]')?.value || 'term',
       rawName: row.querySelector('[data-field="rawName"]')?.value || '',
       translatedName: row.querySelector('[data-field="translatedName"]')?.value || '',
+      viLabel: row.querySelector('[data-field="viLabel"]')?.value || '',
       gender: row.querySelector('[data-field="gender"]')?.value || '',
       description: row.querySelector('[data-field="description"]')?.value || '',
       locked: Boolean(row.querySelector('[data-field="locked"]')?.checked)
@@ -195,7 +198,7 @@ function translationProjectPath(projectId) {
     bindGlossaryButtons();
     $id('translation-add-glossary-row')?.addEventListener('click', () => {
       const body = $id('translation-glossary-body');
-      body.insertAdjacentHTML('beforeend', buildGlossaryRows([{ type: 'term', rawName: '', translatedName: '', gender: '', description: '', locked: false }]));
+      body.insertAdjacentHTML('beforeend', buildGlossaryRows([{ type: 'term', rawName: '', translatedName: '', viLabel: '', gender: '', description: '', locked: false }]));
       bindGlossaryButtons();
     });
     $id('translation-suggest-glossary')?.addEventListener('click', async (event) => {
